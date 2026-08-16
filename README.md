@@ -99,25 +99,26 @@
 ```
 dsh-molbio-tools/
 ├── index.mjs        # 插件入口：export { name, inject, apply }，注册 39 个工具
-├── cordis.patch.yml # bundle 补丁层（官方发布用，按包名插入 tool-molbio 行）
-├── lib.mjs        # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math
-├── design.mjs     # 引物自动设计
-├── genbank.mjs    # GenBank flatfile 解析器
-├── snapgene.mjs   # SnapGene .dna 二进制解析器（含极简 XML 扫描器）
-├── plasmid.mjs    # SVG 质粒图谱渲染器（环形/线形）
-├── align.mjs      # Smith-Waterman 局部比对 + 锚点窗口（Sanger 验证用）
-├── cloning.mjs    # 克隆模拟：选酶/酶切连接/Gibson/克隆引物/突变引物
-├── sanger.mjs     # ABIF (.ab1) 解析 + 测序验证报告
-├── protein.mjs    # 蛋白性质/肽段酶切/密码子优化
-├── plot.mjs       # SVG 柱状/散点图渲染
-├── seqio.mjs      # FASTA/FASTQ 解析与统计
-├── records.mjs    # 协议库/实验日志存储
-├── papers.mjs     # 文献库存储（经 harness fs 服务 + 沙箱政策）
-├── cordis.patch.yml # bundle 补丁层（可选安装渠道用）
+├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math
+├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
+├── genbank.mjs      # GenBank flatfile 解析器
+├── snapgene.mjs     # SnapGene .dna 二进制解析器（含极简 XML 扫描器）
+├── plasmid.mjs      # SVG 质粒图谱渲染器（环形/线形，GC skew/标记）
+├── align.mjs        # Smith-Waterman 局部比对 + 锚点窗口（Sanger 验证用）
+├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/克隆引物/突变引物
+├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证报告
+├── protein.mjs      # 蛋白性质/肽段酶切/密码子优化
+├── plot.mjs         # SVG 柱状/散点图渲染
+├── seqio.mjs        # FASTA/FASTQ 解析与统计
+├── records.mjs      # 协议库/实验日志存储
+├── papers.mjs       # 文献库存储（经 harness fs 服务 + 沙箱政策）
+├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
 │   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v11/）
 ├── test/
-│   └── smoke.mjs  # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
+│   └── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
+├── docs/
+│   └── maintainer.md # 维护者文档（合规对照/开发测试/路线图）
 ├── package.json
 └── README.md
 ```
@@ -211,3 +212,7 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 - 特征区段支持多段 join（如 AmpR 的编码区 + 信号肽），`directionality` 映射为链向（1→正链，2→负链）。
 - SnapGene 注释里的 HTML 文本（`&lt;html&gt;…`）会自动清洗为纯文本。
 - `.dna` 是二进制文件，普通 read 工具读不了——请直接给工具传文件路径，不要尝试自己读内容。
+
+---
+
+维护者（开发者）请参阅 [docs/maintainer.md](docs/maintainer.md)：官方规范对照、冒烟测试与发布/版本目录维护流程。
