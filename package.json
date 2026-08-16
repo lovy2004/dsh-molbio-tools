@@ -31,6 +31,10 @@
     }
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovy2004/dsh-molbio-tools.git"
+  },
   "keywords": [
     "deepseek-harness",
     "cordis",
