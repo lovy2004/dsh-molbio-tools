@@ -31,7 +31,7 @@
 | `molbio_parse_genbank` | GenBank flatfile 文本解析（complement/join 定位、/gene、/product 等） |
 | `molbio_plasmid_map` | 从序列 + 特征数组渲染并**直接写入 SVG 文件**（环形默认/线形可选）：特征分道、链向箭头、酶切标记、bp 刻度；同样返回 `svg_path` |
 
-### 克隆构建（v5 批次 1）
+### 克隆构建
 
 | 工具 | 功能 |
 | --- | --- |
@@ -55,7 +55,7 @@
 | `molbio_plot` | 通用 SVG 图表：柱状图（均值±SD 误差棒）与散点图（可选最小二乘拟合线），写成工作区文件 |
 | `molbio_lab_math` | 稀释计算（C₁V₁=C₂V₂）、摩尔浓度、DNA 拷贝数 |
 
-### 蛋白质（v8 批次 2）
+### 蛋白质
 
 | 工具 | 功能 |
 | --- | --- |
@@ -63,7 +63,7 @@
 | `molbio_peptide_digest` | 质谱用酶切模拟：trypsin/chymotrypsin/LysC/GluC（P 前不切规则）、漏切 0-3、单同位素/平均 [M+H]+ 质量、质量范围过滤 |
 | `molbio_codon_optimize` | E. coli/酵母/人宿主密码子优化（公开发表的高频密码子表，启发式）；`avoid_enzymes` 通过同义替换尽量避开指定酶切位点 |
 
-### 序列分析扩展（v9 批次 3）
+### 序列分析扩展
 
 | 工具 | 功能 |
 | --- | --- |
@@ -71,7 +71,7 @@
 | `molbio_fasta_fastq` | 工作区 FASTA/FASTQ 处理：条目统计（长度/GC）、按 id 提取（可写 FASTA）、FASTQ→FASTA 转换、FASTQ QC（Phred 均值/低质量比例/位点质量分布） |
 | `molbio_extract_region` | 从质粒文件按特征名（如 "AmpR"、"MCS"）或坐标提取子序列，可选反向互补与 FASTA 保存——克隆/设计的下游输入 |
 
-### 图谱增强（v9）
+### 图谱增强
 
 - `molbio_plasmid_map` / `molbio_plasmid_map_file` 新增 `gc_skew: true`（GC skew 环）与 `show_unique_cutters: true`（绿色标记所有单切酶）
 
@@ -85,7 +85,7 @@
 | `molbio_paper_update` | 按 id 更新笔记/标签等字段 |
 | `molbio_paper_remove` | 从阅读库删除一条文献 |
 
-### 文献与记录（v9）
+### 文献与记录
 
 | 工具 | 功能 |
 | --- | --- |
@@ -196,20 +196,6 @@ DSH 的 standing preset 挂载在整个进程生命周期内存在，且 **Node 
 （已在运行的 generation 持有内存中的模块，不受磁盘删除影响；新会话只按行指定的
 新目录加载）。
 
-## 与官方插件规范的对照（v11 审计）
-
-本插件受"零依赖、随 preset 分发"约束，注册**裸工具定义**（无法 import `defineTool`），因此自行实现了官方约定中的等价行为，并逐项对照过 [官方插件开发指南](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)：
-
-- **参数校验**（对应 `defineTool` 的 `ToolArgsError`）：`execute` 前按 `parameters` schema 做通用校验（必填/类型/enum/嵌套结构），领域校验（IUPAC 合法性、坐标范围等）由各工具补充；
-- **输出 schema**：全部通过 harness 自身的 enforced subset 校验；冒烟测试用 `assertSupportedJsonSchema` / `validateJsonSchemaValue` 逐工具验证输出值与 schema，保证 lossless JSON；
-- **并发安全**（v11 修正）：纯计算/只读工具才声明 `isConcurrencySafe`；写文件/网络副作用工具声明 false 或按参数条件声明——避免并发读改写 `papers.json` 等文件的竞态；
-- **服务访问**：`inject` 仅用于硬依赖（`tools`/`systemPrompt`）；`web`/`fs`/`sandboxPolicy` 用 `ctx.get` + 存在性检查，缺失时明确报错而非崩溃；
-- **文件与沙箱**：所有写入经 `ctx.fs` 并携带会话 `sandboxPolicy`，与官方 `tool-fs` 模式一致；读取用 `readBytes` 带大小上限；
-- **组合规则**：插件不发布任何服务（无需 isolate realm）；随 preset 挂载且 `standingKeyFor` 校验通过；
-- **prompt 段**：`ctx.systemPrompt.section` 注册在 100–199 工具指导区段（order 110），与官方 `tool-bash` 同模式。
-
-已知的合理偏差（均已标注）：未提供 schemastery `Config`（无配置项）；错误类型为 `MolbioInputError extends Error`（零依赖无法 import `HarnessError`，语义上等价于参数/输入错误）；未实现可选的 `presentCall`/`presentResult`。
-
 ## 行为与假设
 
 
@@ -241,29 +227,3 @@ DSH 的 standing preset 挂载在整个进程生命周期内存在，且 **Node 
 - 特征区段支持多段 join（如 AmpR 的编码区 + 信号肽），`directionality` 映射为链向（1→正链，2→负链）。
 - SnapGene 注释里的 HTML 文本（`&lt;html&gt;…`）会自动清洗为纯文本。
 - `.dna` 是二进制文件，普通 read 工具读不了——请直接给工具传文件路径，不要尝试自己读内容。
-
-## 开发与测试
-
-```bash
-node test/smoke.mjs
-```
-
-冒烟测试通过 mock 注册表运行全部 38 个工具，并用 harness 自身的
-`assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
-覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
-SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
-比对、蛋白 MW/pI/消光系数手算值、酶切规则（P 前不切）、100% 效率标准曲线、FASTA/FASTQ
-统计与转换、pUC118 特征提取、efetch XML 解析、BibTeX 转义、协议/实验记录往返、文献库
-增删改查往返）。
-
-修改后重新分发：把全部 `.mjs` 文件复制进**新的版本目录**并把插件行的目录名改过去
-（这一步不可省略——见上文的模块缓存说明）；`dsh-agent-presets` 会按 composition
-文件时间戳安装新 generation，下一次会话加载新版本。已在旧 generation 上运行过的
-会话不受影响，需要新开会话。
-
-## 路线图（可选扩展）
-
-- 质粒图谱的浏览器内实时面板（需要客户端打包管线，当前版本以 SVG 文件交付）
-- 引物设计的跨内含子模式与错配容差
-- 文献库的浏览器端面板与 BibTeX 导出
-- 序列比对 / 保守性分析
