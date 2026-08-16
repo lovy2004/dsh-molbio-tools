@@ -1,0 +1,10 @@
+# dsh-molbio-tools bundle layer: inserts the molecular-biology tool plugin.
+#
+# The row references the package BY NAME (Node module resolution), so this
+# layer works identically for npm, git, link, and tarball installs.
+#
+# The plugin registers into the host `tools` registry and publishes no
+# service, so the row needs no isolate realm and no other configuration.
+- insert:
+    - id: tool-molbio
+      name: dsh-molbio-tools
