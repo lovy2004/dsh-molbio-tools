@@ -113,25 +113,56 @@ dsh-molbio-tools/
 ├── seqio.mjs      # FASTA/FASTQ 解析与统计
 ├── records.mjs    # 协议库/实验日志存储
 ├── papers.mjs     # 文献库存储（经 harness fs 服务 + 沙箱政策）
+├── cordis.patch.yml # bundle 补丁层（可选安装渠道用）
+├── preset/
+│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v11/）
 ├── test/
 │   └── smoke.mjs  # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
 ├── package.json
 └── README.md
 ```
 
-## 发布与安装（官方组合包 bundle 方式，推荐）
+## 安装（推荐：专属模式 preset）
 
-本包是官方的**组合包（bundle）**：`package.json` 携带 `dsh.bundle` manifest 指向
-`cordis.patch.yml`，该补丁层把插件行按**包名**插入组合。发布三选一：
+**推荐给最终用户的方式**：安装后预设选择器出现 **Molecular Biology Lab** 专属模式，
+molbio 工具只在该模式出现，不会把 39 个工具和提示段注入到其它会话（避免污染无关场景）。
+
+仓库的 `preset/molbio-lab/` 即完整预设目录，把它复制到对方的 harness 用户目录即可：
+
+```
+~/.dsh/.agent-presets/molbio-lab/
+├── agent.cordis.yml                 # 标准编码 Agent + 末尾的 tool-molbio 行
+├── preset.yml                       # 显示名称与描述
+└── plugins/
+    └── dsh-molbio-tools-v11/        # 插件文件（版本目录，见下文）
+```
+
+对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
+
+### 插件更新（版本目录规则）
+
+DSH 的 standing 挂载按 ESM 模块 URL 缓存模块。**每次更新必须新建版本目录**
+（如 `dsh-molbio-tools-v12/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
+目录里原地改文件。分发者从包根目录把 `.mjs` 文件复制进新版本目录即可：
+
+```
+cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v12/
+# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v12/index.mjs'
+```
+
+## 安装（可选：官方组合包 bundle，全局可见）
+
+本包同时是官方的**组合包（bundle）**（`dsh.bundle` manifest → `cordis.patch.yml`）。
+注意：bundle 把插件行注册到 profile 的**全局 tools 层——该 profile 的所有会话都会
+加载 molbio 工具与提示段**。适合"整个 profile 专用于分子生物学"的用户，不适合混合用途。
 
 | 方式 | 命令 | 用户安装 |
 | --- | --- | --- |
+| GitHub | 推送到仓库 | `dsh plugin --profile <name> add github:lovy2004/dsh-molbio-tools`（纯 JS 零构建，无需 prepare 脚本与构建授权） |
 | npm 发布 | `npm publish` | `dsh plugin --profile <name> add dsh-molbio-tools` |
-| GitHub | 推送到仓库 | `dsh plugin --profile <name> add github:you/dsh-molbio-tools`（本包纯 JS 零构建，无需 prepare 脚本与构建授权） |
 | tarball | `pnpm pack` | `dsh plugin --profile <name> add ./dsh-molbio-tools-0.1.0.tgz` |
 
-之后用户用 `dsh --profile <name>` 启动；插件行注册到全局 tools 层，**所有会话可见**
-（不受 preset 选择影响）。验证方式（官方推荐）：
+验证方式（官方推荐）：
 
 ```
 dsh plugin --profile demo add <包>      # 需要用户机器装有 pnpm（官方流程依赖）
@@ -139,62 +170,15 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 ```
 
 本仓库已验证：`--dump-config` 输出以 `# == dsh-molbio-tools` + `- id: tool-molbio / name: dsh-molbio-tools` 开头（层序在 dsh-base 之上），且从 profile 目录按包名
-`import('dsh-molbio-tools')` 成功注册全部 39 个工具。
+`import('dsh-molbio-tools')` 成功注册全部 39 个工具。两种安装方式可以共存（同名工具
+由 preset 层 shadow 全局层，无冲突），但通常**二选一**即可。
 
-### 与 preset 方式的关系
-
-早期版本采用"随 preset 目录分发"的方式（版本目录 + 相对路径插件行，见下文方式 A/B）。
-bundle 方式是官方发布通道，二者可以共存（同名工具由 preset 层 shadow 全局层，无冲突），
-但通常**二选一**即可：给他人分发用 bundle；本机定制用 preset。
-
-
-
-插件行用**相对路径**引用插件文件，因此插件随 preset 目录整体移动即可，无需 npm 安装。
-
-## 安装（方式 A/B：随 preset 目录分发，本机定制用）
-
-### 方式 A：安装现成的 "Molecular Biology Lab" preset（最简单）
-
-把整个 preset 目录复制到对方的 harness 用户目录下：
-
-```
-~/.dsh/.agent-presets/molbio-lab/
-├── agent.cordis.yml                 # 标准编码 Agent + 末尾的 tool-molbio 行
-├── preset.yml                       # 显示名称与描述
-└── plugins/
-    └── dsh-molbio-tools-v4/         # 本包的全部 .mjs 文件（版本目录，见下文）
-```
-
-对方在预设选择器中选择 **Molecular Biology Lab** 新建会话即可。
-
-### 方式 B：只把插件行加进自己的 cordis.yml
-
-1. 把本包的全部 `.mjs` 文件复制到自己的 composition 文件旁边的一个**版本目录**里，
-   例如 `plugins/dsh-molbio-tools-v4/`；
-2. 在自己的 `agent.cordis.yml`（或 host composition）末尾加一行：
-
-```yaml
-# Registers into the host `tools` registry and publishes no service, so it
-# needs no isolate realm. The relative specifier resolves against THIS
-# composition's directory.
-- id: tool-molbio
-  name: './plugins/dsh-molbio-tools-v4/index.mjs'
-```
-
-也可以把 `name` 写成插件文件的绝对路径。
-
-### ⚠️ 升级插件文件时，必须使用新的版本目录
-
-DSH 的 standing preset 挂载在整个进程生命周期内存在，且 **Node 的 ESM 模块缓存以
-文件 URL 为键**——同一 URL 的 `import()` 永远返回第一次加载的模块，**包括插件内部
-的相互 import**（给入口加查询串只能破坏入口自身的缓存，其依赖文件仍会命中旧缓存，
-曾实测导致挂载失败）。因此原地替换 `.mjs` 文件不会让新会话加载新代码。
-
-**规则：每次更新，把全部 `.mjs` 文件复制到一个新的版本目录（如
-`dsh-molbio-tools-v5/`），并把插件行的目录名改过去；绝不在已发布的目录里原地
-修改文件。** 目录名变化使所有模块 URL 一次性更新，从而完整绕过缓存。旧目录可删除
-（已在运行的 generation 持有内存中的模块，不受磁盘删除影响；新会话只按行指定的
-新目录加载）。
+> **版本目录规则的原理**（维护者必读）：DSH 的 standing preset 挂载在整个进程生命周期
+> 内存在，且 Node 的 ESM 模块缓存以文件 URL 为键——同一 URL 的 `import()` 永远返回
+> 第一次加载的模块，**包括插件内部的相互 import**（给入口加查询串只能破坏入口自身的
+> 缓存，依赖文件仍会命中旧缓存）。因此原地替换 `.mjs` 不会让新会话加载新代码；目录名
+> 变化使所有模块 URL 一次性更新。旧目录可删除（已运行的 generation 持有内存中的模块，
+> 不受磁盘删除影响）。
 
 ## 与官方插件规范的对照（v11 审计）
 

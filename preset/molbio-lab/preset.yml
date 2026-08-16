@@ -1,0 +1,2 @@
+name: Molecular Biology Lab
+description: 分子生物学专属模式：标准编码能力 + 39 个 molbio_* 工具（序列分析、引物设计（含跨内含子 qPCR）、克隆模拟与选酶、SnapGene/GenBank 解析与质粒图谱、Sanger 测序验证、蛋白性质/密码子优化、qPCR 与绘图、文献/协议/实验记录）。
