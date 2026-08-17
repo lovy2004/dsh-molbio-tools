@@ -239,6 +239,16 @@ function makeTemplate(n, seed = 42) {
   await assert.rejects(() => run('molbio_restriction_sites', { sequence: 'AAAA', enzymes: ['NotAnEnzyme'] }), /unknown enzyme/);
 }
 
+// v12 mismatch-tolerance argument validation lives in resolveDesignOptions
+{
+  const template = 'A'.repeat(300);
+  await assert.rejects(() => run('molbio_design_primers', { template, max_mismatches: 6 }), /max_mismatches/);
+  await assert.rejects(() => run('molbio_design_primers', { template, max_mismatches: -1 }), /max_mismatches/);
+  await assert.rejects(() => run('molbio_design_primers', { template, max_mismatches: 2, max_3prime_mismatches: 3 }), /max_3prime_mismatches/);
+  await assert.rejects(() => run('molbio_design_primers', { template, mismatch_3prime_zone: 0 }), /mismatch_3prime_zone/);
+  await assert.rejects(() => run('molbio_design_intron_primers', { genomic: 'A'.repeat(200), exons: [{ start: 1, end: 100 }, { start: 101, end: 200 }], max_mismatches: 9 }), /max_mismatches/);
+}
+
 // ── render path ─────────────────────────────────────────────────────────────
 
 {
@@ -885,6 +895,127 @@ function makeTemplate(n, seed = 42) {
   const spliced = e1 + e2 + e3;
   assert.ok(spliced.includes(pair.forward.sequence), 'forward primer is a spliced-sequence substring');
   assert.ok(spliced.includes(pair.reverse.sequence), 'reverse primer is a spliced-sequence substring');
+}
+
+// ── v12: mismatch tolerance in primer design ────────────────────────────────
+
+{
+  // Default behavior unchanged: exact match required, no mismatch drift
+  const template = makeTemplate(600, 7);
+  const out = await run('molbio_design_primers', { template, max_results: 5 });
+  assert.ok(out.pairs.length > 0);
+  for (const pair of out.pairs) {
+    assert.equal(pair.forward.mismatch_count, 0, 'default = exact match');
+    assert.deepEqual(pair.forward.mismatches, []);
+    assert.equal(pair.reverse.mismatch_count, 0, 'default = exact match');
+    assert.deepEqual(pair.reverse.mismatches, []);
+    assert.equal(pair.forward.sequence, template.slice(pair.forward.start - 1, pair.forward.end));
+  }
+
+  // Enabling tolerance never degrades the best pair when exact primers exist
+  const tolerant = await run('molbio_design_primers', { template, max_mismatches: 2, max_results: 5 });
+  assert.equal(tolerant.pairs[0].forward.sequence, out.pairs[0].forward.sequence);
+  assert.equal(tolerant.pairs[0].penalty, out.pairs[0].penalty);
+  assert.equal(tolerant.pairs[0].forward.mismatch_count, 0);
+  assert.equal(tolerant.pairs[0].reverse.mismatch_count, 0);
+}
+
+{
+  // Rescue: a template where every exact window fails the run constraint, but a
+  // couple of 5'-side mismatches salvage a pair. Structural filters are relaxed
+  // so the run constraint is the only blocker; the 3'-terminal base and the 3'
+  // critical zone still must stay perfectly matched.
+  const template = 'T'.repeat(10) + 'GCGC' + 'T'.repeat(10);
+  const params = {
+    template,
+    primer_len_min: 18, primer_len_max: 18,
+    tm_min: 30, tm_max: 95, gc_min: 15, gc_max: 100,
+    require_gc_clamp: false, max_run: 4,
+    max_self_score: 200, max_self_consecutive: 200, max_hairpin_score: 200,
+    max_dimer_score: 200, max_tm_delta: 200,
+    amplicon_min: 1, amplicon_max: 24, region_end: 24,
+    max_results: 5,
+  };
+  const exact = await run('molbio_design_primers', { ...params, max_mismatches: 0 });
+  assert.equal(exact.pairs.length, 0, 'every exact window must fail the run constraint');
+
+  const rescued = await run('molbio_design_primers', { ...params, max_mismatches: 2 });
+  assert.ok(rescued.pairs.length > 0, 'mismatch tolerance must rescue a pair');
+  const pair = rescued.pairs[0];
+
+  // per-primer invariant checks on BOTH strands
+  const checkInvariants = (primer, isReverse) => {
+    assert.equal(primer.mismatch_count, primer.mismatches.length);
+    for (const m of primer.mismatches) {
+      assert.ok(m.position >= 1 && m.position <= primer.length, 'mismatch position inside the primer');
+      assert.ok(m.distance_from_3prime >= 1, 'no mismatch on the 3-prime terminal base');
+      assert.ok(m.distance_from_3prime >= 6, 'no mismatch inside the 3-prime critical zone by default');
+      assert.equal(m.primer_base, primer.sequence[m.position - 1], 'primer_base matches the reported sequence');
+      assert.notEqual(m.primer_base, m.template_base, 'template_base is the perfect-match base');
+      const templateBase = template[m.template_position - 1];
+      assert.ok(templateBase !== undefined, 'template_position inside the template');
+      if (!isReverse) assert.equal(m.template_base, templateBase, 'forward: perfect base = the template base');
+      else assert.equal(m.template_base, lib.complement(templateBase), 'reverse: perfect base = complement of the template base');
+    }
+  };
+  checkInvariants(pair.forward, false);
+  checkInvariants(pair.reverse, true);
+  assert.ok(pair.forward.mismatch_count > 0 || pair.reverse.mismatch_count > 0, 'the rescue pair must carry at least one mismatch');
+
+  // Same template with region_start=2: the only rescue left needs a mismatch
+  // inside the 3'-critical zone, which is off by default and on with
+  // max_3prime_mismatches=1.
+  const zoneParams = { ...params, region_start: 2, max_mismatches: 3 };
+  const zone0 = await run('molbio_design_primers', { ...zoneParams, max_3prime_mismatches: 0 });
+  assert.equal(zone0.pairs.length, 0, 'zone-protected rescue must be impossible without zone tolerance');
+  const zone1 = await run('molbio_design_primers', { ...zoneParams, max_3prime_mismatches: 1 });
+  assert.ok(zone1.pairs.length > 0, 'zone tolerance must unlock the rescue');
+  const zoneMismatches = [...zone1.pairs[0].forward.mismatches, ...zone1.pairs[0].reverse.mismatches];
+  assert.ok(zoneMismatches.length > 0);
+  assert.ok(zoneMismatches.every((m) => m.distance_from_3prime >= 1), 'still no terminal-base mismatch');
+  assert.ok(zoneMismatches.some((m) => m.distance_from_3prime <= 5), 'zone tolerance allows mismatches near the 3-prime end');
+}
+
+{
+  // Cross-intron design reports mismatch positions on the spliced transcript
+  // AND on the genomic sequence.
+  const e1 = makeTemplate(110, 17) + 'T'.repeat(10);
+  const e2 = makeTemplate(120, 19);
+  const e3 = makeTemplate(120, 23);
+  const genomic = e1 + makeTemplate(800, 29) + e2 + makeTemplate(800, 31) + e3;
+  const exons = [{ start: 1, end: 120 }, { start: 921, end: 1040 }, { start: 1841, end: 1960 }];
+  const spliced = e1 + e2 + e3;
+  const out = await run('molbio_design_intron_primers', {
+    genomic,
+    exons,
+    tm_min: 50, tm_max: 70, min_genomic_span: 900,
+    max_mismatches: 3, max_3prime_mismatches: 1,
+    max_results: 10,
+  });
+  assert.ok(out.pairs.length > 0);
+  const mismatched = out.pairs.find((p) => p.forward.mismatch_count > 0 || p.reverse.mismatch_count > 0);
+  assert.ok(mismatched !== undefined, 'the crafted exon junction must yield a mismatched candidate');
+  for (const [primer, isForward] of [[mismatched.forward, true], [mismatched.reverse, false]]) {
+    if (primer.mismatch_count === 0) continue;
+    assert.equal(primer.mismatch_count, primer.mismatches.length);
+    for (const m of primer.mismatches) {
+      assert.equal(m.primer_base, primer.sequence[m.position - 1]);
+      assert.equal(m.template_base, spliced[m.spliced_position - 1], 'spliced position maps to the transcript base');
+      assert.equal(m.genomic_position, splicedToGenomic(m.spliced_position, exons), 'genomic position maps consistently');
+      assert.ok(m.distance_from_3prime >= 1, 'no terminal-base mismatch in intron mode');
+    }
+  }
+}
+
+/** Map a 1-based spliced-transcript position back to 1-based genomic coordinates (test helper). */
+function splicedToGenomic(splicedPos, exons) {
+  let cursor = 0;
+  for (const exon of exons) {
+    const span = exon.end - exon.start + 1;
+    if (splicedPos <= cursor + span) return exon.start + (splicedPos - cursor) - 1;
+    cursor += span;
+  }
+  throw new Error(`spliced position ${splicedPos} outside exons`);
 }
 
 // ── pubmed search (mocked web service) ──────────────────────────────────────

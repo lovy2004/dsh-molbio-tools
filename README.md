@@ -17,8 +17,8 @@
 
 | 工具 | 功能 |
 | --- | --- |
-| `molbio_design_primers` | **自动设计** PCR 引物对：Tm（SantaLucia 1998 NN，50 mM Na⁺/1.5 mM Mg²⁺/200 nM）、GC、GC clamp、run/发夹/自互补/二聚体约束，按 amplicon 窗口配对并排序 |
-| `molbio_design_intron_primers` | **跨内含子 qPCR 引物**（v10）：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点（两侧各 ≥ min_junction_bases），反向引物位于另一外显子，基因组 DNA 无法扩增；`min_genomic_span` 强制最小基因组间距；输出剪接坐标 + 基因组坐标双套位置 |
+| `molbio_design_primers` | **自动设计** PCR 引物对：Tm（SantaLucia 1998 NN，50 mM Na⁺/1.5 mM Mg²⁺/200 nM）、GC、GC clamp、run/发夹/自互补/二聚体约束，按 amplicon 窗口配对并排序。**v12 起支持错配容差**：`max_mismatches > 0` 时允许引物与模板有少量错配（3' 末端碱基绝不错配、默认避开 3' 端关键区），每处错配在 `mismatches` 中报告并计入排序罚分，精确引物总是优先 |
+| `molbio_design_intron_primers` | **跨内含子 qPCR 引物**（v10）：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点（两侧各 ≥ min_junction_bases），反向引物位于另一外显子，基因组 DNA 无法扩增；`min_genomic_span` 强制最小基因组间距；输出剪接坐标 + 基因组坐标双套位置。**v12 起支持错配容差**（参数同 molbio_design_primers，错配在 spliced/genomic 双坐标下报告） |
 | `molbio_primer_tm` | 单条引物 Tm 估算（Na⁺/Mg²⁺/dNTP 盐校正，von Ahsen 2001） |
 | `molbio_primer_check` | 引物结构筛查：重复序列、自互补（3' 端加权）、发夹、引物对二聚体 |
 
@@ -114,7 +114,7 @@ dsh-molbio-tools/
 ├── papers.mjs       # 文献库存储（经 harness fs 服务 + 沙箱政策）
 ├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
-│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v11/）
+│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v12/）
 ├── test/
 │   └── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
 ├── docs/
@@ -135,7 +135,7 @@ molbio 工具只在该模式出现，不会把 39 个工具和提示段注入到
 ├── agent.cordis.yml                 # 标准编码 Agent + 末尾的 tool-molbio 行
 ├── preset.yml                       # 显示名称与描述
 └── plugins/
-    └── dsh-molbio-tools-v11/        # 插件文件（版本目录，见下文）
+    └── dsh-molbio-tools-v12/        # 插件文件（版本目录，见下文）
 ```
 
 对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
@@ -193,6 +193,7 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 - **Tm 是估算值**：SantaLucia 1998 NN + 盐校正，报告时应说明是估算，不能替代仪器校准。
 - **图谱坐标**：特征 1-based 闭区间；`strand: -1` 表示 complement 链；酶切标记使用酶表的标准切点记号。
 - **引物设计性能**：区域扫描 + 候选缓存 + 排序裁剪，几十 kb 模板在亚秒级完成；找不到满足约束的组合时返回空并提示放宽条件。
+- **错配容差（v12）**：`max_mismatches > 0` 时，若某窗口没有精确引物通过全部约束，设计器用**最少的替换**尝试挽救（只针对可修复的约束：GC 失衡、run、Tm 微差）。3' 末端碱基永远不错配，默认在 3' 端 `mismatch_3prime_zone`（默认 5 bp）关键区内也不放错配（`max_3prime_mismatches` 可放宽）。每处错配逐条报告：引物内位置、模板位置、模板碱基/引物碱基、距 3' 端距离；每个错配都会加重排序罚分——存在精确引物时精确引物永远优先。
 
 ## 典型用法示例
 
