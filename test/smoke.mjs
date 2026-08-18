@@ -247,6 +247,13 @@ function makeTemplate(n, seed = 42) {
   await assert.rejects(() => run('molbio_design_primers', { template, max_mismatches: 2, max_3prime_mismatches: 3 }), /max_3prime_mismatches/);
   await assert.rejects(() => run('molbio_design_primers', { template, mismatch_3prime_zone: 0 }), /mismatch_3prime_zone/);
   await assert.rejects(() => run('molbio_design_intron_primers', { genomic: 'A'.repeat(200), exons: [{ start: 1, end: 100 }, { start: 101, end: 200 }], max_mismatches: 9 }), /max_mismatches/);
+  // v12 Primer3-style parameter ranges
+  await assert.rejects(() => run('molbio_design_primers', { template, gc_clamp: 4 }), /gc_clamp/);
+  await assert.rejects(() => run('molbio_design_primers', { template, max_end_gc: 6 }), /max_end_gc/);
+  await assert.rejects(() => run('molbio_design_primers', { template, max_self_any: -1 }), /max_self_any/);
+  await assert.rejects(() => run('molbio_design_primers', { template, mispriming_3prime_bases: 5 }), /mispriming_3prime_bases/);
+  await assert.rejects(() => run('molbio_design_primers', { template, mispriming_max_mismatches: 3 }), /mispriming_max_mismatches/);
+  await assert.rejects(() => run('molbio_design_primers', { template, mispriming_max_sites: 21 }), /mispriming_max_sites/);
 }
 
 // ── render path ─────────────────────────────────────────────────────────────
@@ -870,10 +877,11 @@ function makeTemplate(n, seed = 42) {
 }
 
 {
-  // cross-intron primer design
-  const e1 = makeTemplate(120, 17);
-  const e2 = makeTemplate(120, 19);
-  const e3 = makeTemplate(120, 23);
+  // cross-intron primer design (fixture seeds chosen to pass the v12
+  // Primer3-style structural defaults)
+  const e1 = makeTemplate(120, 10);
+  const e2 = makeTemplate(120, 14);
+  const e3 = makeTemplate(120, 34);
   const genomic = e1 + makeTemplate(800, 29) + e2 + makeTemplate(800, 31) + e3;
   const exons = [{ start: 1, end: 120 }, { start: 921, end: 1040 }, { start: 1841, end: 1960 }];
   const out = await run('molbio_design_intron_primers', {
@@ -930,9 +938,10 @@ function makeTemplate(n, seed = 42) {
     template,
     primer_len_min: 18, primer_len_max: 18,
     tm_min: 30, tm_max: 95, gc_min: 15, gc_max: 100,
-    require_gc_clamp: false, max_run: 4,
-    max_self_score: 200, max_self_consecutive: 200, max_hairpin_score: 200,
-    max_dimer_score: 200, max_tm_delta: 200,
+    gc_clamp: 0, max_run: 4,
+    max_self_any: 20, max_self_end: 20, max_hairpin_tm: 120,
+    max_dimer_tm: 120, max_dimer_end_tm: 120,
+    max_end_stability: 30, max_end_gc: 5, max_tm_delta: 200,
     amplicon_min: 1, amplicon_max: 24, region_end: 24,
     max_results: 5,
   };
@@ -978,23 +987,28 @@ function makeTemplate(n, seed = 42) {
 
 {
   // Cross-intron design reports mismatch positions on the spliced transcript
-  // AND on the genomic sequence.
+  // AND on the genomic sequence. Both exons 1 and 3 carry T-runs that only
+  // mismatched primers can pass, so some returned pair must carry mismatches.
   const e1 = makeTemplate(110, 17) + 'T'.repeat(10);
   const e2 = makeTemplate(120, 19);
-  const e3 = makeTemplate(120, 23);
+  const e3 = 'T'.repeat(8) + makeTemplate(112, 23);
   const genomic = e1 + makeTemplate(800, 29) + e2 + makeTemplate(800, 31) + e3;
   const exons = [{ start: 1, end: 120 }, { start: 921, end: 1040 }, { start: 1841, end: 1960 }];
   const spliced = e1 + e2 + e3;
   const out = await run('molbio_design_intron_primers', {
     genomic,
     exons,
-    tm_min: 50, tm_max: 70, min_genomic_span: 900,
+    tm_min: 50, tm_max: 70, gc_min: 20, gc_max: 60,
+    min_genomic_span: 900,
+    max_self_any: 20, max_self_end: 20, max_hairpin_tm: 120,
+    max_dimer_tm: 120, max_dimer_end_tm: 120,
+    max_end_stability: 30, max_end_gc: 5,
     max_mismatches: 3, max_3prime_mismatches: 1,
     max_results: 10,
   });
   assert.ok(out.pairs.length > 0);
   const mismatched = out.pairs.find((p) => p.forward.mismatch_count > 0 || p.reverse.mismatch_count > 0);
-  assert.ok(mismatched !== undefined, 'the crafted exon junction must yield a mismatched candidate');
+  assert.ok(mismatched !== undefined, 'the crafted exon runs must yield a mismatched candidate');
   for (const [primer, isForward] of [[mismatched.forward, true], [mismatched.reverse, false]]) {
     if (primer.mismatch_count === 0) continue;
     assert.equal(primer.mismatch_count, primer.mismatches.length);
@@ -1005,6 +1019,121 @@ function makeTemplate(n, seed = 42) {
       assert.ok(m.distance_from_3prime >= 1, 'no terminal-base mismatch in intron mode');
     }
   }
+}
+
+// ── v12: Primer3-style structural filters (items 1/2/3 of the Primer3 parity) ─
+
+{
+  const design = await import('../design.mjs');
+  const relaxedBase = () => ({
+    ...design.resolveDesignOptions({}),
+    gcMin: 0, gcMax: 100, gcClamp: 0, tmMin: 0, tmMax: 100, maxRun: 100,
+  });
+
+  // self-any: a palindromic GC repeat is maximally self-complementary
+  const pal = 'GCGCGCGCGCGCGCGCGC';
+  assert.ok(lib.selfAnyScore(pal) >= 8, 'palindromic primer must exceed the Primer3 self-any threshold (8.0)');
+  assert.ok(lib.selfEndScore(pal) >= 3, 'palindromic primer must exceed the Primer3 self-end threshold (3.0)');
+  assert.equal(design.evaluateSeq(pal, relaxedBase(), 60).reason, 'self');
+  // a homopolymer is NOT self-complementary (A does not pair A)
+  assert.equal(lib.selfAnyScore('A'.repeat(20)), 0);
+  assert.equal(lib.selfEndScore('A'.repeat(20)), 0);
+
+  // self-end: C-rich 5' end + G-rich 3' end anchors a 3'-end duplex
+  const endDuplex = 'CCCCCCCCCCCCGGGGGG';
+  assert.ok(lib.selfEndScore(endDuplex) > 3, '3\'-anchored self duplex must exceed the self-end threshold');
+  assert.equal(design.evaluateSeq(endDuplex, { ...relaxedBase(), maxSelfAny: 100 }, 60).reason, 'self_end');
+
+  // hairpin: 8 bp GC stem with a 4 nt loop folds above the 47 °C threshold
+  const hairpinSeq = 'GCGCGCGCTTTTGCGCGCGC';
+  const topHairpin = lib.hairpinThermo(hairpinSeq, 200e-9)[0];
+  assert.ok(topHairpin !== undefined && topHairpin.tm > 47, 'GC-rich hairpin must exceed the 47 °C threshold');
+  assert.equal(topHairpin.stem, 8);
+  assert.equal(topHairpin.loop, 4);
+  assert.equal(design.evaluateSeq(hairpinSeq, { ...relaxedBase(), maxSelfAny: 100, maxSelfEnd: 100, maxRun: 100 }, 60).reason, 'hairpin');
+  // short stems stay below the threshold (Primer3 convention)
+  const shortHairpin = lib.hairpinThermo('GGGGTTTTCCCC', 200e-9)[0];
+  assert.ok(shortHairpin === undefined || shortHairpin.tm <= 47, 'a 4 bp stem must not trip the 47 °C threshold');
+
+  // end stability: ΔG(37 °C) of the last five bases (GC-rich end is stable)
+  assert.ok(lib.endStability5('GCGCG') < -6, 'GCGCG 3\' end must be stable (< -6 kcal/mol)');
+  assert.ok(lib.endStability5('ATATA') > -6, 'ATATA 3\' end must be unstable');
+  assert.equal(design.evaluateSeq('ATATATATATATATGCGCG', { ...relaxedBase(), maxSelfAny: 100, maxSelfEnd: 100, maxEndStability: 5 }, 60).reason, 'end_stability');
+
+  // end GC: G/C count in the last five bases
+  assert.equal(lib.endGcCount5('GCGCG'), 5);
+  assert.equal(design.evaluateSeq('ATATATATATATATATGGGGG', { ...relaxedBase(), maxEndGc: 2, maxSelfAny: 100, maxSelfEnd: 100 }, 60).reason, 'end_gc');
+
+  // GC clamp levels (0-3 consecutive G/C at the 3' end)
+  const clampOpts = () => ({ ...relaxedBase(), maxSelfAny: 100, maxSelfEnd: 100, maxEndGc: 5, maxEndStability: 30 });
+  assert.equal(design.evaluateSeq('ATATATATATATATATATAC', { ...clampOpts(), gcClamp: 2 }, 60).reason, 'clamp');
+  assert.equal(design.evaluateSeq('ATATATATATATATATATAC', { ...clampOpts(), gcClamp: 1 }, 60).reason, undefined);
+  assert.equal(design.evaluateSeq('ATATATATATATATATATCC', { ...clampOpts(), gcClamp: 3 }, 60).reason, 'clamp');
+  assert.equal(design.evaluateSeq('ATATATATATATATATATCC', { ...clampOpts(), gcClamp: 2 }, 60).reason, undefined);
+
+  // primer dimer: G12/C12 forms a 67 °C duplex — rejected at the Primer3 default
+  assert.ok(lib.dimerThermo('GGGGGGGGGGGG', 'CCCCCCCCCCCC', 200e-9).any_tm > 47);
+  const dimerTemplate = 'C'.repeat(12) + 'A'.repeat(20) + 'G'.repeat(12);
+  const dimerParams = {
+    lenMin: 12, lenMax: 12, tmMin: 0, tmMax: 100, gcMin: 0, gcMax: 100, gcClamp: 0, maxRun: 20,
+    maxSelfAny: 100, maxSelfEnd: 100, maxHairpinTm: 120, maxDimerTm: 200, maxDimerEndTm: 47,
+    maxEndStability: 30, maxEndGc: 5, maxTmDelta: 200, ampliconMin: 12, ampliconMax: 12,
+    regionStart: 1, regionEnd: 44, maxResults: 50, maxCandidates: 5000,
+  };
+  const dimerStrict = design.designPrimerPairs(dimerTemplate, dimerParams);
+  assert.ok(dimerStrict.length > 0, 'other pairs still exist');
+  assert.ok(!dimerStrict.some((p) => p.forward.sequence === 'CCCCCCCCCCCC'), 'the 67 °C G/C dimer pair must be rejected at the Primer3 47 °C threshold');
+  const dimerLoose = design.designPrimerPairs(dimerTemplate, { ...dimerParams, maxDimerEndTm: 200 });
+  assert.ok(dimerLoose.some((p) => p.forward.sequence === 'CCCCCCCCCCCC'), 'relaxing the threshold admits the G/C dimer pair');
+}
+
+// ── v12: mispriming check (item 6 of the Primer3 parity) ────────────────────
+
+{
+  const block = makeTemplate(60, 5);
+  const spacer = makeTemplate(80, 9);
+  const template = block + spacer + block; // duplicated block → every primer tail hits a second site
+  const params = {
+    template,
+    primer_len_min: 18, primer_len_max: 20,
+    tm_min: 30, tm_max: 95, gc_min: 20, gc_max: 80,
+    gc_clamp: 0, max_run: 3,
+    max_self_any: 20, max_self_end: 20, max_hairpin_tm: 120,
+    max_dimer_tm: 120, max_dimer_end_tm: 120,
+    max_end_stability: 30, max_end_gc: 5, max_tm_delta: 200,
+    amplicon_min: 30, amplicon_max: 60, region_start: 1, region_end: 60,
+    max_results: 5,
+  };
+  const off = await run('molbio_design_primers', { ...params, check_mispriming: false });
+  assert.ok(off.pairs.length > 0, 'mispriming check off → pairs exist');
+  for (const pair of off.pairs) {
+    assert.equal(pair.forward.mispriming_count, 0);
+    assert.deepEqual(pair.forward.mispriming_sites, []);
+  }
+  const strict = await run('molbio_design_primers', { ...params, check_mispriming: true, mispriming_max_sites: 1 });
+  assert.equal(strict.pairs.length, 0, 'with the duplicated block every primer has >= 1 extra site → all pairs rejected');
+  const loose = await run('molbio_design_primers', { ...params, check_mispriming: true, mispriming_max_sites: 10 });
+  assert.ok(loose.pairs.length > 0);
+  const pair = loose.pairs[0];
+  const totalSites = pair.forward.mispriming_count + pair.reverse.mispriming_count;
+  assert.ok(totalSites >= 1, 'loose mispriming run must report extra sites');
+  const allSites = [...pair.forward.mispriming_sites, ...pair.reverse.mispriming_sites];
+  assert.ok(allSites.some((s) => s.position > 60), 'a site in the duplicated second block must be reported');
+  for (const s of allSites) {
+    assert.ok(['top', 'bottom'].includes(s.strand));
+    assert.ok(s.matches >= 7, 'sites are found via <= 1 mismatch in the 3-prime tail');
+  }
+
+  // primer_check exposes the same thermodynamic metrics
+  const check = await run('molbio_primer_check', { primer1: 'GCGCGCGCGCGCGCGCGC', primer2: 'GCGCGCGCGCGCGCGCGC' });
+  assert.ok(check.primer1.self_any_score >= 8);
+  assert.ok(check.primer1.self_end_score >= 3);
+  assert.equal(typeof check.primer1.hairpin_tm, 'number');
+  assert.equal(typeof check.primer1.end_stability_kcal, 'number');
+  assert.equal(typeof check.primer1.end_gc_count, 'number');
+  const dimerPair = await run('molbio_primer_check', { primer1: 'GGGGGGGGGGGG', primer2: 'CCCCCCCCCCCC' });
+  assert.ok(dimerPair.pair.dimer_tm > 47, 'primer_check must report the Primer3-style dimer Tm');
+  assert.ok(dimerPair.pair.dimer_end_tm > 47);
 }
 
 /** Map a 1-based spliced-transcript position back to 1-based genomic coordinates (test helper). */

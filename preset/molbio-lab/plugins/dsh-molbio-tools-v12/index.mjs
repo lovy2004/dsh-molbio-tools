@@ -19,14 +19,20 @@ import {
   complement,
   digest,
   dimerPotential,
+  dimerThermo,
+  endGcCount5,
+  endStability5,
   findHairpins,
   findRepeats,
   findRuns,
+  hairpinThermo,
   labMath,
   normalizeSequence,
   primerTm,
   reverseComplement,
+  selfAnyScore,
   selfComplementarity,
+  selfEndScore,
   translateFrames,
 } from './lib.mjs';
 import { designIntronPrimers, designPrimers } from './design.mjs';
@@ -199,6 +205,11 @@ const PRIMER_REPORT_SCHEMA = {
     self_consecutive: { type: 'integer' },
     self_3prime_pairs: { type: 'integer' },
     hairpins: { type: 'array', items: HAIRPIN_SCHEMA },
+    self_any_score: { type: 'number', description: 'Primer3-style self-complementarity alignment score (match +1/mismatch -1/gap -0.25; threshold 8.0).' },
+    self_end_score: { type: 'number', description: 'Primer3-style 3\'-anchored self-complementarity score (threshold 3.0).' },
+    hairpin_tm: { type: 'number', description: 'Melting temperature of the most stable hairpin (°C, 0 = none; Primer3 threshold 47).' },
+    end_stability_kcal: { type: 'number', description: 'ΔG(37 °C) of the last five 3\' bases in kcal/mol (more negative = more stable; Primer3 limit 9.0).' },
+    end_gc_count: { type: 'integer', description: 'G/C bases among the last five 3\' bases.' },
   },
 };
 
@@ -534,6 +545,7 @@ function primerReport(seq) {
   const { gc, at } = baseCounts(seq);
   const unambiguous = gc + at;
   const sc = selfComplementarity(seq);
+  const hairpinTm = hairpinThermo(seq, 200e-9)[0]?.tm ?? 0;
   return {
     length: seq.length,
     gc_percent: unambiguous === 0 ? 0 : Math.round((gc / unambiguous) * 10000) / 100,
@@ -543,12 +555,17 @@ function primerReport(seq) {
     self_consecutive: sc.bestConsecutive,
     self_3prime_pairs: sc.threePrimePairs,
     hairpins: findHairpins(seq),
+    self_any_score: Math.round(selfAnyScore(seq) * 100) / 100,
+    self_end_score: Math.round(selfEndScore(seq) * 100) / 100,
+    hairpin_tm: hairpinTm,
+    end_stability_kcal: endStability5(seq),
+    end_gc_count: endGcCount5(seq),
   };
 }
 
 const primerCheckTool = define({
   name: 'molbio_primer_check',
-  description: 'Screen one primer (or a primer pair) for PCR design red flags: mononucleotide runs, short tandem repeats, self-complementarity (3\' end weighted), hairpins, and — for a pair — dimer potential via complementary alignment of the two primers. Interpret scores relatively: higher 3\'-weighted scores are riskier.',
+  description: 'Screen one primer (or a primer pair) for PCR design red flags: mononucleotide runs, short tandem repeats, self-complementarity (3\' end weighted), hairpins, and — for a pair — dimer potential via complementary alignment of the two primers. v12 adds Primer3-style thermodynamic metrics: self_any_score/self_end_score (alignment scores, thresholds 8.0/3.0), hairpin_tm (°C, threshold 47), end stability/end GC of the last five 3\' bases, and for pairs dimer_tm/dimer_end_tm (°C, thresholds 47). Interpret scores relatively: higher 3\'-weighted scores are riskier.',
   parameters: {
     type: 'object',
     required: ['primer1'],
@@ -572,6 +589,8 @@ const primerCheckTool = define({
           score: { type: 'integer' },
           max_consecutive: { type: 'integer' },
           three_prime_pairs: { type: 'integer' },
+          dimer_tm: { type: 'number', description: 'Melting temperature of the most stable primer dimer (°C; Primer3 threshold 47).' },
+          dimer_end_tm: { type: 'number', description: 'Dimer Tm when a 3\' end participates (°C; Primer3 threshold 47).' },
         },
       },
     },
@@ -583,12 +602,14 @@ const primerCheckTool = define({
       if (report.runs.length > 0) lines.push(`  runs: ${report.runs.map((r) => `${r.base}x${r.count}@${r.start}`).join(', ')}`);
       if (report.repeats.length > 0) lines.push(`  repeats: ${report.repeats.map((r) => `(${r.motif})x${r.count}@${r.start}`).join(', ')}`);
       lines.push(`  self-complementarity: score ${report.self_complement_score}, max consecutive ${report.self_consecutive}, 3\' pairs ${report.self_3prime_pairs}/6`);
+      lines.push(`  Primer3-style: self-any ${report.self_any_score} (≤8), self-end ${report.self_end_score} (≤3), hairpin Tm ${report.hairpin_tm} °C (≤47), 3'-end ΔG ${report.end_stability_kcal} kcal/mol (≥ -9), 3'-end GC ${report.end_gc_count}/5`);
       if (report.hairpins.length > 0) lines.push(`  hairpins: ${report.hairpins.map((h) => `stem ${h.stem}/loop ${h.loop}@${h.start} (score ${h.score})`).join(', ')}`);
     };
     fmt('primer1', value.primer1);
     if (value.primer2 !== undefined) fmt('primer2', value.primer2);
     if (value.pair !== undefined) {
       lines.push(`pair (dimer): score ${value.pair.score}, max consecutive ${value.pair.max_consecutive}, 3\' pairs ${value.pair.three_prime_pairs}/6`);
+      lines.push(`pair Primer3-style: dimer Tm ${value.pair.dimer_tm} °C (≤47), 3'-end dimer Tm ${value.pair.dimer_end_tm} °C (≤47)`);
     }
     return lines.join('\n');
   },
@@ -599,7 +620,8 @@ const primerCheckTool = define({
       const p2 = normalizeSequence(args.primer2, 'primer2');
       out.primer2 = primerReport(p2);
       const d = dimerPotential(p1, p2);
-      out.pair = { score: d.score, max_consecutive: d.maxConsecutive, three_prime_pairs: d.threePrimePairs };
+      const dt = dimerThermo(p1, p2, 200e-9);
+      out.pair = { score: d.score, max_consecutive: d.maxConsecutive, three_prime_pairs: d.threePrimePairs, dimer_tm: dt.any_tm, dimer_end_tm: dt.end_tm };
     }
     return out;
   },
@@ -718,6 +740,17 @@ const MISMATCH_SCHEMA = {
   },
 };
 
+const MISPRIMING_SITE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['position', 'strand', 'matches'],
+  properties: {
+    position: { type: 'integer', description: '1-based position on the template where the 3\' tail can anneal.' },
+    strand: { type: 'string', enum: ['top', 'bottom'], description: 'The template strand the primer would bind at this site.' },
+    matches: { type: 'integer', description: 'Complementary bases between the 3\' tail and this site.' },
+  },
+};
+
 const PRIMER_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -729,14 +762,21 @@ const PRIMER_SCHEMA = {
     length: { type: 'integer' },
     tm: { type: 'number' },
     gc_percent: { type: 'number' },
+    self_any: { type: 'number', description: 'Primer3-style self-complementarity alignment score (v12).' },
+    self_end: { type: 'number', description: 'Primer3-style 3\'-anchored self-complementarity score (v12).' },
+    hairpin_tm: { type: 'number', description: 'Melting temperature of the most stable hairpin (°C, 0 = none; v12).' },
+    end_stability_kcal: { type: 'number', description: 'ΔG(37 °C) of the last five 3\' bases in kcal/mol (v12).' },
+    end_gc_count: { type: 'integer', description: 'G/C bases among the last five 3\' bases (v12).' },
     mismatch_count: { type: 'integer', description: 'Number of primer-template mismatches this primer carries (0 = exact match; v12).' },
     mismatches: { type: 'array', items: MISMATCH_SCHEMA },
+    mispriming_count: { type: 'integer', description: 'Extra template sites where the 3\' tail can anneal (v12 mispriming check).' },
+    mispriming_sites: { type: 'array', items: MISPRIMING_SITE_SCHEMA },
   },
 };
 
 const designPrimersTool = define({
   name: 'molbio_design_primers',
-  description: 'Design PCR primer pairs on a template sequence. Scans for forward and reverse primers that satisfy Tm (SantaLucia 1998 NN, 50 mM Na+, 1.5 mM Mg2+, 200 nM), GC content, length, GC clamp, run, hairpin, self-complementarity and dimer constraints, then ranks pairs inside the amplicon window. Returns up to max_results pairs ordered by quality (lower penalty is better). v12: pass max_mismatches > 0 to also allow primers that carry a few positional mismatches against the template — used when no exact primer satisfies every constraint in a region. Mismatches are never placed on the 3\'-terminal base and avoid the 3\'-terminal critical zone by default; each mismatch is reported per primer in `mismatches` and adds a ranking penalty, so exact primers always win when available.',
+  description: 'Design PCR primer pairs on a template sequence. Scans for forward and reverse primers that satisfy Tm (SantaLucia 1998 NN, 50 mM Na+, 1.5 mM Mg2+, 200 nM), GC content, length, GC clamp (0-3 consecutive G/C at the 3\' end), mononucleotide-run, end-stability and Primer3-style structural constraints — self-complementarity (local alignment score, match +1/mismatch -1/gap -0.25), hairpin folding Tm and primer-dimer Tm (default 47 °C each, from the same NN parameters) — then ranks pairs inside the amplicon window (lower penalty is better). v12: pass max_mismatches > 0 to also allow primers with a few positional mismatches (never on the 3\'-terminal base, avoided in the 3\'-terminal critical zone by default; each is reported and penalized); pass check_mispriming: true to reject/penalize primers whose 3\' tail anneals at extra template sites.',
   parameters: {
     type: 'object',
     required: ['template'],
@@ -752,16 +792,24 @@ const designPrimersTool = define({
       gc_max: { type: 'number', description: 'Maximum primer GC% (default 60).' },
       amplicon_min: { type: 'integer', description: 'Minimum amplicon length bp (default 80).' },
       amplicon_max: { type: 'integer', description: 'Maximum amplicon length bp (default 1000).' },
-      require_gc_clamp: { type: 'boolean', description: 'Require a G/C at the primer 3\' end (default true).' },
+      gc_clamp: { type: 'integer', description: 'Consecutive G/C bases required at the primer 3\' end (0-3, default 1). Replaces require_gc_clamp.' },
+      require_gc_clamp: { type: 'boolean', description: 'Deprecated alias for gc_clamp: true = 1, false = 0. gc_clamp wins when both are given.' },
       max_run: { type: 'integer', description: 'Maximum allowed run of identical bases (default 3).' },
-      max_self_score: { type: 'integer', description: 'Maximum self-complementarity score (default 8).' },
-      max_self_consecutive: { type: 'integer', description: 'Maximum consecutive self-complementary pairs (default 4).' },
-      max_hairpin_score: { type: 'integer', description: 'Maximum hairpin score (default 10).' },
-      max_dimer_score: { type: 'integer', description: 'Maximum primer-pair dimer score (default 12).' },
+      max_self_any: { type: 'number', description: 'Maximum self-complementarity alignment score (match +1/mismatch -1/gap -0.25; default 8, the Primer3 default).' },
+      max_self_end: { type: 'number', description: 'Maximum 3\'-anchored self-complementarity score (default 3, the Primer3 default).' },
+      max_hairpin_tm: { type: 'number', description: 'Maximum hairpin folding Tm in °C (default 47, the Primer3 default).' },
+      max_dimer_tm: { type: 'number', description: 'Maximum primer-dimer duplex Tm in °C (default 47, the Primer3 default).' },
+      max_dimer_end_tm: { type: 'number', description: 'Maximum dimer Tm when a 3\' end participates in °C (default 47, the Primer3 default).' },
+      max_end_stability: { type: 'number', description: 'Maximum |ΔG(37 °C)| of the last five 3\' bases in kcal/mol (default 9.0, the Primer3 default).' },
+      max_end_gc: { type: 'integer', description: 'Maximum G/C bases allowed in the last five 3\' bases (default 5, the Primer3 default).' },
       max_tm_delta: { type: 'number', description: 'Maximum |Tm(forward) - Tm(reverse)| in °C (default 3).' },
       max_mismatches: { type: 'integer', description: 'Maximum primer-template mismatches the designer may introduce (0-5, default 0 = exact match required). Only used when no exact primer passes the constraints in a window; mismatches are never placed on the 3\'-terminal base.' },
       max_3prime_mismatches: { type: 'integer', description: 'Maximum mismatches tolerated inside the 3\'-terminal critical zone (mismatch_3prime_zone bases before the terminal base); default 0 (none).' },
       mismatch_3prime_zone: { type: 'integer', description: 'Length of the 3\'-terminal critical zone in bases (1-10, default 5); mismatches inside it require max_3prime_mismatches > 0.' },
+      check_mispriming: { type: 'boolean', description: 'Check that the 3\' tail of each primer has no extra annealing sites on the template (either strand); default false. Extra sites are reported and penalized, and pairs beyond mispriming_max_sites are rejected.' },
+      mispriming_3prime_bases: { type: 'integer', description: 'Length of the 3\' tail checked for non-specific annealing (6-10, default 8).' },
+      mispriming_max_mismatches: { type: 'integer', description: 'Mismatches tolerated between the 3\' tail and a site for it to count as annealing (0-2, default 1); the terminal base must always pair.' },
+      mispriming_max_sites: { type: 'integer', description: 'Maximum extra annealing sites allowed per primer (0-20, default 1); pairs with more are rejected.' },
       max_results: { type: 'integer', description: 'Maximum pairs to return (default 5).' },
     },
   },
@@ -808,12 +856,22 @@ const designPrimersTool = define({
         lines.push(`  ${label} carries ${primer.mismatch_count} mismatch(es) vs template: ${details}`);
       }
     };
+    const misprimingLine = (label, primer) => {
+      if (primer.mispriming_count > 0) {
+        const details = primer.mispriming_sites
+          .map((s) => `bp ${s.position} (${s.strand} strand, ${s.matches} matches)`)
+          .join('; ');
+        lines.push(`  ${label} 3' tail anneals at ${primer.mispriming_count} extra site(s): ${details}`);
+      }
+    };
     for (const [index, pair] of value.pairs.entries()) {
       lines.push(`#${index + 1} amplicon ${pair.amplicon.start}-${pair.amplicon.end} (${pair.amplicon.length} bp), penalty ${pair.penalty}`);
-      lines.push(`  F ${pair.forward.sequence}  (${pair.forward.start}-${pair.forward.end}, Tm ${pair.forward.tm} °C, GC ${pair.forward.gc_percent}%)`);
-      lines.push(`  R ${pair.reverse.sequence}  (${pair.reverse.start}-${pair.reverse.end}, Tm ${pair.reverse.tm} °C, GC ${pair.reverse.gc_percent}%)`);
+      lines.push(`  F ${pair.forward.sequence}  (${pair.forward.start}-${pair.forward.end}, Tm ${pair.forward.tm} °C, GC ${pair.forward.gc_percent}%, self ${pair.forward.self_any}/${pair.forward.self_end}, hairpin ${pair.forward.hairpin_tm} °C)`);
+      lines.push(`  R ${pair.reverse.sequence}  (${pair.reverse.start}-${pair.reverse.end}, Tm ${pair.reverse.tm} °C, GC ${pair.reverse.gc_percent}%, self ${pair.reverse.self_any}/${pair.reverse.self_end}, hairpin ${pair.reverse.hairpin_tm} °C)`);
       mismatchLine('F', pair.forward);
       mismatchLine('R', pair.reverse);
+      misprimingLine('F', pair.forward);
+      misprimingLine('R', pair.reverse);
     }
     return lines.join('\n');
   },
@@ -829,16 +887,23 @@ const designPrimersTool = define({
       gcMax: args.gc_max,
       ampliconMin: args.amplicon_min,
       ampliconMax: args.amplicon_max,
-      requireGcClamp: args.require_gc_clamp,
+      gcClamp: args.gc_clamp ?? (args.require_gc_clamp === true ? 1 : args.require_gc_clamp === false ? 0 : undefined),
       maxRun: args.max_run,
-      maxSelfScore: args.max_self_score,
-      maxSelfConsecutive: args.max_self_consecutive,
-      maxHairpinScore: args.max_hairpin_score,
-      maxDimerScore: args.max_dimer_score,
+      maxSelfAny: args.max_self_any,
+      maxSelfEnd: args.max_self_end,
+      maxHairpinTm: args.max_hairpin_tm,
+      maxDimerTm: args.max_dimer_tm,
+      maxDimerEndTm: args.max_dimer_end_tm,
+      maxEndStability: args.max_end_stability,
+      maxEndGc: args.max_end_gc,
       maxTmDelta: args.max_tm_delta,
       maxMismatches: args.max_mismatches,
       max3PrimeMismatches: args.max_3prime_mismatches,
       mismatch3PrimeZone: args.mismatch_3prime_zone,
+      checkMispriming: args.check_mispriming,
+      mispriming3PrimeBases: args.mispriming_3prime_bases,
+      misprimingMaxMismatches: args.mispriming_max_mismatches,
+      misprimingMaxSites: args.mispriming_max_sites,
       maxResults: args.max_results,
     });
     return { pairs };
@@ -1210,6 +1275,18 @@ const INTRON_MISMATCH_SCHEMA = {
   },
 };
 
+const INTRON_MISPRIMING_SITE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['position', 'genomic_position', 'strand', 'matches'],
+  properties: {
+    position: { type: 'integer', description: '1-based position on the spliced transcript where the 3\' tail can anneal.' },
+    genomic_position: { type: 'integer', description: '1-based position on the genomic sequence.' },
+    strand: { type: 'string', enum: ['top', 'bottom'], description: 'The transcript strand the primer would bind at this site.' },
+    matches: { type: 'integer', description: 'Complementary bases between the 3\' tail and this site.' },
+  },
+};
+
 const INTRON_PRIMER_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -1219,6 +1296,11 @@ const INTRON_PRIMER_SCHEMA = {
     length: { type: 'integer' },
     tm: { type: 'number' },
     gc_percent: { type: 'number' },
+    self_any: { type: 'number', description: 'Primer3-style self-complementarity alignment score (v12).' },
+    self_end: { type: 'number', description: 'Primer3-style 3\'-anchored self-complementarity score (v12).' },
+    hairpin_tm: { type: 'number', description: 'Melting temperature of the most stable hairpin (°C, 0 = none; v12).' },
+    end_stability_kcal: { type: 'number', description: 'ΔG(37 °C) of the last five 3\' bases in kcal/mol (v12).' },
+    end_gc_count: { type: 'integer', description: 'G/C bases among the last five 3\' bases (v12).' },
     spliced_start: { type: 'integer' },
     spliced_end: { type: 'integer' },
     genomic_start: { type: 'integer' },
@@ -1229,12 +1311,14 @@ const INTRON_PRIMER_SCHEMA = {
     junction_right: { type: 'integer' },
     mismatch_count: { type: 'integer', description: 'Number of primer-template mismatches this primer carries (0 = exact match; v12).' },
     mismatches: { type: 'array', items: INTRON_MISMATCH_SCHEMA },
+    mispriming_count: { type: 'integer', description: 'Extra transcript sites where the 3\' tail can anneal (v12 mispriming check).' },
+    mispriming_sites: { type: 'array', items: INTRON_MISPRIMING_SITE_SCHEMA },
   },
 };
 
 const intronPrimersTool = (ctx) => define({
   name: 'molbio_design_intron_primers',
-  description: 'Design qPCR primer pairs where the forward primer spans an exon-exon junction (>= min_junction_bases on each side) so genomic DNA cannot be amplified, and the reverse primer sits in a different exon. Provide the genomic sequence and the exon spans (1-based, inclusive). min_genomic_span enforces a minimal genomic distance between the primers (making gDNA amplification impossible or easily detectable). Coordinates come back both on the spliced transcript and on the genomic sequence. v12: pass max_mismatches > 0 to also allow mismatched primers (never on the 3\'-terminal base, avoided in the 3\'-terminal critical zone by default); each mismatch is reported per primer in `mismatches` with spliced and genomic positions.',
+  description: 'Design qPCR primer pairs where the forward primer spans an exon-exon junction (>= min_junction_bases on each side) so genomic DNA cannot be amplified, and the reverse primer sits in a different exon. Provide the genomic sequence and the exon spans (1-based, inclusive). min_genomic_span enforces a minimal genomic distance between the primers (making gDNA amplification impossible or easily detectable). Coordinates come back both on the spliced transcript and on the genomic sequence. v12: Primer3-style structural filters (self-complementarity alignment scores, hairpin/dimer folding Tm at 47 °C defaults, end stability/end GC, GC clamp levels); pass max_mismatches > 0 to allow mismatched primers (never on the 3\'-terminal base) with spliced+genomic mismatch reports; pass check_mispriming: true to reject/penalize non-specific 3\'-tail annealing on the transcript.',
   parameters: {
     type: 'object',
     required: ['exons'],
@@ -1264,16 +1348,24 @@ const intronPrimersTool = (ctx) => define({
       gc_max: { type: 'number', description: 'Maximum primer GC% (default 60).' },
       min_junction_bases: { type: 'integer', description: 'Bases required on each side of the junction (default 6).' },
       min_genomic_span: { type: 'integer', description: 'Minimum genomic distance between the primers (default 0).' },
-      require_gc_clamp: { type: 'boolean', description: 'Require a G/C at the primer 3\' end (default true).' },
+      gc_clamp: { type: 'integer', description: 'Consecutive G/C bases required at the primer 3\' end (0-3, default 1). Replaces require_gc_clamp.' },
+      require_gc_clamp: { type: 'boolean', description: 'Deprecated alias for gc_clamp: true = 1, false = 0. gc_clamp wins when both are given.' },
       max_run: { type: 'integer', description: 'Maximum allowed run of identical bases (default 3).' },
-      max_self_score: { type: 'integer', description: 'Maximum self-complementarity score (default 8).' },
-      max_self_consecutive: { type: 'integer', description: 'Maximum consecutive self-complementary pairs (default 4).' },
-      max_hairpin_score: { type: 'integer', description: 'Maximum hairpin score (default 10).' },
-      max_dimer_score: { type: 'integer', description: 'Maximum primer-pair dimer score (default 12).' },
+      max_self_any: { type: 'number', description: 'Maximum self-complementarity alignment score (match +1/mismatch -1/gap -0.25; default 8, the Primer3 default).' },
+      max_self_end: { type: 'number', description: 'Maximum 3\'-anchored self-complementarity score (default 3, the Primer3 default).' },
+      max_hairpin_tm: { type: 'number', description: 'Maximum hairpin folding Tm in °C (default 47, the Primer3 default).' },
+      max_dimer_tm: { type: 'number', description: 'Maximum primer-dimer duplex Tm in °C (default 47, the Primer3 default).' },
+      max_dimer_end_tm: { type: 'number', description: 'Maximum dimer Tm when a 3\' end participates in °C (default 47, the Primer3 default).' },
+      max_end_stability: { type: 'number', description: 'Maximum |ΔG(37 °C)| of the last five 3\' bases in kcal/mol (default 9.0, the Primer3 default).' },
+      max_end_gc: { type: 'integer', description: 'Maximum G/C bases allowed in the last five 3\' bases (default 5, the Primer3 default).' },
       max_tm_delta: { type: 'number', description: 'Maximum |Tm(forward) - Tm(reverse)| in °C (default 3).' },
       max_mismatches: { type: 'integer', description: 'Maximum primer-template mismatches the designer may introduce (0-5, default 0 = exact match required). Never placed on the 3\'-terminal base.' },
       max_3prime_mismatches: { type: 'integer', description: 'Maximum mismatches tolerated inside the 3\'-terminal critical zone (mismatch_3prime_zone bases before the terminal base); default 0 (none).' },
       mismatch_3prime_zone: { type: 'integer', description: 'Length of the 3\'-terminal critical zone in bases (1-10, default 5); mismatches inside it require max_3prime_mismatches > 0.' },
+      check_mispriming: { type: 'boolean', description: 'Check that the 3\' tail of each primer has no extra annealing sites on the spliced transcript (either strand); default false. Extra sites are reported and penalized, and pairs beyond mispriming_max_sites are rejected.' },
+      mispriming_3prime_bases: { type: 'integer', description: 'Length of the 3\' tail checked for non-specific annealing (6-10, default 8).' },
+      mispriming_max_mismatches: { type: 'integer', description: 'Mismatches tolerated between the 3\' tail and a site for it to count as annealing (0-2, default 1); the terminal base must always pair.' },
+      mispriming_max_sites: { type: 'integer', description: 'Maximum extra annealing sites allowed per primer (0-20, default 1); pairs with more are rejected.' },
       max_results: { type: 'integer', description: 'Maximum pairs to return (default 5).' },
     },
   },
@@ -1335,12 +1427,22 @@ const intronPrimersTool = (ctx) => define({
         lines.push(`  ${label} carries ${primer.mismatch_count} mismatch(es) vs transcript: ${details}`);
       }
     };
+    const misprimingLine = (label, primer) => {
+      if (primer.mispriming_count > 0) {
+        const details = primer.mispriming_sites
+          .map((s) => `spliced bp ${s.position} / genomic bp ${s.genomic_position} (${s.strand} strand, ${s.matches} matches)`)
+          .join('; ');
+        lines.push(`  ${label} 3' tail anneals at ${primer.mispriming_count} extra site(s): ${details}`);
+      }
+    };
     for (const [index, pair] of value.pairs.entries()) {
       lines.push(`#${index + 1} spliced amplicon ${pair.spliced_amplicon.start}-${pair.spliced_amplicon.end} (${pair.spliced_amplicon.length} bp), genomic span ${pair.genomic_amplicon_length} bp, penalty ${pair.penalty}`);
-      lines.push(`  F ${pair.forward.sequence}  (spliced ${pair.forward.spliced_start}-${pair.forward.spliced_end}; genomic ${pair.forward.genomic_start}-${pair.forward.genomic_end}; exons ${pair.forward.exons.join('/')}, junction ${pair.forward.junction_left}+${pair.forward.junction_right} bp; Tm ${pair.forward.tm} °C)`);
-      lines.push(`  R ${pair.reverse.sequence}  (spliced ${pair.reverse.spliced_start}-${pair.reverse.spliced_end}; genomic ${pair.reverse.genomic_start}-${pair.reverse.genomic_end}; exon ${pair.reverse.exon}; Tm ${pair.reverse.tm} °C)`);
+      lines.push(`  F ${pair.forward.sequence}  (spliced ${pair.forward.spliced_start}-${pair.forward.spliced_end}; genomic ${pair.forward.genomic_start}-${pair.forward.genomic_end}; exons ${pair.forward.exons.join('/')}, junction ${pair.forward.junction_left}+${pair.forward.junction_right} bp; Tm ${pair.forward.tm} °C, self ${pair.forward.self_any}/${pair.forward.self_end}, hairpin ${pair.forward.hairpin_tm} °C)`);
+      lines.push(`  R ${pair.reverse.sequence}  (spliced ${pair.reverse.spliced_start}-${pair.reverse.spliced_end}; genomic ${pair.reverse.genomic_start}-${pair.reverse.genomic_end}; exon ${pair.reverse.exon}; Tm ${pair.reverse.tm} °C, self ${pair.reverse.self_any}/${pair.reverse.self_end}, hairpin ${pair.reverse.hairpin_tm} °C)`);
       mismatchLine('F', pair.forward);
       mismatchLine('R', pair.reverse);
+      misprimingLine('F', pair.forward);
+      misprimingLine('R', pair.reverse);
     }
     return lines.join('\n');
   },
@@ -1367,16 +1469,23 @@ const intronPrimersTool = (ctx) => define({
       gcMax: args.gc_max,
       minJunctionBases: args.min_junction_bases,
       minGenomicSpan: args.min_genomic_span,
-      requireGcClamp: args.require_gc_clamp,
+      gcClamp: args.gc_clamp ?? (args.require_gc_clamp === true ? 1 : args.require_gc_clamp === false ? 0 : undefined),
       maxRun: args.max_run,
-      maxSelfScore: args.max_self_score,
-      maxSelfConsecutive: args.max_self_consecutive,
-      maxHairpinScore: args.max_hairpin_score,
-      maxDimerScore: args.max_dimer_score,
+      maxSelfAny: args.max_self_any,
+      maxSelfEnd: args.max_self_end,
+      maxHairpinTm: args.max_hairpin_tm,
+      maxDimerTm: args.max_dimer_tm,
+      maxDimerEndTm: args.max_dimer_end_tm,
+      maxEndStability: args.max_end_stability,
+      maxEndGc: args.max_end_gc,
       maxTmDelta: args.max_tm_delta,
       maxMismatches: args.max_mismatches,
       max3PrimeMismatches: args.max_3prime_mismatches,
       mismatch3PrimeZone: args.mismatch_3prime_zone,
+      checkMispriming: args.check_mispriming,
+      mispriming3PrimeBases: args.mispriming_3prime_bases,
+      misprimingMaxMismatches: args.mispriming_max_mismatches,
+      misprimingMaxSites: args.mispriming_max_sites,
       maxResults: args.max_results,
     });
     return {

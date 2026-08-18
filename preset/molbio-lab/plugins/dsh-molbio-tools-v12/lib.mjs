@@ -671,6 +671,239 @@ export function dimerPotential(p1, p2) {
   return { score: bestScore, maxConsecutive: bestConsecutive, threePrimePairs };
 }
 
+// ── Primer3-style thermodynamic structure checks ────────────────────────────
+//
+// These mirror the models the Primer3 manual documents for its structural
+// filters (https://primer3.org/manual.html): self-complementarity is a local
+// alignment scored +1 match / -1 mismatch / -0.25 gap; hairpins and primer
+// dimers are reported as the melting temperature of the most stable
+// structure computed with the same SantaLucia nearest-neighbour parameters as
+// primerTm (default thresholds 47 °C); end stability is the ΔG(37 °C) of the
+// last five 3' bases. All values are design estimates.
+
+const THERMO_CELSIUS = 310.15; // 37 °C in K
+
+/** Uncorrected NN duplex thermodynamics of one canonical sequence. */
+function duplexThermo(seq) {
+  let dh = INIT_DH;
+  let ds = INIT_DS;
+  for (let i = 0; i + 1 < seq.length; i++) {
+    const pair = seq[i] + seq[i + 1];
+    dh += NN_DH_FULL[pair] ?? 0;
+    ds += NN_DS_FULL[pair] ?? 0;
+  }
+  for (const end of [seq[0], seq[seq.length - 1]]) {
+    if (end === 'A' || end === 'T') {
+      dh += TERM_AT_DH;
+      ds += TERM_AT_DS;
+    }
+  }
+  return { dh, ds };
+}
+
+/** ΔG at 37 °C in kcal/mol from NN enthalpy (kcal/mol) and entropy (cal/mol·K). */
+function deltaG37(dh, ds) {
+  return dh - (THERMO_CELSIUS * ds) / 1000;
+}
+
+/** NN Tm (°C) of a bimolecular duplex at molar concentration `ct` (formula as in primerTm). */
+function duplexTmFromThermo({ dh, ds }, ctMolar) {
+  const denominator = ds + R * Math.log(Math.max(ctMolar, 1e-12) / 4);
+  if (denominator >= 0) return 0; // outside the physical regime — treat as no duplex
+  const tm = (dh * 1000) / denominator - 273.15;
+  return Number.isFinite(tm) && tm > 0 ? tm : 0;
+}
+
+/** Linear-gap local alignment score of two strings (match +1, mismatch -1, gap -0.25). */
+function localAlignScore(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const MATCH = 1.0;
+  const MISMATCH = -1.0;
+  const GAP = -0.25;
+  let prev = new Float64Array(m + 1);
+  let best = 0;
+  for (let i = 1; i <= n; i++) {
+    const cur = new Float64Array(m + 1);
+    for (let j = 1; j <= m; j++) {
+      const diag = prev[j - 1] + (a[i - 1] === b[j - 1] ? MATCH : MISMATCH);
+      const up = prev[j] + GAP;
+      const left = cur[j - 1] + GAP;
+      cur[j] = Math.max(0, diag, up, left);
+      if (cur[j] > best) best = cur[j];
+    }
+    prev = cur;
+  }
+  return best;
+}
+
+/** Linear-gap global alignment score of two strings (match +1, mismatch -1, gap -0.25). */
+function globalAlignScore(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const MATCH = 1.0;
+  const MISMATCH = -1.0;
+  const GAP = -0.25;
+  let prev = new Float64Array(m + 1);
+  for (let j = 1; j <= m; j++) prev[j] = prev[j - 1] + GAP;
+  for (let i = 1; i <= n; i++) {
+    const cur = new Float64Array(m + 1);
+    cur[0] = prev[0] + GAP;
+    for (let j = 1; j <= m; j++) {
+      cur[j] = Math.max(
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? MATCH : MISMATCH),
+        prev[j] + GAP,
+        cur[j - 1] + GAP,
+      );
+    }
+    prev = cur;
+  }
+  return prev[m];
+}
+
+/**
+ * Primer3-style ANY self-complementarity: local alignment score between the
+ * primer and its own reverse complement. In the anti-parallel register a
+ * plain identity seq[i] === RC[j] means seq[i] pairs complementarily with
+ * seq[n-1-j] — so standard identity scoring on (seq, RC) measures
+ * self-complementary duplexes. Threshold in Primer3: 8.0.
+ */
+export function selfAnyScore(seq) {
+  return localAlignScore(seq, reverseComplement(seq));
+}
+
+/**
+ * Primer3-style 3'-anchored (END) self-complementarity: the best GLOBAL
+ * alignment score in which the primer's 3'-terminal base is paired
+ * complementarily with a base of a second anti-parallel copy of the primer.
+ * The second copy is walked 3'→5' (anti-parallel register) and stored as
+ * complements so that plain sequence identity marks a pair. Threshold in
+ * Primer3: 3.0.
+ */
+export function selfEndScore(seq) {
+  const n = seq.length;
+  if (n < 2) return 0;
+  let best = -Infinity;
+  for (let j = 0; j < n; j++) {
+    if (COMPLEMENT[seq[n - 1]] !== seq[j]) continue; // the terminal base pairs copy position j
+    // anti-parallel copy of seq (3'→5') with position j removed, complemented
+    let right = '';
+    for (let m = n - 1; m >= 0; m--) {
+      if (m === j) continue;
+      right += complement(seq[m]);
+    }
+    const score = globalAlignScore(seq.slice(0, n - 1), right) + 1.0;
+    if (score > best) best = score;
+  }
+  return best === -Infinity ? 0 : best;
+}
+
+/**
+ * Hairpin stability as a folding Tm: enumerate stems (3-8 bp, perfectly
+ * complementary arms) with loops of 3-10 bases, compute the stem duplex NN
+ * thermodynamics, fold a loop entropy penalty (≈ 3.4 kcal/mol initiation +
+ * 0.4 kcal/mol per extra loop base, folded into ΔS) and convert with the same
+ * duplex-Tm formula as primerTm at concentration `ctMolar`. Returns the top
+ * hairpins sorted by Tm (highest first).
+ */
+export function hairpinThermo(seq, ctMolar = 5e-7) {
+  const rc = reverseComplement(seq);
+  const found = [];
+  for (let loop = 3; loop <= 10; loop++) {
+    for (let stem = 3; stem <= 8; stem++) {
+      const span = 2 * stem + loop;
+      if (span > seq.length) continue;
+      for (let start = 0; start + span <= seq.length; start++) {
+        const arm1 = seq.slice(start, start + stem);
+        const arm2 = seq.slice(start + stem + loop, start + span);
+        if (reverseComplement(arm1) !== arm2) continue;
+        const { dh, ds } = duplexThermo(arm1);
+        // loop entropy penalty as a ΔG(37°C) folded into ΔS
+        const loopDg = 3.4 + 0.4 * Math.max(0, loop - 3);
+        const dsLoop = ds + (loopDg * 1000) / THERMO_CELSIUS;
+        const tm = duplexTmFromThermo({ dh, ds: dsLoop }, ctMolar);
+        found.push({
+          start: start + 1,
+          stem,
+          loop,
+          tm: Math.round(tm * 100) / 100,
+          dg37_kcal: Math.round(deltaG37(dh, dsLoop) * 100) / 100,
+        });
+      }
+    }
+  }
+  found.sort((a, b) => b.tm - a.tm);
+  return found;
+}
+
+/**
+ * Primer3-style primer-dimer analysis: the melting temperature of the most
+ * stable duplex between two primers, computed with the NN parameters over the
+ * longest perfectly complementary stretch of every relative alignment. In the
+ * anti-parallel duplex geometry p1[i] must EQUAL RC(p2)[i], so runs of
+ * identity between p1 and RC(p2) are the complementary duplexes. Returns
+ * { any_tm, end_tm } where `end_tm` only counts duplexes that include one of
+ * the primers' 3' ends (the extension-relevant case). Thresholds in Primer3:
+ * 47 °C for both.
+ */
+export function dimerThermo(p1, p2, ctMolar = 5e-7) {
+  const rc2 = reverseComplement(p2);
+  let anyTm = 0;
+  let endTm = 0;
+  // a[i] === b[i] marks a complementary pair (see above). `p1ThreeAtEnd` is
+  // true when a's last base is p1's 3' end; `p2ThreeAtStart` is true when
+  // b's first base is RC(p2)[0] (the complement of p2's 3' end).
+  const consider = (a, b, p1ThreeAtEnd, p2ThreeAtStart) => {
+    const span = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < span) {
+      if (a[i] !== b[i]) {
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < span && a[j] === b[j]) j++;
+      if (j - i >= 3) {
+        const { dh, ds } = duplexThermo(a.slice(i, j));
+        const tm = duplexTmFromThermo({ dh, ds }, ctMolar);
+        if (tm > anyTm) anyTm = tm;
+        const includesP1Three = p1ThreeAtEnd && j === a.length;
+        const includesP2Three = p2ThreeAtStart && i === 0;
+        if ((includesP1Three || includesP2Three) && tm > endTm) endTm = tm;
+      }
+      i = j;
+    }
+  };
+  for (let offset = 0; offset < p1.length; offset++) {
+    consider(p1.slice(offset), rc2, true, true);
+  }
+  for (let offset = 0; offset < rc2.length; offset++) {
+    consider(p1, rc2.slice(offset), true, offset === 0);
+  }
+  return { any_tm: Math.round(anyTm * 100) / 100, end_tm: Math.round(endTm * 100) / 100 };
+}
+
+/**
+ * Primer3-style 3'-end stability: ΔG(37 °C) in kcal/mol of the duplex formed
+ * by the last five 3' bases (NN parameters, terminal corrections included).
+ * More negative = more stable 3' end. Primer3's default limit is 9.0 kcal/mol.
+ */
+export function endStability5(seq) {
+  const tail = seq.slice(-5);
+  const { dh, ds } = duplexThermo(tail);
+  return Math.round(deltaG37(dh, ds) * 100) / 100;
+}
+
+/** Number of G/C bases among the last five 3' bases (Primer3 PRIMER_MAX_END_GC). */
+export function endGcCount5(seq) {
+  const tail = seq.slice(-5);
+  let count = 0;
+  for (const base of tail) {
+    if (base === 'G' || base === 'C') count++;
+  }
+  return count;
+}
+
 // ── qPCR ────────────────────────────────────────────────────────────────────
 
 function mean(values) {

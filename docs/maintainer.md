@@ -42,7 +42,11 @@ SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合�
 比对、蛋白 MW/pI/消光系数手算值、酶切规则（P 前不切）、100% 效率标准曲线、FASTA/FASTQ
 统计与转换、pUC118 特征提取、efetch XML 解析、BibTeX 转义、协议/实验记录往返、文献库
 增删改查往返、v12 错配容差（精确优先不劣化、无解→有解救援、双链错配映射不变式、
-3' 关键区保护与放开、跨内含子 spliced/genomic 双坐标错配报告、参数校验错误路径）。
+3' 关键区保护与放开、跨内含子 spliced/genomic 双坐标错配报告、参数校验错误路径）、
+v12 Primer3 对齐结构筛查（self-any/self-end 比对分阈值 8.0/3.0 的已知值、8 bp GC 茎
+发夹 >47 °C 与 4 bp 茎不触发的边界、G/C 二聚体 67 °C 在默认阈值被拒/放宽后恢复、
+末 5 碱基 ΔG 与 GC 数、GC clamp 0-3 分级、mispriming 双区块模板的非特异位点报告与
+max_sites 拒绝、primer_check 新增热力学字段）。
 
 ## 发布与更新流程
 
@@ -58,7 +62,9 @@ preset 渠道（受 ESM 模块缓存约束）：
 ## 路线图（可选扩展）
 
 - 质粒图谱的浏览器内实时面板（需要客户端打包管线，当前版本以 SVG 文件交付）
-- 引物设计的错配容差（v12 已完成：`max_mismatches`/`max_3prime_mismatches`/`mismatch_3prime_zone`；3' 末端不错配，默认避开 3' 关键区，错配逐条报告并计入排序罚分；同时修复了 `resolveDesignOptions` 丢弃 `region_start/region_end` 的旧 bug）
+- 引物设计 Primer3 对齐（v12 已完成）：错配容差（`max_mismatches`/`max_3prime_mismatches`/`mismatch_3prime_zone`；3' 末端不错配，默认避开 3' 关键区，错配逐条报告并计入排序罚分）；结构筛查改为 Primer3 同款模型（self-any/self-end 比对分、发夹/二聚体 NN→Tm 47 °C 阈值、末 5 碱基 ΔG/GC、GC clamp 0-3 分级）；mispriming 非特异结合检查；顺带修复 `resolveDesignOptions` 丢弃 `region_start/region_end` 的旧 bug
+- 设计工具暴露盐/引物浓度旋钮（与 Primer3 参数对齐；当前 Tm 模型相同但设计条件固定）
+- 目标位置偏好（3' 端贴近用户指定区段的位置罚分，SNP/定点设计用）
 - Golden Gate 完整模拟（IIS 酶 + 自定义突出端 + 多片段组装）
 - 文献库的浏览器端面板
 - 序列比对 / 保守性分析

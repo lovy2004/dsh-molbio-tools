@@ -17,10 +17,10 @@
 
 | 工具 | 功能 |
 | --- | --- |
-| `molbio_design_primers` | **自动设计** PCR 引物对：Tm（SantaLucia 1998 NN，50 mM Na⁺/1.5 mM Mg²⁺/200 nM）、GC、GC clamp、run/发夹/自互补/二聚体约束，按 amplicon 窗口配对并排序。**v12 起支持错配容差**：`max_mismatches > 0` 时允许引物与模板有少量错配（3' 末端碱基绝不错配、默认避开 3' 端关键区），每处错配在 `mismatches` 中报告并计入排序罚分，精确引物总是优先 |
+| `molbio_design_primers` | **自动设计** PCR 引物对：Tm（SantaLucia 1998 NN，50 mM Na⁺/1.5 mM Mg²⁺/200 nM）、GC、GC clamp（0-3 分级）、run/发夹/自互补/二聚体约束，按 amplicon 窗口配对并排序。**v12 起结构筛查对齐 Primer3 模型**：自互补为比对分（match +1/mismatch −1/gap −0.25，阈值 8.0/3.0），发夹与引物二聚体用同一套 NN 参数折成 Tm（默认 47 °C 阈值），3' 端稳定性（末 5 碱基 ΔG(37°C) ≤ 9 kcal/mol）与末 5 碱基 GC 数。**v12 起支持错配容差**：`max_mismatches > 0` 时允许引物与模板有少量错配（3' 末端碱基绝不错配、默认避开 3' 端关键区），每处错配在 `mismatches` 中报告并计入排序罚分，精确引物总是优先。`check_mispriming: true` 检查 3' 尾在模板上的非特异结合位点并拒绝/罚分 |
 | `molbio_design_intron_primers` | **跨内含子 qPCR 引物**（v10）：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点（两侧各 ≥ min_junction_bases），反向引物位于另一外显子，基因组 DNA 无法扩增；`min_genomic_span` 强制最小基因组间距；输出剪接坐标 + 基因组坐标双套位置。**v12 起支持错配容差**（参数同 molbio_design_primers，错配在 spliced/genomic 双坐标下报告） |
 | `molbio_primer_tm` | 单条引物 Tm 估算（Na⁺/Mg²⁺/dNTP 盐校正，von Ahsen 2001） |
-| `molbio_primer_check` | 引物结构筛查：重复序列、自互补（3' 端加权）、发夹、引物对二聚体 |
+| `molbio_primer_check` | 引物结构筛查：重复序列、自互补（3' 端加权）、发夹、引物对二聚体；**v12 起增加 Primer3 同款热力学指标**（self-any/self-end 比对分、发夹 Tm、二聚体 Tm、3' 端稳定性/GC） |
 
 ### 质粒
 
@@ -194,6 +194,8 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 - **图谱坐标**：特征 1-based 闭区间；`strand: -1` 表示 complement 链；酶切标记使用酶表的标准切点记号。
 - **引物设计性能**：区域扫描 + 候选缓存 + 排序裁剪，几十 kb 模板在亚秒级完成；找不到满足约束的组合时返回空并提示放宽条件。
 - **错配容差（v12）**：`max_mismatches > 0` 时，若某窗口没有精确引物通过全部约束，设计器用**最少的替换**尝试挽救（只针对可修复的约束：GC 失衡、run、Tm 微差）。3' 末端碱基永远不错配，默认在 3' 端 `mismatch_3prime_zone`（默认 5 bp）关键区内也不放错配（`max_3prime_mismatches` 可放宽）。每处错配逐条报告：引物内位置、模板位置、模板碱基/引物碱基、距 3' 端距离；每个错配都会加重排序罚分——存在精确引物时精确引物永远优先。
+- **Primer3 对齐的结构筛查（v12）**：自互补（self-any/self-end）为比对分（match +1 / mismatch −1 / gap −0.25，阈值 8.0/3.0）；发夹与引物二聚体（any/end）用与 Tm 相同的 SantaLucia NN 参数折成 Tm（默认阈值 47 °C，`max_hairpin_tm`/`max_dimer_tm`/`max_dimer_end_tm`）；3' 端稳定性 = 末 5 碱基的 ΔG(37 °C)（`max_end_stability`，默认 9 kcal/mol）；末 5 碱基 GC 数（`max_end_gc`，默认 5）；GC clamp 为 0-3 连续 G/C 分级（`gc_clamp`，默认 1，`require_gc_clamp` 为兼容别名）。数值均为估算，与 Primer3 同量纲便于互相校验。
+- **非特异结合检查（v12）**：`check_mispriming: true` 时，按 k-mer 索引检查每条引物 3' 尾（默认 8 bp、允许 1 个错配且末端碱基必须配对）在模板双链上的额外退火位点；超过 `mispriming_max_sites` 的引物对被拒绝，其余按位点数罚分并在 `mispriming_sites` 中报告位点与链向。
 
 ## 典型用法示例
 
