@@ -46,7 +46,16 @@ SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合�
 v12 Primer3 对齐结构筛查（self-any/self-end 比对分阈值 8.0/3.0 的已知值、8 bp GC 茎
 发夹 >47 °C 与 4 bp 茎不触发的边界、G/C 二聚体 67 °C 在默认阈值被拒/放宽后恢复、
 末 5 碱基 ΔG 与 GC 数、GC clamp 0-3 分级、mispriming 双区块模板的非特异位点报告与
-max_sites 拒绝、primer_check 新增热力学字段）。
+max_sites 拒绝、primer_check 新增热力学字段）、v13 反应条件旋钮（conditions 回显、
+高盐 Tm 上升的引擎级已知值、四参数范围校验）、v13 3' 目标位置偏好（双目标位点排名
+收敛、target_distance 与两引物距离的最小值一致、跨内含子剪接坐标目标、越界报错）、
+v13 酶目录（90+ 全表、BsaI 几何 (1/5)/4 bp 突出端/非回文、双链向切点 [8,16] 与
+[17,8,7] 片段手算值、环状单切、未知酶报错）、v13 Golden Gate（裸载体加盒子 + 载体
+带盒子两种模式：突出端唯一/非回文/非互补规则、订购片段与连接点序列一致、最终质粒
+按环状旋转包含手算序列、恰好保留 2 个盒子位点、区域内特征丢弃/下游特征平移、
+cassette 模式三片段组装、片段内部位点/非 IIS 酶/缺少盒子/裸载体已有位点/回文盒子
+五条错误路径）、v13 虚拟凝胶（SVG 内容与 ladder 标注断言、100bp ladder、非整数与
+超范围片段、非法 ladder 报错）。
 
 ## 发布与更新流程
 
@@ -63,8 +72,10 @@ preset 渠道（受 ESM 模块缓存约束）：
 
 - 质粒图谱的浏览器内实时面板（需要客户端打包管线，当前版本以 SVG 文件交付）
 - 引物设计 Primer3 对齐（v12 已完成）：错配容差（`max_mismatches`/`max_3prime_mismatches`/`mismatch_3prime_zone`；3' 末端不错配，默认避开 3' 关键区，错配逐条报告并计入排序罚分）；结构筛查改为 Primer3 同款模型（self-any/self-end 比对分、发夹/二聚体 NN→Tm 47 °C 阈值、末 5 碱基 ΔG/GC、GC clamp 0-3 分级）；mispriming 非特异结合检查；顺带修复 `resolveDesignOptions` 丢弃 `region_start/region_end` 的旧 bug
-- 设计工具暴露盐/引物浓度旋钮（与 Primer3 参数对齐；当前 Tm 模型相同但设计条件固定）
-- 目标位置偏好（3' 端贴近用户指定区段的位置罚分，SNP/定点设计用）
-- Golden Gate 完整模拟（IIS 酶 + 自定义突出端 + 多片段组装）
+- 设计工具暴露盐/引物浓度旋钮（v13 已完成）：`na_mm`/`mg_mm`/`dntp_mm`/`primer_nm` 贯通 Tm 模型与发夹/二聚体折叠浓度，输出 `conditions` 回显
+- 目标位置偏好（v13 已完成）：`target_position`/`target_penalty` 按较近引物 3' 端距离罚分，普通与跨内含子设计均支持
+- Golden Gate 完整模拟（v13 已完成）：IIS 酶 + 自动唯一/非回文/非互补 4 bp 突出端设计 + 多片段组装 + 订购片段 + 特征平移 + 出图；载体盒子位点保留在骨架
+- 限制酶目录查询（v13 已完成）：`molbio_enzyme_lookup` 双链向切点（IIS 反向识别位点）
+- 虚拟琼脂糖凝胶（v13 已完成）：`molbio_virtual_gel` SVG + ladder
 - 文献库的浏览器端面板
 - 序列比对 / 保守性分析

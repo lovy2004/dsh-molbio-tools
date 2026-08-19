@@ -20,6 +20,7 @@ import {
   digest,
   dimerPotential,
   dimerThermo,
+  enzymeCatalog,
   endGcCount5,
   endStability5,
   findHairpins,
@@ -43,11 +44,12 @@ import {
   designClonePrimers,
   designMutagenesisPrimers,
   simulateClone,
+  simulateGoldenGate,
   uniqueCutters,
 } from './cloning.mjs';
 import { readTraceFromBytes, verifySanger } from './sanger.mjs';
 import { CODON_HOSTS, codonOptimize, peptideDigest, proteinProperties } from './protein.mjs';
-import { linearFit, renderBarChart, renderScatterChart } from './plot.mjs';
+import { linearFit, renderBarChart, renderGel, renderScatterChart } from './plot.mjs';
 import { entryStats, parseFasta, parseFastq, toFasta } from './seqio.mjs';
 import { addExperiment, addProtocol, loadRecords, recordPath, saveRecords, updateProtocol } from './records.mjs';
 import { toBibtex } from './papers.mjs';
@@ -494,6 +496,87 @@ const restrictionTool = define({
   },
 });
 
+// ── enzyme catalog lookup (v13) ─────────────────────────────────────────────
+
+const ENZYME_CUT_EVENT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['start', 'orientation', 'cut_position'],
+  properties: {
+    start: { type: 'integer', description: '1-based start of the recognition site on the top strand.' },
+    orientation: { type: 'string', enum: ['forward', 'reverse'], description: 'forward = the recognition sequence itself; reverse = its reverse complement (the enzyme binds the bottom strand).' },
+    cut_position: { type: 'integer', description: '1-based top-strand cut position.' },
+  },
+};
+
+const ENZYME_LOOKUP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'site', 'recognition', 'iis', 'cut_offset', 'palindromic'],
+  properties: {
+    name: { type: 'string' },
+    site: { type: 'string', description: 'Recognition site with the cut marked (type IIS uses the standard (N/N) notation).' },
+    recognition: { type: 'string', description: 'Recognition sequence (IUPAC; without the cut mark).' },
+    iis: { type: 'boolean', description: 'True for type IIS enzymes (cut outside the recognition site).' },
+    cut_offset: { type: 'integer', description: 'Top-strand cut offset from the site start (0-based).' },
+    palindromic: { type: 'boolean', description: 'Whether the recognition sequence equals its reverse complement.' },
+    bottom_cut: { type: 'integer', description: 'Type IIS only: bottom-strand cut offset from the site END.' },
+    overhang_length: { type: 'integer', description: 'Type IIS only: 5\' overhang length in bases.' },
+    cuts: { type: 'integer', description: 'Cut events found in the given sequence (present only with `sequence`).' },
+    cut_events: { type: 'array', items: ENZYME_CUT_EVENT_SCHEMA },
+    fragments: { type: 'array', items: { type: 'integer' }, description: 'Fragment sizes in bp from the cut positions (present only with `sequence`).' },
+  },
+};
+
+const enzymeLookupTool = define({
+  name: 'molbio_enzyme_lookup',
+  description: 'Look up restriction enzymes in the built-in table (90+ entries including type IIS): recognition site, cut geometry, overhang length, and — when a sequence is given — every cut event with fragment sizes. Both strand orientations are reported: a type IIS enzyme such as BsaI also cuts at REVERSE-COMPLEMENTED recognition sites (e.g. GAGACC on the top strand), which molbio_restriction_sites does not report. Use this to check whether an enzyme cuts an insert/vector before cloning.',
+  parameters: {
+    type: 'object',
+    properties: {
+      enzymes: { type: 'array', items: { type: 'string' }, description: 'Enzyme names to look up; omit (or pass ["common"]) for the whole table, sorted.' },
+      sequence: { type: 'string', description: 'Optional sequence (IUPAC) to count cuts and compute fragment sizes on.' },
+      circular: { type: 'boolean', description: 'Treat the sequence as circular for the fragment math (default false).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['enzymes', 'total'],
+    properties: {
+      total: { type: 'integer' },
+      sequence_length: { type: 'integer' },
+      circular: { type: 'boolean' },
+      enzymes: { type: 'array', items: ENZYME_LOOKUP_SCHEMA },
+    },
+  },
+  render(value) {
+    const lines = [`${value.total} enzyme(s)${value.sequence_length !== undefined ? ` checked against a ${value.sequence_length} bp ${value.circular ? 'circular' : 'linear'} sequence` : ''}:`];
+    for (const entry of value.enzymes) {
+      const geometry = entry.iis
+        ? `type IIS ${entry.site}, cut ${entry.cut_offset}/${entry.bottom_cut}, ${entry.overhang_length} bp 5' overhang`
+        : `cut ${entry.site}`;
+      lines.push(`  ${entry.name}: ${geometry}${entry.cuts !== undefined ? ` — ${entry.cuts} cut(s) in the sequence` : ''}`);
+      if (entry.cut_events !== undefined && entry.cut_events.length > 0) {
+        lines.push(`    cuts: ${entry.cut_events.map((cut) => `bp ${cut.cut_position} (${cut.orientation})`).join(', ')}; fragments: ${entry.fragments.join('+')} bp`);
+      }
+    }
+    return lines.join('\n');
+  },
+  execute(args) {
+    const names = args.enzymes !== undefined && args.enzymes.length > 0 && !(args.enzymes.length === 1 && args.enzymes[0] === 'common')
+      ? args.enzymes
+      : ENZYME_NAMES;
+    const sequence = args.sequence !== undefined && args.sequence !== '' ? normalizeSequence(args.sequence) : undefined;
+    const circular = args.circular === true;
+    return {
+      total: names.length,
+      ...(sequence !== undefined ? { sequence_length: sequence.length, circular } : {}),
+      enzymes: names.map((name) => enzymeCatalog(name, sequence, circular)),
+    };
+  },
+});
+
 const primerTmTool = define({
   name: 'molbio_primer_tm',
   description: 'Estimate primer melting temperature with the SantaLucia (1998) nearest-neighbour model, salt-corrected for monovalent cations and magnesium (von Ahsen 2001). Defaults: 50 mM Na+, 0 mM Mg2+, 0.8 mM dNTP, 500 nM primer. Treat the result as a design estimate (rounded to 0.01 °C), not a replacement for an instrument calibration.',
@@ -771,12 +854,13 @@ const PRIMER_SCHEMA = {
     mismatches: { type: 'array', items: MISMATCH_SCHEMA },
     mispriming_count: { type: 'integer', description: 'Extra template sites where the 3\' tail can anneal (v12 mispriming check).' },
     mispriming_sites: { type: 'array', items: MISPRIMING_SITE_SCHEMA },
+    target_distance: { type: 'integer', description: 'v13: bp between the primer 3\' end and target_position (present only when target_position is given).' },
   },
 };
 
 const designPrimersTool = define({
   name: 'molbio_design_primers',
-  description: 'Design PCR primer pairs on a template sequence. Scans for forward and reverse primers that satisfy Tm (SantaLucia 1998 NN, 50 mM Na+, 1.5 mM Mg2+, 200 nM), GC content, length, GC clamp (0-3 consecutive G/C at the 3\' end), mononucleotide-run, end-stability and Primer3-style structural constraints — self-complementarity (local alignment score, match +1/mismatch -1/gap -0.25), hairpin folding Tm and primer-dimer Tm (default 47 °C each, from the same NN parameters) — then ranks pairs inside the amplicon window (lower penalty is better). v12: pass max_mismatches > 0 to also allow primers with a few positional mismatches (never on the 3\'-terminal base, avoided in the 3\'-terminal critical zone by default; each is reported and penalized); pass check_mispriming: true to reject/penalize primers whose 3\' tail anneals at extra template sites.',
+  description: 'Design PCR primer pairs on a template sequence. Scans for forward and reverse primers that satisfy Tm (SantaLucia 1998 NN; defaults 50 mM Na+, 1.5 mM Mg2+, 200 nM primer — adjustable via na_mm/mg_mm/dntp_mm/primer_nm), GC content, length, GC clamp (0-3 consecutive G/C at the 3\' end), mononucleotide-run, end-stability and Primer3-style structural constraints — self-complementarity (local alignment score, match +1/mismatch -1/gap -0.25), hairpin folding Tm and primer-dimer Tm (default 47 °C each, from the same NN parameters) — then ranks pairs inside the amplicon window (lower penalty is better). v12: pass max_mismatches > 0 to also allow primers with a few positional mismatches (never on the 3\'-terminal base, avoided in the 3\'-terminal critical zone by default; each is reported and penalized); pass check_mispriming: true to reject/penalize primers whose 3\' tail anneals at extra template sites. v13: pass target_position to prefer pairs whose nearer 3\' end lands close to that template position (SNP / site-directed design).',
   parameters: {
     type: 'object',
     required: ['template'],
@@ -811,13 +895,30 @@ const designPrimersTool = define({
       mispriming_max_mismatches: { type: 'integer', description: 'Mismatches tolerated between the 3\' tail and a site for it to count as annealing (0-2, default 1); the terminal base must always pair.' },
       mispriming_max_sites: { type: 'integer', description: 'Maximum extra annealing sites allowed per primer (0-20, default 1); pairs with more are rejected.' },
       max_results: { type: 'integer', description: 'Maximum pairs to return (default 5).' },
+      na_mm: { type: 'number', description: 'v13: monovalent cation concentration in mM for the Tm model (default 50; von Ahsen 2001 magnesium equivalence).' },
+      mg_mm: { type: 'number', description: 'v13: Mg2+ concentration in mM (default 1.5).' },
+      dntp_mm: { type: 'number', description: 'v13: dNTP concentration in mM (default 0.8).' },
+      primer_nm: { type: 'number', description: 'v13: primer concentration in nM (default 200).' },
+      target_position: { type: 'integer', description: 'v13: 1-based template position the primer 3\' ends should land near (SNP / site-directed design); pairs are ranked by the distance of the nearer 3\' end.' },
+      target_penalty: { type: 'number', description: 'v13: ranking penalty per bp of 3\'-end-to-target distance (default 0.5).' },
     },
   },
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['pairs'],
+    required: ['pairs', 'conditions'],
     properties: {
+      conditions: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['na_mm', 'mg_mm', 'dntp_mm', 'primer_nm'],
+        properties: {
+          na_mm: { type: 'number', description: 'Monovalent cations used by the Tm model, mM.' },
+          mg_mm: { type: 'number', description: 'Mg2+ used by the Tm model, mM.' },
+          dntp_mm: { type: 'number', description: 'dNTP used by the Tm model, mM.' },
+          primer_nm: { type: 'number', description: 'Primer concentration used by the Tm model, nM.' },
+        },
+      },
       pairs: {
         type: 'array',
         items: {
@@ -837,6 +938,7 @@ const designPrimersTool = define({
                 length: { type: 'integer' },
               },
             },
+            target_distance: { type: 'integer', description: 'v13: bp between the nearer primer 3\' end and target_position (present only when target_position is given).' },
             penalty: { type: 'number' },
           },
         },
@@ -847,7 +949,10 @@ const designPrimersTool = define({
     if (value.pairs.length === 0) {
       return 'no primer pair satisfied all constraints — relax Tm/GC/amplicon windows or disable the GC clamp and retry.';
     }
-    const lines = [`${value.pairs.length} candidate primer pair(s), best first:`];
+    const lines = [
+      `Tm model conditions: ${value.conditions.na_mm} mM Na+ / ${value.conditions.mg_mm} mM Mg2+ / ${value.conditions.dntp_mm} mM dNTP / ${value.conditions.primer_nm} nM primer (SantaLucia 1998 NN — an estimate).`,
+      `${value.pairs.length} candidate primer pair(s), best first:`,
+    ];
     const mismatchLine = (label, primer) => {
       if (primer.mismatch_count > 0) {
         const details = primer.mismatches
@@ -865,7 +970,7 @@ const designPrimersTool = define({
       }
     };
     for (const [index, pair] of value.pairs.entries()) {
-      lines.push(`#${index + 1} amplicon ${pair.amplicon.start}-${pair.amplicon.end} (${pair.amplicon.length} bp), penalty ${pair.penalty}`);
+      lines.push(`#${index + 1} amplicon ${pair.amplicon.start}-${pair.amplicon.end} (${pair.amplicon.length} bp)${pair.target_distance !== undefined ? `, nearer 3' end ${pair.target_distance} bp from target_position` : ''}, penalty ${pair.penalty}`);
       lines.push(`  F ${pair.forward.sequence}  (${pair.forward.start}-${pair.forward.end}, Tm ${pair.forward.tm} °C, GC ${pair.forward.gc_percent}%, self ${pair.forward.self_any}/${pair.forward.self_end}, hairpin ${pair.forward.hairpin_tm} °C)`);
       lines.push(`  R ${pair.reverse.sequence}  (${pair.reverse.start}-${pair.reverse.end}, Tm ${pair.reverse.tm} °C, GC ${pair.reverse.gc_percent}%, self ${pair.reverse.self_any}/${pair.reverse.self_end}, hairpin ${pair.reverse.hairpin_tm} °C)`);
       mismatchLine('F', pair.forward);
@@ -876,7 +981,7 @@ const designPrimersTool = define({
     return lines.join('\n');
   },
   execute(args) {
-    const { pairs } = designPrimers(args.template, {
+    const { pairs, opts } = designPrimers(args.template, {
       regionStart: args.region_start,
       regionEnd: args.region_end,
       lenMin: args.primer_len_min,
@@ -905,8 +1010,22 @@ const designPrimersTool = define({
       misprimingMaxMismatches: args.mispriming_max_mismatches,
       misprimingMaxSites: args.mispriming_max_sites,
       maxResults: args.max_results,
+      naMm: args.na_mm,
+      mgMm: args.mg_mm,
+      dntpMm: args.dntp_mm,
+      primerNm: args.primer_nm,
+      targetPosition: args.target_position,
+      targetPenalty: args.target_penalty,
     });
-    return { pairs };
+    return {
+      pairs,
+      conditions: {
+        na_mm: opts.naMm,
+        mg_mm: opts.mgMm,
+        dntp_mm: opts.dntpMm,
+        primer_nm: opts.primerNm,
+      },
+    };
   },
 });
 
@@ -1313,6 +1432,7 @@ const INTRON_PRIMER_SCHEMA = {
     mismatches: { type: 'array', items: INTRON_MISMATCH_SCHEMA },
     mispriming_count: { type: 'integer', description: 'Extra transcript sites where the 3\' tail can anneal (v12 mispriming check).' },
     mispriming_sites: { type: 'array', items: INTRON_MISPRIMING_SITE_SCHEMA },
+    target_distance: { type: 'integer', description: 'v13: spliced bp between the primer 3\' end and target_position (present only when target_position is given).' },
   },
 };
 
@@ -1367,13 +1487,30 @@ const intronPrimersTool = (ctx) => define({
       mispriming_max_mismatches: { type: 'integer', description: 'Mismatches tolerated between the 3\' tail and a site for it to count as annealing (0-2, default 1); the terminal base must always pair.' },
       mispriming_max_sites: { type: 'integer', description: 'Maximum extra annealing sites allowed per primer (0-20, default 1); pairs with more are rejected.' },
       max_results: { type: 'integer', description: 'Maximum pairs to return (default 5).' },
+      na_mm: { type: 'number', description: 'v13: monovalent cation concentration in mM for the Tm model (default 50; von Ahsen 2001 magnesium equivalence).' },
+      mg_mm: { type: 'number', description: 'v13: Mg2+ concentration in mM (default 1.5).' },
+      dntp_mm: { type: 'number', description: 'v13: dNTP concentration in mM (default 0.8).' },
+      primer_nm: { type: 'number', description: 'v13: primer concentration in nM (default 200).' },
+      target_position: { type: 'integer', description: 'v13: 1-based position on the SPLICED transcript the primer 3\' ends should land near; pairs are ranked by the distance of the nearer 3\' end.' },
+      target_penalty: { type: 'number', description: 'v13: ranking penalty per bp of 3\'-end-to-target distance (default 0.5).' },
     },
   },
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['spliced_length', 'genomic_length', 'exons', 'pairs'],
+    required: ['spliced_length', 'genomic_length', 'exons', 'pairs', 'conditions'],
     properties: {
+      conditions: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['na_mm', 'mg_mm', 'dntp_mm', 'primer_nm'],
+        properties: {
+          na_mm: { type: 'number', description: 'Monovalent cations used by the Tm model, mM.' },
+          mg_mm: { type: 'number', description: 'Mg2+ used by the Tm model, mM.' },
+          dntp_mm: { type: 'number', description: 'dNTP used by the Tm model, mM.' },
+          primer_nm: { type: 'number', description: 'Primer concentration used by the Tm model, nM.' },
+        },
+      },
       spliced_length: { type: 'integer' },
       genomic_length: { type: 'integer' },
       exons: {
@@ -1408,6 +1545,7 @@ const intronPrimersTool = (ctx) => define({
               },
             },
             genomic_amplicon_length: { type: 'integer' },
+            target_distance: { type: 'integer', description: 'v13: bp between the nearer primer 3\' end and target_position (spliced coordinates; present only when target_position is given).' },
             penalty: { type: 'number' },
           },
         },
@@ -1418,7 +1556,10 @@ const intronPrimersTool = (ctx) => define({
     if (value.pairs.length === 0) {
       return 'no primer pair satisfied the constraints — relax Tm/GC/amplicon windows or reduce min_junction_bases/min_genomic_span and retry.';
     }
-    const lines = [`${value.pairs.length} candidate pair(s); the forward primer spans an exon-exon junction (genomic DNA will not amplify):`];
+    const lines = [
+      `Tm model conditions: ${value.conditions.na_mm} mM Na+ / ${value.conditions.mg_mm} mM Mg2+ / ${value.conditions.dntp_mm} mM dNTP / ${value.conditions.primer_nm} nM primer (SantaLucia 1998 NN — an estimate).`,
+      `${value.pairs.length} candidate pair(s); the forward primer spans an exon-exon junction (genomic DNA will not amplify):`,
+    ];
     const mismatchLine = (label, primer) => {
       if (primer.mismatch_count > 0) {
         const details = primer.mismatches
@@ -1436,7 +1577,7 @@ const intronPrimersTool = (ctx) => define({
       }
     };
     for (const [index, pair] of value.pairs.entries()) {
-      lines.push(`#${index + 1} spliced amplicon ${pair.spliced_amplicon.start}-${pair.spliced_amplicon.end} (${pair.spliced_amplicon.length} bp), genomic span ${pair.genomic_amplicon_length} bp, penalty ${pair.penalty}`);
+      lines.push(`#${index + 1} spliced amplicon ${pair.spliced_amplicon.start}-${pair.spliced_amplicon.end} (${pair.spliced_amplicon.length} bp), genomic span ${pair.genomic_amplicon_length} bp${pair.target_distance !== undefined ? `, nearer 3' end ${pair.target_distance} spliced bp from target_position` : ''}, penalty ${pair.penalty}`);
       lines.push(`  F ${pair.forward.sequence}  (spliced ${pair.forward.spliced_start}-${pair.forward.spliced_end}; genomic ${pair.forward.genomic_start}-${pair.forward.genomic_end}; exons ${pair.forward.exons.join('/')}, junction ${pair.forward.junction_left}+${pair.forward.junction_right} bp; Tm ${pair.forward.tm} °C, self ${pair.forward.self_any}/${pair.forward.self_end}, hairpin ${pair.forward.hairpin_tm} °C)`);
       lines.push(`  R ${pair.reverse.sequence}  (spliced ${pair.reverse.spliced_start}-${pair.reverse.spliced_end}; genomic ${pair.reverse.genomic_start}-${pair.reverse.genomic_end}; exon ${pair.reverse.exon}; Tm ${pair.reverse.tm} °C, self ${pair.reverse.self_any}/${pair.reverse.self_end}, hairpin ${pair.reverse.hairpin_tm} °C)`);
       mismatchLine('F', pair.forward);
@@ -1458,7 +1599,7 @@ const intronPrimersTool = (ctx) => define({
       throw new MolbioInputError('provide either `genomic` (a sequence) or `genomic_path` (a .fa/.fasta/.txt file)');
     }
     const exons = args.exons.map((exon) => ({ start: exon.start, end: exon.end }));
-    const { pairs } = designIntronPrimers(genomic, exons, {
+    const { pairs, opts } = designIntronPrimers(genomic, exons, {
       ampliconMin: args.amplicon_min,
       ampliconMax: args.amplicon_max,
       lenMin: args.primer_len_min,
@@ -1487,12 +1628,24 @@ const intronPrimersTool = (ctx) => define({
       misprimingMaxMismatches: args.mispriming_max_mismatches,
       misprimingMaxSites: args.mispriming_max_sites,
       maxResults: args.max_results,
+      naMm: args.na_mm,
+      mgMm: args.mg_mm,
+      dntpMm: args.dntp_mm,
+      primerNm: args.primer_nm,
+      targetPosition: args.target_position,
+      targetPenalty: args.target_penalty,
     });
     return {
       spliced_length: exons.reduce((sum, exon) => sum + (exon.end - exon.start + 1), 0),
       genomic_length: genomic.length,
       exons,
       pairs,
+      conditions: {
+        na_mm: opts.naMm,
+        mg_mm: opts.mgMm,
+        dntp_mm: opts.dntpMm,
+        primer_nm: opts.primerNm,
+      },
     };
   },
 });
@@ -1772,6 +1925,173 @@ const cloneSimulateTool = (ctx) => define({
       }));
       const svg = renderPlasmidMap({
         name: `${vector.name}_clone`,
+        length: result.final_sequence.length,
+        circular: vector.circular,
+        features: result.features,
+        enzymes: marks,
+      });
+      const file = workspaceFilePath(args.map_path, exec, policy?.workspaceRoot);
+      await writeWorkspaceFile(fs, file, svg, policy);
+      out.map_path = file;
+    }
+    return out;
+  },
+});
+
+// ── Golden Gate assembly (v13) ──────────────────────────────────────────────
+
+const GG_JUNCTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['position', 'sequence'],
+  properties: {
+    position: { type: 'integer', description: '1-based position of the junction in the final sequence.' },
+    sequence: { type: 'string', description: 'The 4 bp junction (overhang) sequence.' },
+  },
+};
+
+const GG_FRAGMENT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['index', 'sequence', 'length', 'left_overhang', 'right_overhang', 'insert_length'],
+  properties: {
+    index: { type: 'integer', description: '1-based fragment position in assembly order.' },
+    sequence: { type: 'string', description: 'The fragment to order: recognition site + filler + left overhang + insert + right overhang + filler + reverse-complemented site.' },
+    length: { type: 'integer' },
+    left_overhang: { type: 'string', description: '4 bp 5\' overhang carried at the fragment\'s 5\' end after digestion.' },
+    right_overhang: { type: 'string', description: '4 bp overhang carried at the fragment\'s 3\' end after digestion.' },
+    insert_length: { type: 'integer', description: 'Length of the bare insert body.' },
+  },
+};
+
+const goldenGateTool = (ctx) => define({
+  safe: false,
+  name: 'molbio_golden_gate',
+  description: 'Simulate a Golden Gate assembly (type IIS enzyme, e.g. BsaI) in silico. Pass the vector (with its own inward BsaI-style cassette, or BARE with replace_region so the tool adds the cassette and designs both vector junctions) and the BARE fragment sequences in assembly order: the tool designs unique, non-palindromic, non-complementary 4 bp junctions, checks that the enzyme never cuts inside a fragment or the bare vector, builds the fragments-to-order with recognition sites and filler bases, assembles the final plasmid (no recognition site appears at any junction; the vector cassette sites stay in the backbone, as in standard destination vectors), remaps feature coordinates, and predicts verification digests. Save the final plasmid with save_path (FASTA) and/or draw the map with map_path (SVG).',
+  parameters: {
+    type: 'object',
+    required: ['inserts'],
+    properties: {
+      vector: { type: 'string', description: 'Vector sequence (alternative to vector_path).' },
+      vector_path: { type: 'string', description: 'Path to a .dna/.gb vector file (alternative to vector).' },
+      inserts: { type: 'array', items: { type: 'string' }, description: 'BARE fragment sequences in assembly order (1-24 fragments, unambiguous ACGT, >= 12 bp each). The tool adds the enzyme flanks itself.' },
+      enzyme: { type: 'string', description: 'Type IIS enzyme from the built-in table; default "BsaI" (also: BsmBI, Esp3I, BbsI, BspQI, SapI, LguI, PaqCI, AarI, BfuAI, BveI, BtgZI, BsmFI, FokI).' },
+      replace_region: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          start: { type: 'integer', description: '1-based start of the vector region being replaced by the fragments.' },
+          end: { type: 'integer', description: '1-based inclusive end of the replaced region.' },
+        },
+        description: 'Bare-vector mode: the tool adds the inward cassette around this region and designs both vector junctions. Omit it when the vector already carries its own cassette (exactly one forward and one reverse-complemented recognition site).',
+      },
+      verify_enzymes: { type: 'array', items: { type: 'string' }, description: 'Enzymes for the verification digest (default: automatically chosen diagnostic enzymes).' },
+      save_path: { type: 'string', description: 'Optional path to save the final plasmid as FASTA in the workspace.' },
+      map_path: { type: 'string', description: 'Optional path to also draw the new plasmid map (SVG) with the remapped features and the top verification enzymes marked.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['method', 'enzyme', 'enzyme_site', 'overhang_length', 'fragments_to_order', 'junctions', 'final_sequence', 'length', 'delta', 'features', 'dropped_features', 'verify', 'notes'],
+    properties: {
+      method: { type: 'string', enum: ['golden_gate'] },
+      enzyme: { type: 'string' },
+      enzyme_site: { type: 'string', description: 'Recognition site with the standard (N/N) cut notation.' },
+      overhang_length: { type: 'integer' },
+      fragments_to_order: { type: 'array', items: GG_FRAGMENT_SCHEMA },
+      junctions: { type: 'array', items: GG_JUNCTION_SCHEMA },
+      final_sequence: { type: 'string' },
+      length: { type: 'integer' },
+      delta: { type: 'integer' },
+      features: { type: 'array', items: CLONE_FEATURE_SCHEMA },
+      dropped_features: { type: 'array', items: CLONE_FEATURE_SCHEMA },
+      verify: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['name', 'final_fragments', 'vector_fragments'],
+          properties: {
+            name: { type: 'string' },
+            final_fragments: { type: 'array', items: { type: 'integer' } },
+            vector_fragments: { type: 'array', items: { type: 'integer' } },
+          },
+        },
+      },
+      notes: { type: 'array', items: { type: 'string' } },
+      save_path: { type: 'string' },
+      map_path: { type: 'string' },
+    },
+  },
+  render(value) {
+    const lines = [
+      `Golden Gate assembly with ${value.enzyme} (${value.enzyme_site}): final plasmid ${value.length} bp (Δ ${value.delta > 0 ? '+' : ''}${value.delta} bp).`,
+      `${value.fragments_to_order.length} fragment(s) to order; ${value.junctions.length} junction(s) designed (unique, non-palindromic 4 bp).`,
+      `${value.features.length} feature(s) after coordinate remapping; ${value.dropped_features.length} dropped inside the replaced region.`,
+    ];
+    for (const junction of value.junctions) lines.push(`junction @${junction.position}: ${junction.sequence}`);
+    lines.push('fragments to order (synthetic orders):');
+    for (const fragment of value.fragments_to_order) {
+      lines.push(`  #${fragment.index} ${fragment.sequence}  (${fragment.length} bp, overhangs ${fragment.left_overhang} / ${fragment.right_overhang})`);
+    }
+    lines.push('verification digests (final vs original vector):');
+    for (const entry of value.verify.slice(0, 5)) {
+      lines.push(`  ${entry.name}: final ${entry.final_fragments.join('+')} bp vs vector ${entry.vector_fragments.join('+')} bp`);
+    }
+    for (const note of value.notes) lines.push(`note: ${note}`);
+    if (value.save_path !== undefined) lines.push(`final plasmid saved to ${value.save_path}`);
+    if (value.map_path !== undefined) lines.push(`plasmid map SVG written to ${value.map_path}`);
+    lines.push('The remapped `features` and `final_sequence` are ready for molbio_plasmid_map — do not recompute coordinates by hand.');
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const vector = await resolveVector(ctx, exec, args);
+    let replaceRegion;
+    if (args.replace_region !== undefined) {
+      if (!Number.isInteger(args.replace_region.start) || !Number.isInteger(args.replace_region.end)) {
+        throw new MolbioInputError('replace_region needs both start and end (1-based integers)');
+      }
+      replaceRegion = { start: args.replace_region.start, end: args.replace_region.end };
+    }
+    const result = simulateGoldenGate({
+      vectorSeq: vector.sequence,
+      vectorFeatures: vector.features,
+      inserts: args.inserts,
+      enzyme: args.enzyme ?? 'BsaI',
+      circular: vector.circular,
+      replaceRegion,
+    });
+    const out = {
+      method: 'golden_gate',
+      enzyme: result.enzyme,
+      enzyme_site: result.enzyme_site,
+      overhang_length: result.overhang_length,
+      fragments_to_order: result.fragments_to_order,
+      junctions: result.junctions,
+      final_sequence: result.final_sequence,
+      length: result.final_sequence.length,
+      delta: result.delta,
+      features: result.features,
+      dropped_features: result.dropped_features,
+      verify: result.verify,
+      notes: result.notes,
+    };
+    const fs = fsService(ctx);
+    const sandboxPolicyService = ctx.get('sandboxPolicy');
+    const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+    if (args.save_path !== undefined && args.save_path !== '') {
+      const file = workspaceFilePath(args.save_path, exec, policy?.workspaceRoot);
+      await writeWorkspaceFile(fs, file, `>${vector.name}_golden_gate ${result.enzyme}\n${result.final_sequence}\n`, policy);
+      out.save_path = file;
+    }
+    if (args.map_path !== undefined && args.map_path !== '') {
+      const marks = result.verify.slice(0, 3).map((entry) => ({
+        name: entry.name,
+        cut_offsets: digest(result.final_sequence, [entry.name], vector.circular)[0].cut_positions,
+      }));
+      const svg = renderPlasmidMap({
+        name: `${vector.name}_golden_gate`,
         length: result.final_sequence.length,
         circular: vector.circular,
         features: result.features,
@@ -2381,6 +2701,74 @@ const plotTool = (ctx) => define({
 });
 
 // ── sequence analysis and records (batch 3) ────────────────────────────────
+
+// ── virtual agarose gel (v13) ──────────────────────────────────────────────
+
+const virtualGelTool = (ctx) => define({
+  safe: false,
+  name: 'molbio_virtual_gel',
+  description: 'Render a virtual agarose gel as an SVG file in the workspace. Each lane lists the EXPECTED DNA fragment sizes in bp (e.g. a restriction digest, a PCR, or a ligation check) and the tool draws the band pattern with a size ladder so the expected picture can be compared against a real gel. The tool writes the file itself — the SVG never reaches the conversation; tell the user the returned svg_path and that they can open it in a browser.',
+  parameters: {
+    type: 'object',
+    required: ['lanes'],
+    properties: {
+      lanes: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['label', 'fragments'],
+          properties: {
+            label: { type: 'string', description: 'Lane label (e.g. "EcoRI digest" or a sample name).' },
+            fragments: { type: 'array', items: { type: 'integer' }, description: 'Expected fragment sizes in bp (1-50000).' },
+          },
+        },
+        description: '1-12 lanes, each with a label and the expected fragment sizes.',
+      },
+      ladder: { type: 'string', enum: ['1kb', '100bp'], description: 'Size ladder; default "1kb" (250 bp - 10 kb).' },
+      title: { type: 'string', description: 'Gel title (default "Agarose gel").' },
+      output_path: { type: 'string', description: 'Optional SVG file path; default: <title>.svg in the session workspace.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['svg_path', 'lane_count', 'band_count', 'ladder'],
+    properties: {
+      svg_path: { type: 'string' },
+      lane_count: { type: 'integer' },
+      band_count: { type: 'integer' },
+      ladder: { type: 'string', enum: ['1kb', '100bp'] },
+    },
+  },
+  render(value) {
+    return `Virtual gel SVG saved to ${value.svg_path}: ${value.lane_count} lane(s), ${value.band_count} band(s), ladder ${value.ladder}. Tell the user to open the file in a browser.`;
+  },
+  async execute(args, exec) {
+    if (!Array.isArray(args.lanes) || args.lanes.length < 1 || args.lanes.length > 12) {
+      throw new MolbioInputError('lanes must be an array of 1-12 lane objects');
+    }
+    const lanes = args.lanes.map((lane) => {
+      const fragments = (lane.fragments ?? []).map((size) => {
+        if (!Number.isInteger(size) || size < 1 || size > 50000) {
+          throw new MolbioInputError(`fragment sizes must be integers between 1 and 50000 bp, got ${JSON.stringify(size)}`);
+        }
+        return size;
+      });
+      return { label: String(lane.label ?? ''), fragments };
+    });
+    const ladder = args.ladder ?? '1kb';
+    const title = args.title ?? 'Agarose gel';
+    const svg = renderGel({ title, lanes, ladder, showLadder: true });
+    const file = await writeSvgFile(ctx, exec, { output_path: args.output_path }, svg, title);
+    return {
+      svg_path: file,
+      lane_count: lanes.length,
+      band_count: lanes.reduce((sum, lane) => sum + lane.fragments.length, 0),
+      ladder,
+    };
+  },
+});
 
 const alignTool = define({
   name: 'molbio_align',
@@ -3323,10 +3711,10 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check.
 - qPCR and bench math: molbio_qpcr_analysis, molbio_lab_math.
 - Plasmids: molbio_parse_genbank (GenBank text), molbio_parse_snapgene (SnapGene .dna files — researchers usually have .dna files, so when the user names a .dna path use this), molbio_plasmid_map_file (reads a .dna/.gb file and writes the map SVG directly into the workspace in one call), molbio_plasmid_map (same, from a sequence + features). Both map tools WRITE the .svg file themselves and return svg_path — never try to reproduce SVG text in the conversation; just tell the user the file path to open in a browser.
-- Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers).
+- Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_golden_gate (type IIS multi-fragment assembly: the tool designs the 4 bp junctions and the fragments-to-order, and simulates the final plasmid — use it for BsaI-style Golden Gate instead of reasoning about overhangs by hand), molbio_enzyme_lookup (enzyme catalog: recognition/cut geometry/overhang, plus every cut of a sequence in both strand orientations), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers).
 - Verification: molbio_verify_sanger (read .ab1/.seq traces, align to the reference plasmid — circular-aware — and report mismatches/indels/amino-acid changes).
 - Proteins: molbio_protein_props (MW/pI/A280/GRAVY — estimates), molbio_peptide_digest (trypsin etc. for MS), molbio_codon_optimize (E. coli/yeast/human, can avoid restriction sites).
-- Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (bar/scatter SVG charts written to files).
+- Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (bar/scatter SVG charts written to files), molbio_virtual_gel (expected band pattern as an SVG gel image with a size ladder).
 - Sequences & files: molbio_align (local alignment with a readable match line), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
 - Map extras: pass gc_skew: true for the GC skew ring, show_unique_cutters: true to mark single-cutting enzymes on the map.
 - Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — works only when the deployment provides web fetch), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
@@ -3350,6 +3738,7 @@ export function apply(ctx) {
     gcTool,
     translateTool,
     restrictionTool,
+    enzymeLookupTool,
     primerTmTool,
     primerCheckTool,
     qpcrTool,
@@ -3362,6 +3751,7 @@ export function apply(ctx) {
     plasmidMapFileTool(ctx),
     uniqueCuttersTool(ctx),
     cloneSimulateTool(ctx),
+    goldenGateTool(ctx),
     clonePrimersTool(ctx),
     mutagenesisTool,
     verifySangerTool(ctx),
@@ -3370,6 +3760,7 @@ export function apply(ctx) {
     codonOptimizeTool,
     qpcrEfficiencyTool(ctx),
     plotTool(ctx),
+    virtualGelTool(ctx),
     alignTool,
     fastaFastqTool(ctx),
     extractRegionTool(ctx),

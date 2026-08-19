@@ -23,11 +23,15 @@ import {
   selfEndScore,
 } from './lib.mjs';
 
-// Design-time PCR conditions for the NN Tm model.
-const DESIGN_TM_OPTS = { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: 200 };
+// Design-time PCR conditions for the NN Tm model. v13: these are the DEFAULT
+// salt/concentration knobs; resolveDesignOptions validates user overrides and
+// derives per-call `tmOpts`/`ctMolar` on the options object. The constants
+// below only serve as fallbacks when the engine is called directly with
+// hand-built options (as the smoke tests do).
+const DEFAULT_TM_OPTS = { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: 200 };
 
 /** Molar primer concentration used for the hairpin/dimer folding Tm. */
-const DESIGN_CT_MOLAR = DESIGN_TM_OPTS.primerNm * 1e-9;
+const DEFAULT_CT_MOLAR = DEFAULT_TM_OPTS.primerNm * 1e-9;
 
 function round1(value) {
   return Math.round(value * 10) / 10;
@@ -75,12 +79,12 @@ export function evaluateSeq(seq, opts, tmCenter) {
   if (selfAny > maxSelfAny) return { reason: 'self', selfAny };
   const selfEnd = selfEndScore(seq);
   if (selfEnd > maxSelfEnd) return { reason: 'self_end', selfEnd };
-  const hairpin = hairpinThermo(seq, DESIGN_CT_MOLAR)[0];
+  const hairpin = hairpinThermo(seq, opts.ctMolar ?? DEFAULT_CT_MOLAR)[0];
   const hairpinTm = hairpin === undefined ? 0 : hairpin.tm;
   if (hairpinTm > maxHairpinTm) return { reason: 'hairpin', hairpinTm };
   let tm;
   try {
-    tm = primerTm(seq, DESIGN_TM_OPTS).tm_celsius;
+    tm = primerTm(seq, opts.tmOpts ?? DEFAULT_TM_OPTS).tm_celsius;
   } catch {
     return { reason: 'tm' };
   }
@@ -440,6 +444,14 @@ export function designPrimerPairs(template, opts) {
     throw new MolbioInputError(`region ${regionStart + 1}-${regionEnd + 1} is outside the template (length ${length})`);
   }
 
+  // v13 target position preference: the ranking penalty pulls primer 3' ends
+  // toward the given template position (SNP / site-directed design).
+  const targetPosition = opts.targetPosition;
+  if (targetPosition !== undefined && (!Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > length)) {
+    throw new MolbioInputError(`target_position ${targetPosition} is outside the template (length ${length})`);
+  }
+  const targetWeight = opts.targetPenalty ?? DESIGN_DEFAULTS.targetPenalty;
+
   // Forward candidates: 3' end must stay inside the region.
   const fwd = scanCandidates(template, regionStart, regionEnd - opts.lenMin + 1, opts);
   // Reverse candidates on the reverse complement, mapped to template coordinates.
@@ -477,7 +489,7 @@ export function designPrimerPairs(template, opts) {
       if (r.anchor > aMax) break;
       if (r.anchor < 0 || r.anchor + r.length - 1 > regionEnd) continue;
       if (Math.abs(f.tm - r.tm) > opts.maxTmDelta) continue;
-      const dimer = dimerThermo(f.sequence, r.sequence, DESIGN_CT_MOLAR);
+      const dimer = dimerThermo(f.sequence, r.sequence, opts.ctMolar ?? DEFAULT_CT_MOLAR);
       if (dimer.any_tm > opts.maxDimerTm || dimer.end_tm > opts.maxDimerEndTm) continue;
       const ampliconStart = r.anchor;
       const ampliconEnd = fwdEnd;
@@ -495,6 +507,14 @@ export function designPrimerPairs(template, opts) {
       const fMismatches = mismatchReport(f, template, f.start, false);
       const rMismatches = mismatchReport(r, template, r.anchor, true);
       const zone = opts.mismatch3PrimeZone ?? DESIGN_DEFAULTS.mismatch3PrimeZone;
+      let fTargetDistance;
+      let rTargetDistance;
+      let targetDistance;
+      if (targetPosition !== undefined) {
+        fTargetDistance = Math.abs(f.start + f.length - targetPosition); // 1-based 3' end
+        rTargetDistance = Math.abs(r.anchor + 1 - targetPosition);       // 1-based 3' end
+        targetDistance = Math.min(fTargetDistance, rTargetDistance);
+      }
       const penalty =
         0.6 * Math.abs(f.tm - r.tm) + Math.abs(f.tm - tmCenter) + Math.abs(r.tm - tmCenter)
         + 0.5 * Math.max(0, f.self_any - 4) + 0.5 * Math.max(0, r.self_any - 4)
@@ -503,7 +523,8 @@ export function designPrimerPairs(template, opts) {
         + 0.2 * Math.max(0, dimer.any_tm - 40) + 0.2 * Math.max(0, dimer.end_tm - 40)
         + mismatchPenalty(fMismatches, zone)
         + mismatchPenalty(rMismatches, zone)
-        + 8 * fMispriming.count + 8 * rMispriming.count;
+        + 8 * fMispriming.count + 8 * rMispriming.count
+        + (targetDistance !== undefined ? targetWeight * targetDistance : 0);
       pairs.push({
         forward: {
           sequence: f.sequence,
@@ -521,6 +542,7 @@ export function designPrimerPairs(template, opts) {
           mismatches: fMismatches,
           mispriming_count: fMispriming.count,
           mispriming_sites: fMispriming.sites,
+          ...(fTargetDistance !== undefined ? { target_distance: fTargetDistance } : {}),
         },
         reverse: {
           sequence: r.sequence,
@@ -538,12 +560,14 @@ export function designPrimerPairs(template, opts) {
           mismatches: rMismatches,
           mispriming_count: rMispriming.count,
           mispriming_sites: rMispriming.sites,
+          ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
         },
         amplicon: {
           start: ampliconStart + 1,
           end: ampliconEnd + 1,
           length: ampliconLength,
         },
+        ...(targetDistance !== undefined ? { target_distance: targetDistance } : {}),
         penalty: Math.round(penalty * 100) / 100,
       });
     }
@@ -584,6 +608,13 @@ export const DESIGN_DEFAULTS = {
   maxTmDelta: 3,
   maxResults: 5,
   maxCandidates: 2000,
+  // v13: PCR reaction-condition knobs for the NN Tm model (Primer3-aligned).
+  naMm: 50,             // monovalent cation concentration, mM (von Ahsen 2001 equivalence)
+  mgMm: 1.5,            // Mg2+ concentration, mM
+  dntpMm: 0.8,          // dNTP concentration, mM
+  primerNm: 200,        // primer concentration, nM
+  // v13: 3' target position preference (SNP / site-directed design).
+  targetPenalty: 0.5,   // ranking penalty per bp between the nearer primer 3' end and target_position
   // v12 mismatch tolerance: 0 = exact match required (v11 behavior).
   maxMismatches: 0,
   max3PrimeMismatches: 0,
@@ -625,6 +656,16 @@ export function resolveDesignOptions(raw) {
   if (!Number.isInteger(opts.maxMismatches) || opts.maxMismatches < 0 || opts.maxMismatches > 5) throw new MolbioInputError('max_mismatches must be an integer between 0 and 5');
   if (!Number.isInteger(opts.max3PrimeMismatches) || opts.max3PrimeMismatches < 0 || opts.max3PrimeMismatches > opts.maxMismatches) throw new MolbioInputError('max_3prime_mismatches must be an integer between 0 and max_mismatches');
   if (!Number.isInteger(opts.mismatch3PrimeZone) || opts.mismatch3PrimeZone < 1 || opts.mismatch3PrimeZone > 10) throw new MolbioInputError('mismatch_3prime_zone must be an integer between 1 and 10');
+  // v13 reaction-condition knobs: validate, then derive the per-call Tm options
+  // and the molar concentration used for the hairpin/dimer folding Tm.
+  if (!(typeof opts.naMm === 'number' && opts.naMm >= 1 && opts.naMm <= 1000)) throw new MolbioInputError('na_mm must be a number between 1 and 1000 (mM monovalent cations)');
+  if (!(typeof opts.mgMm === 'number' && opts.mgMm >= 0 && opts.mgMm <= 300)) throw new MolbioInputError('mg_mm must be a number between 0 and 300 (mM Mg2+)');
+  if (!(typeof opts.dntpMm === 'number' && opts.dntpMm >= 0 && opts.dntpMm <= 10)) throw new MolbioInputError('dntp_mm must be a number between 0 and 10 (mM dNTP)');
+  if (!(typeof opts.primerNm === 'number' && opts.primerNm >= 1 && opts.primerNm <= 5000)) throw new MolbioInputError('primer_nm must be a number between 1 and 5000 (nM primer)');
+  if (opts.targetPosition !== undefined && (!Number.isInteger(opts.targetPosition) || opts.targetPosition < 1)) throw new MolbioInputError('target_position must be a 1-based integer position on the template');
+  if (opts.targetPenalty !== undefined && !(typeof opts.targetPenalty === 'number' && opts.targetPenalty >= 0)) throw new MolbioInputError('target_penalty must be a non-negative number');
+  opts.tmOpts = { naMm: opts.naMm, mgMm: opts.mgMm, dntpMm: opts.dntpMm, primerNm: opts.primerNm };
+  opts.ctMolar = opts.primerNm * 1e-9;
   return opts;
 }
 
@@ -694,6 +735,13 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
   });
   if (spliced.length < 24) throw new MolbioInputError('the spliced transcript is too short for primer design');
 
+  // v13 target position preference (coordinates on the spliced transcript).
+  const targetPosition = opts.targetPosition;
+  if (targetPosition !== undefined && (!Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > spliced.length)) {
+    throw new MolbioInputError(`target_position ${targetPosition} is outside the spliced transcript (length ${spliced.length})`);
+  }
+  const targetWeight = opts.targetPenalty ?? DESIGN_DEFAULTS.targetPenalty;
+
   // Forward candidates must span a junction with minSide bases on each side.
   const fwd = [];
   for (const candidate of scanCandidates(spliced, 0, spliced.length - opts.lenMin, opts)) {
@@ -739,7 +787,7 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
       const gStart = splicedToGenomic[r.start];
       if (gEnd - gStart + 1 < minGenomicSpan) continue;
       if (Math.abs(f.tm - r.tm) > opts.maxTmDelta) continue;
-      const dimer = dimerThermo(f.sequence, r.sequence, DESIGN_CT_MOLAR);
+      const dimer = dimerThermo(f.sequence, r.sequence, opts.ctMolar ?? DEFAULT_CT_MOLAR);
       if (dimer.any_tm > opts.maxDimerTm || dimer.end_tm > opts.maxDimerEndTm) continue;
       let fMispriming = { count: 0, sites: [] };
       let rMispriming = { count: 0, sites: [] };
@@ -757,6 +805,14 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
       const fMismatches = intronMismatchReport(f, spliced, splicedToGenomic);
       const rMismatches = intronMismatchReport(r, spliced, splicedToGenomic);
       const zone = opts.mismatch3PrimeZone ?? DESIGN_DEFAULTS.mismatch3PrimeZone;
+      let fTargetDistance;
+      let rTargetDistance;
+      let targetDistance;
+      if (targetPosition !== undefined) {
+        fTargetDistance = Math.abs(f.start + f.length - targetPosition); // spliced 1-based 3' end
+        rTargetDistance = Math.abs(r.start + 1 - targetPosition);
+        targetDistance = Math.min(fTargetDistance, rTargetDistance);
+      }
       const penalty = 0.6 * Math.abs(f.tm - r.tm) + Math.abs(f.tm - tmCenter) + Math.abs(r.tm - tmCenter)
         + 0.5 * Math.max(0, f.self_any - 4) + 0.5 * Math.max(0, r.self_any - 4)
         + 1.0 * Math.max(0, f.self_end - 1) + 1.0 * Math.max(0, r.self_end - 1)
@@ -764,7 +820,8 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
         + 0.2 * Math.max(0, dimer.any_tm - 40) + 0.2 * Math.max(0, dimer.end_tm - 40)
         + mismatchPenalty(fMismatches, zone)
         + mismatchPenalty(rMismatches, zone)
-        + 8 * fMispriming.count + 8 * rMispriming.count;
+        + 8 * fMispriming.count + 8 * rMispriming.count
+        + (targetDistance !== undefined ? targetWeight * targetDistance : 0);
       pairs.push({
         forward: {
           sequence: f.sequence,
@@ -792,6 +849,7 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
             strand: site.strand,
             matches: site.matches,
           })),
+          ...(fTargetDistance !== undefined ? { target_distance: fTargetDistance } : {}),
         },
         reverse: {
           sequence: r.sequence,
@@ -817,9 +875,11 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
             strand: site.strand,
             matches: site.matches,
           })),
+          ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
         },
         spliced_amplicon: { start: r.start + 1, end: fwdEnd + 1, length: fwdEnd - r.start + 1 },
         genomic_amplicon_length: gEnd - gStart + 1,
+        ...(targetDistance !== undefined ? { target_distance: targetDistance } : {}),
         penalty: Math.round(penalty * 100) / 100,
       });
     }

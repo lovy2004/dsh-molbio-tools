@@ -207,3 +207,94 @@ function renderScatterChartWithRange({ title, x_label, y_label, x, y, fit, xMin,
   parts.push('</svg>');
   return parts.join('\n');
 }
+
+/** Virutal agarose gel: deterministic ladder + sample lanes as rounded bands. */
+export function renderGel({ title = 'Agarose gel', lanes, ladder = '1kb', showLadder = true }) {
+  const LADDERS = {
+    '1kb': [10000, 8000, 6000, 5000, 4000, 3000, 2000, 1500, 1000, 750, 500, 250],
+    '100bp': [1500, 1000, 900, 800, 700, 600, 500, 400, 300, 200, 100],
+  };
+  const ladderSizes = LADDERS[ladder];
+  if (ladderSizes === undefined) throw new Error(`unknown ladder "${ladder}"`);
+  if (!Array.isArray(lanes) || lanes.length < 1 || lanes.length > 12) {
+    throw new Error('lanes must be an array of 1 to 12 lanes');
+  }
+  for (const lane of lanes) {
+    if (lane === null || typeof lane !== 'object' || !Array.isArray(lane.fragments)) {
+      throw new Error('each lane must be an object with a fragments array');
+    }
+    for (const size of lane.fragments) {
+      if (!Number.isFinite(size) || size <= 0) throw new Error(`invalid fragment size ${size}`);
+    }
+  }
+
+  const MAX_SIZE = 10000;
+  const MIN_SIZE = 50;
+  const TOP_MARGIN = 60;
+  const RUN_LENGTH = 600;
+  const BOTTOM_MARGIN = 40;
+  const LANE_WIDTH = 70;
+  const LEFT_GUTTER = 70;
+  const RIGHT_GUTTER = 20;
+
+  const laneCount = lanes.length + (showLadder ? 1 : 0);
+  const width = LEFT_GUTTER + laneCount * LANE_WIDTH + RIGHT_GUTTER;
+  const height = TOP_MARGIN + RUN_LENGTH + BOTTOM_MARGIN;
+
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const fraction = (size) =>
+    (Math.log10(MAX_SIZE) - Math.log10(clamp(size, MIN_SIZE, MAX_SIZE))) /
+    (Math.log10(MAX_SIZE) - Math.log10(MIN_SIZE));
+  const bandY = (size) => TOP_MARGIN + fraction(size) * RUN_LENGTH;
+  const bandThickness = (size) => clamp(2, 10, 2 + 2 * Math.log10(size));
+
+  function formatLadderLabel(size) {
+    if (size >= 1000) {
+      return `${size / 1000} kb`;
+    }
+    return `${size / 1000} kb`;
+  }
+
+  const BAND_FILL = '#4a7dd8';
+  const parts = [];
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" font-family="system-ui, sans-serif" role="img">`);
+  parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
+  parts.push(`<text x="${(width / 2).toFixed(2)}" y="28" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);
+
+  const laneX = (index) => LEFT_GUTTER + index * LANE_WIDTH;
+
+  // Lane labels sit above the wells.
+  for (let i = 0; i < lanes.length; i++) {
+    const index = i + (showLadder ? 1 : 0);
+    const label = String(lanes[i].label ?? '');
+    if (label !== '') {
+      parts.push(`<text x="${(laneX(index) + LANE_WIDTH / 2).toFixed(2)}" y="46" font-size="10" fill="#57606a" text-anchor="middle">${escapeXml(label)}</text>`);
+    }
+  }
+
+  // Ladder lane (leftmost when shown).
+  if (showLadder) {
+    parts.push(`<rect x="${(laneX(0) + 5).toFixed(2)}" y="${TOP_MARGIN - 8}" width="${LANE_WIDTH - 10}" height="8" rx="2" fill="#d0d7de"/>`);
+    for (const size of ladderSizes) {
+      const y = bandY(size);
+      const thick = bandThickness(size);
+      parts.push(`<rect x="${(laneX(0) + 5).toFixed(2)}" y="${(y - thick / 2).toFixed(2)}" width="${LANE_WIDTH - 10}" height="${thick.toFixed(2)}" rx="2" fill="${BAND_FILL}"/>`);
+      parts.push(`<text x="${(laneX(0) - 6).toFixed(2)}" y="${y.toFixed(2)}" font-size="10" fill="#57606a" text-anchor="end" dominant-baseline="middle">${escapeXml(formatLadderLabel(size))}</text>`);
+    }
+  }
+
+  // Sample lanes: well + each fragment band.
+  for (let i = 0; i < lanes.length; i++) {
+    const index = i + (showLadder ? 1 : 0);
+    const x = laneX(index);
+    parts.push(`<rect x="${(x + 5).toFixed(2)}" y="${TOP_MARGIN - 8}" width="${LANE_WIDTH - 10}" height="8" rx="2" fill="#d0d7de"/>`);
+    for (const size of lanes[i].fragments) {
+      const y = bandY(size);
+      const thick = bandThickness(size);
+      parts.push(`<rect x="${(x + 5).toFixed(2)}" y="${(y - thick / 2).toFixed(2)}" width="${LANE_WIDTH - 10}" height="${thick.toFixed(2)}" rx="2" fill="${BAND_FILL}"/>`);
+    }
+  }
+
+  parts.push('</svg>');
+  return parts.join('\n');
+}

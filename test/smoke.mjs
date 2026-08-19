@@ -286,6 +286,9 @@ function makeTemplate(n, seed = 42) {
     ['molbio_codon_optimize', { sequence: 'MKWVTFISLL', host: 'yeast' }],
     ['molbio_qpcr_efficiency', { dilution_factors: [1, 10, 100], ct_values: [20, 23.3, 26.6], plot_path: 'C:/tmp/std_curve.svg' }],
     ['molbio_plot', { kind: 'bar', output_path: 'C:/tmp/bar.svg', labels: ['A', 'B'], values: [1, 2] }],
+    ['molbio_virtual_gel', { lanes: [{ label: 'EcoRI', fragments: [3000, 800] }] }],
+    ['molbio_enzyme_lookup', { sequence: 'GAATTC', enzymes: ['EcoRI', 'BsaI'] }],
+    ['molbio_golden_gate', { vector: 'A'.repeat(60) + 'C'.repeat(40) + 'T'.repeat(60), replace_region: { start: 61, end: 100 }, inserts: ['G'.repeat(30) + 'AATT' + 'C'.repeat(30)] }],
     ['molbio_align', { sequence1: 'ATGCATGCAT', sequence2: 'ATGCGTGCAT' }],
     ['molbio_fasta_fastq', { path: 'C:/tmp/seqs.fa', action: 'stats' }],
     ['molbio_extract_region', { source_path: 'C:/tmp/pUC118.dna', feature: 'ori' }],
@@ -1191,6 +1194,209 @@ function splicedToGenomic(splicedPos, exons) {
 
   const finalList = await run('molbio_paper_list', { file });
   assert.equal(finalList.papers.length, 1);
+}
+
+// ── v13: reaction-condition knobs (salt / primer concentration) ─────────────
+
+{
+  const template = makeTemplate(600, 7);
+  const out = await run('molbio_design_primers', { template, max_results: 2 });
+  assert.deepEqual(out.conditions, { na_mm: 50, mg_mm: 1.5, dntp_mm: 0.8, primer_nm: 200 });
+  const salted = await run('molbio_design_primers', { template, max_results: 2, na_mm: 300, mg_mm: 3, dntp_mm: 0.4, primer_nm: 50, tm_min: 55, tm_max: 80 });
+  assert.deepEqual(salted.conditions, { na_mm: 300, mg_mm: 3, dntp_mm: 0.4, primer_nm: 50 });
+  assert.ok(salted.pairs.length > 0, 'designer works under custom reaction conditions');
+  // engine-level known value: the same primer melts hotter at higher salt
+  const design = await import('../design.mjs');
+  const base = { gcMin: 10, gcMax: 90, maxRun: 10, maxSelfAny: 100, maxSelfEnd: 100, maxHairpinTm: 200, maxEndStability: 50, maxEndGc: 5, tmMin: 1, tmMax: 100, gcClamp: 0 };
+  const optsLow = design.resolveDesignOptions({ ...base, naMm: 20, mgMm: 0 });
+  const optsHigh = design.resolveDesignOptions({ ...base, naMm: 300, mgMm: 0 });
+  const evLow = design.evaluateSeq('GTAAAACGACGGCCAGTC', optsLow, 60);
+  const evHigh = design.evaluateSeq('GTAAAACGACGGCCAGTC', optsHigh, 60);
+  assert.equal(evLow.reason, undefined);
+  assert.equal(evHigh.reason, undefined);
+  assert.ok(evHigh.tm > evLow.tm, 'NN Tm must rise with monovalent salt');
+  await assert.rejects(() => run('molbio_design_primers', { template, na_mm: 0 }), /na_mm/);
+  await assert.rejects(() => run('molbio_design_primers', { template, mg_mm: -1 }), /mg_mm/);
+  await assert.rejects(() => run('molbio_design_primers', { template, primer_nm: 6000 }), /primer_nm/);
+  await assert.rejects(() => run('molbio_design_primers', { template, dntp_mm: 20 }), /dntp_mm/);
+}
+
+// ── v13: 3' target position preference ──────────────────────────────────────
+
+{
+  const template = makeTemplate(600, 7);
+  const near = await run('molbio_design_primers', { template, max_results: 3, target_position: 100, target_penalty: 100 });
+  assert.ok(near.pairs.length > 0);
+  for (const pair of near.pairs) {
+    assert.ok(pair.forward.target_distance >= 0 && pair.reverse.target_distance >= 0);
+    assert.equal(pair.target_distance, Math.min(pair.forward.target_distance, pair.reverse.target_distance));
+  }
+  assert.ok(near.pairs[0].target_distance <= 100, `target 100 should pull the 3' ends close (got ${near.pairs[0].target_distance})`);
+  const far = await run('molbio_design_primers', { template, max_results: 3, target_position: 500, target_penalty: 100 });
+  assert.ok(far.pairs[0].target_distance <= 100, `target 500 should pull the 3' ends close (got ${far.pairs[0].target_distance})`);
+  const plain = await run('molbio_design_primers', { template, max_results: 2 });
+  assert.equal(plain.pairs[0].target_distance, undefined, 'no target_distance without target_position');
+  await assert.rejects(() => run('molbio_design_primers', { template, target_position: 601 }), /outside the template/);
+  await assert.rejects(() => run('molbio_design_primers', { template, target_penalty: -1 }), /target_penalty/);
+  // cross-intron design reports spliced-coordinate target distances too
+  const e1 = makeTemplate(120, 10);
+  const e2 = makeTemplate(120, 14);
+  const e3 = makeTemplate(120, 34);
+  const genomic = e1 + makeTemplate(800, 29) + e2 + makeTemplate(800, 31) + e3;
+  const exons = [{ start: 1, end: 120 }, { start: 921, end: 1040 }, { start: 1841, end: 1960 }];
+  const intron = await run('molbio_design_intron_primers', { genomic, exons, tm_min: 50, tm_max: 70, min_genomic_span: 900, max_results: 3, target_position: 150, target_penalty: 100 });
+  assert.ok(intron.pairs.length > 0);
+  for (const pair of intron.pairs) {
+    assert.equal(pair.target_distance, Math.min(pair.forward.target_distance, pair.reverse.target_distance));
+    assert.ok(pair.forward.target_distance <= 359);
+  }
+}
+
+// ── v13: enzyme catalog lookup ──────────────────────────────────────────────
+
+{
+  const catalog = await run('molbio_enzyme_lookup', {});
+  assert.ok(catalog.total >= 90, `expected >= 90 enzymes, got ${catalog.total}`);
+  assert.equal(catalog.enzymes.length, catalog.total);
+  const eco = catalog.enzymes.find((entry) => entry.name === 'EcoRI');
+  assert.equal(eco.iis, false);
+  assert.equal(eco.recognition, 'GAATTC');
+  assert.equal(eco.palindromic, true);
+  const bsaI = catalog.enzymes.find((entry) => entry.name === 'BsaI');
+  assert.equal(bsaI.iis, true);
+  assert.equal(bsaI.site, 'GGTCTC(1/5)');
+  assert.equal(bsaI.cut_offset, 7);
+  assert.equal(bsaI.bottom_cut, 5);
+  assert.equal(bsaI.overhang_length, 4);
+  assert.equal(bsaI.palindromic, false);
+  // both strand orientations: a reverse-complemented BsaI site is also cut
+  const seq = 'GGTCTC' + 'A'.repeat(10) + 'GAGACC' + 'C'.repeat(10);
+  const scanned = await run('molbio_enzyme_lookup', { sequence: seq, enzymes: ['BsaI'] });
+  assert.equal(scanned.enzymes[0].cuts, 2);
+  assert.deepEqual(scanned.enzymes[0].cut_events.map((cut) => cut.cut_position), [8, 16]);
+  assert.deepEqual(scanned.enzymes[0].fragments, [17, 8, 7]);
+  const circularEco = await run('molbio_enzyme_lookup', { sequence: 'GAATTC', enzymes: ['EcoRI'], circular: true });
+  assert.deepEqual(circularEco.enzymes[0].fragments, [6]);
+  await assert.rejects(() => run('molbio_enzyme_lookup', { enzymes: ['NotAnEnzyme'] }), /unknown enzyme/);
+}
+
+// ── v13: Golden Gate assembly ───────────────────────────────────────────────
+
+{
+  // Bare-vector mode: the tool adds the cassette around the region and designs
+  // both vector junctions. The vector cassette sites stay in the backbone.
+  const vector = 'A'.repeat(60) + 'C'.repeat(40) + 'T'.repeat(60);
+  const g1 = 'G'.repeat(30) + 'AATT' + 'C'.repeat(30);
+  const g2 = 'T'.repeat(25) + 'GGCC' + 'G'.repeat(25);
+  assert.equal(lib.enzymeCuts(vector, 'BsaI').length, 0);
+  assert.equal(lib.enzymeCuts(g1, 'BsaI').length, 0);
+  assert.equal(lib.enzymeCuts(g2, 'BsaI').length, 0);
+  const gbSeq = vector;
+  memFs.files.set('C:/tmp/pGG.gb', [
+    'LOCUS       pGG                 160 bp    DNA     circular SYN 01-JAN-2024',
+    'FEATURES             Location/Qualifiers',
+    '     rep_origin      1..60',
+    '                     /label="ori"',
+    '     CDS             61..100',
+    '                     /label="lacZ"',
+    '     CDS             120..160',
+    '                     /label="AmpR"',
+    'ORIGIN',
+    `        1 ${gbSeq}`,
+    '//',
+  ].join('\n'));
+  const out = await run('molbio_golden_gate', {
+    vector_path: 'C:/tmp/pGG.gb',
+    inserts: [g1, g2],
+    replace_region: { start: 61, end: 100 },
+    save_path: 'C:/tmp/gg.fa',
+    map_path: 'C:/tmp/gg.svg',
+  });
+  assert.equal(out.method, 'golden_gate');
+  assert.equal(out.enzyme, 'BsaI');
+  assert.equal(out.enzyme_site, 'GGTCTC(1/5)');
+  assert.equal(out.overhang_length, 4);
+  assert.equal(out.fragments_to_order.length, 2);
+  assert.equal(out.junctions.length, 3);
+  assert.equal(out.fragments_to_order[0].left_overhang, out.junctions[0].sequence);
+  assert.equal(out.fragments_to_order[0].right_overhang, out.junctions[1].sequence);
+  assert.equal(out.fragments_to_order[1].left_overhang, out.junctions[1].sequence);
+  assert.equal(out.fragments_to_order[1].right_overhang, out.junctions[2].sequence);
+  for (let i = 0; i < out.junctions.length; i++) {
+    const seq = out.junctions[i].sequence;
+    assert.equal(seq.length, 4);
+    assert.notEqual(seq, lib.reverseComplement(seq), 'junctions must not be palindromic');
+    for (let j = i + 1; j < out.junctions.length; j++) {
+      assert.notEqual(seq, out.junctions[j].sequence, 'junctions must be unique');
+      assert.notEqual(seq, lib.reverseComplement(out.junctions[j].sequence), 'junctions must not be complementary');
+    }
+  }
+  // final plasmid = vector with cassette retained + fragments, up to rotation
+  const expected = vector.slice(0, 60) + 'GGTCTC' + 'A' + out.junctions[0].sequence + g1 + out.junctions[1].sequence + g2 + 'A' + 'GAGACC' + vector.slice(100);
+  assert.equal(out.length, expected.length);
+  assert.ok((out.final_sequence + out.final_sequence).includes(expected), 'final sequence must equal the expected assembly up to circular rotation');
+  assert.equal(lib.enzymeCuts(out.final_sequence, 'BsaI').length, 2, 'exactly the 2 retained vector cassette sites');
+  assert.ok(out.dropped_features.some((feature) => feature.label === 'lacZ'), 'feature inside the replaced region is dropped');
+  const ampR = out.features.find((feature) => feature.label === 'AmpR');
+  assert.deepEqual([ampR.start, ampR.end], [27, 67], 'AmpR shifts into the linearized backbone frame');
+  assert.equal(out.delta, 78);
+  assert.ok(out.verify.length > 0, 'verification digests are produced');
+  assert.equal(out.save_path, 'C:/tmp/gg.fa');
+  assert.equal(out.map_path, 'C:/tmp/gg.svg');
+  assert.ok(memFs.files.get(out.save_path).toString('utf8').includes('golden_gate'));
+  assert.ok(memFs.files.get(out.map_path).toString('utf8').includes('<svg'));
+
+  // Vector-with-cassette mode: the tool reads the junctions from the vector
+  // and designs only the interior ones.
+  const left = 'C'.repeat(50);
+  const right = 'G'.repeat(50);
+  const cassetteVector = left + 'GGTCTC' + 'A' + 'CGAC' + 'T'.repeat(40) + 'GTCT' + 'A' + 'GAGACC' + right;
+  const f1 = 'AAGG' + 'T'.repeat(30);
+  const f2 = 'C'.repeat(25) + 'AATT';
+  const f3 = 'G'.repeat(28) + 'CC';
+  assert.equal(lib.enzymeCuts(f1, 'BsaI').length, 0);
+  assert.equal(lib.enzymeCuts(f2, 'BsaI').length, 0);
+  assert.equal(lib.enzymeCuts(f3, 'BsaI').length, 0);
+  const cassetteOut = await run('molbio_golden_gate', { vector: cassetteVector, inserts: [f1, f2, f3] });
+  assert.equal(cassetteOut.junctions[0].sequence, 'CGAC');
+  assert.equal(cassetteOut.junctions[3].sequence, 'GTCT');
+  assert.equal(cassetteOut.fragments_to_order[0].sequence, 'GGTCTC' + 'A' + 'CGAC' + f1 + cassetteOut.junctions[1].sequence + 'A' + 'GAGACC');
+  // top strand = backbone (with the retained cassette; linearized at the reverse cut, so the filler A leads) + left junction + fragments + interiors
+  const cassetteExpected = 'A' + 'GAGACC' + right + left + 'GGTCTC' + 'A' + 'CGAC' + f1 + cassetteOut.junctions[1].sequence + f2 + cassetteOut.junctions[2].sequence + f3;
+  assert.equal(cassetteOut.length, cassetteExpected.length);
+  assert.ok((cassetteOut.final_sequence + cassetteOut.final_sequence).includes(cassetteExpected), 'cassette-mode assembly up to circular rotation');
+  assert.equal(lib.enzymeCuts(cassetteOut.final_sequence, 'BsaI').length, 2);
+
+  // error paths
+  await assert.rejects(() => run('molbio_golden_gate', { vector, inserts: ['GGTCTC' + 'A'.repeat(20)], replace_region: { start: 61, end: 100 } }), /cuts INSIDE/);
+  await assert.rejects(() => run('molbio_golden_gate', { vector, inserts: ['A'.repeat(20)], enzyme: 'EcoRI' }), /not a type IIS/);
+  await assert.rejects(() => run('molbio_golden_gate', { vector: 'A'.repeat(100), inserts: ['C'.repeat(20)] }), /exactly one forward/);
+  await assert.rejects(() => run('molbio_golden_gate', { vector: 'GGTCTC' + 'A'.repeat(40), inserts: ['C'.repeat(20)], replace_region: { start: 5, end: 10 } }), /already cuts the bare vector/);
+  const palindromic = left + 'GGTCTC' + 'A' + 'ATAT' + 'T'.repeat(40) + 'GTCT' + 'A' + 'GAGACC' + right;
+  await assert.rejects(() => run('molbio_golden_gate', { vector: palindromic, inserts: ['C'.repeat(20)] }), /unusable/);
+}
+
+// ── v13: virtual agarose gel ────────────────────────────────────────────────
+
+{
+  const gel = await run('molbio_virtual_gel', { lanes: [{ label: 'EcoRI digest', fragments: [3000, 800] }, { label: '', fragments: [] }], title: 'Clone check' });
+  assert.equal(gel.lane_count, 2);
+  assert.equal(gel.band_count, 2);
+  assert.equal(gel.ladder, '1kb');
+  assert.equal(gel.svg_path, 'C:\\tmp\\Clone_check.svg');
+  const svg = memFs.files.get(gel.svg_path).toString('utf8');
+  assert.ok(svg.includes('<svg'));
+  assert.ok(svg.includes('EcoRI digest'));
+  assert.ok(svg.includes('10 kb'));
+  assert.ok(svg.includes('3 kb'));
+  const small = await run('molbio_virtual_gel', { lanes: [{ label: 'PCR', fragments: [150, 900] }], ladder: '100bp', output_path: 'C:/tmp/gel2.svg' });
+  assert.equal(small.svg_path, 'C:/tmp/gel2.svg');
+  const svg2 = memFs.files.get(small.svg_path).toString('utf8');
+  assert.ok(svg2.includes('1.5 kb') && svg2.includes('0.9 kb'));
+  await assert.rejects(() => run('molbio_virtual_gel', { lanes: [{ label: 'x', fragments: [1.5] }] }), /expected an integer/);
+  await assert.rejects(() => run('molbio_virtual_gel', { lanes: [{ label: 'x', fragments: [999999] }] }), /fragment sizes/);
+  await assert.rejects(() => run('molbio_virtual_gel', { lanes: [] }), /1-12/);
+  await assert.rejects(() => run('molbio_virtual_gel', { lanes: [{ label: 'x', fragments: [] }], ladder: 'nope' }), /must be one of 1kb, 100bp/);
 }
 
 // ── plugin surface ──────────────────────────────────────────────────────────

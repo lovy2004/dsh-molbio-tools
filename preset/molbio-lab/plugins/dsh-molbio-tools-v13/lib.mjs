@@ -362,6 +362,96 @@ export function isIisEnzyme(name) {
   return typeof ENZYMES[name] === 'object';
 }
 
+/**
+ * Every recognition event of one enzyme on `seq`, both strand orientations
+ * (v13). Forward = the recognition pattern appears on the top strand (the
+ * enzyme cuts downstream of the site); reverse = its reverse complement
+ * appears on the top strand (the enzyme binds the bottom strand and cuts
+ * upstream of the site in top-strand coordinates). Palindromic patterns are
+ * scanned once. Unlike digest(), which reports only the top-strand cut of
+ * forward matches, this is the enzyme's complete cut set — a type IIS enzyme
+ * such as BsaI also cuts at reverse-complemented recognition sites.
+ * @returns {Array<{start, orientation, cut_position}>} 0-based positions.
+ */
+export function enzymeCuts(seq, name) {
+  const resolved = enzymePattern(name);
+  if (resolved === undefined) throw new MolbioInputError(`unknown enzyme ${JSON.stringify(name)}; available: ${ENZYME_NAMES.join(', ')}`);
+  const { pattern, cutOffset } = resolved;
+  const out = [];
+  for (const match of findAllMatches(seq, pattern)) {
+    out.push({
+      start: match.start,
+      orientation: 'forward',
+      cut_position: Math.min(seq.length, Math.max(0, match.start + cutOffset)),
+    });
+  }
+  const rcPattern = reverseComplement(pattern);
+  if (rcPattern !== pattern) {
+    for (const match of findAllMatches(seq, rcPattern)) {
+      out.push({
+        start: match.start,
+        orientation: 'reverse',
+        cut_position: Math.min(seq.length, Math.max(0, match.start + pattern.length - cutOffset)),
+      });
+    }
+  }
+  out.sort((a, b) => a.cut_position - b.cut_position || a.start - b.start || (a.orientation === 'forward' ? -1 : 1));
+  return out;
+}
+
+/** Fragment sizes from 0-based top-strand cut positions (digest semantics). */
+function fragmentSizes(length, positions, circular) {
+  if (positions.length === 0) return [length];
+  if (circular) {
+    if (positions.length === 1) return [length];
+    const fragments = [];
+    for (let i = 0; i < positions.length; i++) {
+      const a = positions[i];
+      const b = positions[(i + 1) % positions.length];
+      fragments.push(i === positions.length - 1 ? length - a + b : b - a);
+    }
+    return fragments.sort((a, b) => b - a);
+  }
+  const fragments = [positions[0]];
+  for (let i = 1; i < positions.length; i++) fragments.push(positions[i] - positions[i - 1]);
+  fragments.push(length - positions[positions.length - 1]);
+  return fragments.filter((f) => f > 0).sort((a, b) => b - a);
+}
+
+/**
+ * Structured catalog entry for one enzyme (v13): recognition site, cut
+ * geometry (standard (N/N) notation for type IIS), overhang length, and —
+ * when a sequence is given — the complete cut set (both orientations) with
+ * fragment sizes.
+ */
+export function enzymeCatalog(name, sequence, circular) {
+  const resolved = enzymePattern(name);
+  if (resolved === undefined) throw new MolbioInputError(`unknown enzyme ${JSON.stringify(name)}; available: ${ENZYME_NAMES.join(', ')}`);
+  const entry = {
+    name,
+    site: resolved.display,
+    recognition: resolved.pattern,
+    iis: resolved.iis,
+    cut_offset: resolved.cutOffset,
+    palindromic: reverseComplement(resolved.pattern) === resolved.pattern,
+  };
+  if (resolved.iis) {
+    entry.bottom_cut = resolved.bottom;
+    entry.overhang_length = resolved.pattern.length + resolved.bottom - resolved.cutOffset;
+  }
+  if (sequence !== undefined) {
+    const cuts = enzymeCuts(sequence, name);
+    entry.cuts = cuts.length;
+    entry.cut_events = cuts.map((cut) => ({
+      start: cut.start + 1,
+      orientation: cut.orientation,
+      cut_position: cut.cut_position + 1,
+    }));
+    entry.fragments = fragmentSizes(sequence.length, cuts.map((cut) => cut.cut_position), circular === true);
+  }
+  return entry;
+}
+
 function matchAt(seq, pattern, start) {
   for (let i = 0; i < pattern.length; i++) {
     const base = seq[start + i];

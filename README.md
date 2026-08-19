@@ -2,7 +2,7 @@
 
 面向 DeepSeek Harness 的**零依赖分子生物学研究插件**：序列分析、引物自动设计与检查、限制性酶切模拟、GenBank 解析与质粒图谱、qPCR 分析、文献助手与实验台计算。除文献检索与存储外全部为确定性纯计算；插件由纯 `.mjs` 文件构成，可随 agent preset 目录整体复制分发。
 
-## 提供的工具（39 个，模型可调用）
+## 提供的工具（42 个，模型可调用）
 
 ### 序列分析
 
@@ -12,13 +12,14 @@
 | `molbio_gc_content` | 整体 GC 含量 + 可选分窗口 GC 百分比 |
 | `molbio_translate` | 1/2/3/-1/-2/-3 或六框翻译（3 套密码子表），ORF 查找 |
 | `molbio_restriction_sites` | 内置 **90+ 限制酶**（v10 起含 IIS 型：BsaI/BsmBI/BbsI/BspQI/SapI/PaqCI/AarI/BtgZI/BsmFI/FokI 等，切点在识别位点外，显示标准 (N₁/N₂) 记法）位点搜索与酶切片段计算（线性/环状） |
+| `molbio_enzyme_lookup` | **v13 酶目录查询**：按名称/识别位点/切点几何/突出端长度查 90+ 酶表；给定序列时报告**双链向**全部切点（IIS 酶的反向识别位点如 GAGACC 也会被切，这是 molbio_restriction_sites 不报告的）与片段大小 |
 
 ### 引物
 
 | 工具 | 功能 |
 | --- | --- |
-| `molbio_design_primers` | **自动设计** PCR 引物对：Tm（SantaLucia 1998 NN，50 mM Na⁺/1.5 mM Mg²⁺/200 nM）、GC、GC clamp（0-3 分级）、run/发夹/自互补/二聚体约束，按 amplicon 窗口配对并排序。**v12 起结构筛查对齐 Primer3 模型**：自互补为比对分（match +1/mismatch −1/gap −0.25，阈值 8.0/3.0），发夹与引物二聚体用同一套 NN 参数折成 Tm（默认 47 °C 阈值），3' 端稳定性（末 5 碱基 ΔG(37°C) ≤ 9 kcal/mol）与末 5 碱基 GC 数。**v12 起支持错配容差**：`max_mismatches > 0` 时允许引物与模板有少量错配（3' 末端碱基绝不错配、默认避开 3' 端关键区），每处错配在 `mismatches` 中报告并计入排序罚分，精确引物总是优先。`check_mispriming: true` 检查 3' 尾在模板上的非特异结合位点并拒绝/罚分 |
-| `molbio_design_intron_primers` | **跨内含子 qPCR 引物**（v10）：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点（两侧各 ≥ min_junction_bases），反向引物位于另一外显子，基因组 DNA 无法扩增；`min_genomic_span` 强制最小基因组间距；输出剪接坐标 + 基因组坐标双套位置。**v12 起支持错配容差**（参数同 molbio_design_primers，错配在 spliced/genomic 双坐标下报告） |
+| `molbio_design_primers` | **自动设计** PCR 引物对：Tm（SantaLucia 1998 NN，默认 50 mM Na⁺/1.5 mM Mg²⁺/200 nM，**v13 起可用 `na_mm`/`mg_mm`/`dntp_mm`/`primer_nm` 调节**）、GC、GC clamp（0-3 分级）、run/发夹/自互补/二聚体约束，按 amplicon 窗口配对并排序。**v12 起结构筛查对齐 Primer3 模型**：自互补为比对分（match +1/mismatch −1/gap −0.25，阈值 8.0/3.0），发夹与引物二聚体用同一套 NN 参数折成 Tm（默认 47 °C 阈值），3' 端稳定性（末 5 碱基 ΔG(37°C) ≤ 9 kcal/mol）与末 5 碱基 GC 数。**v12 起支持错配容差**：`max_mismatches > 0` 时允许引物与模板有少量错配（3' 末端碱基绝不错配、默认避开 3' 端关键区），每处错配在 `mismatches` 中报告并计入排序罚分，精确引物总是优先。`check_mispriming: true` 检查 3' 尾在模板上的非特异结合位点并拒绝/罚分。**v13 起支持 3' 目标位置偏好**：`target_position` + `target_penalty` 按"较近引物 3' 端到目标位点的距离"罚分排序（SNP/定点设计用），每对报告 `target_distance` |
+| `molbio_design_intron_primers` | **跨内含子 qPCR 引物**（v10）：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点（两侧各 ≥ min_junction_bases），反向引物位于另一外显子，基因组 DNA 无法扩增；`min_genomic_span` 强制最小基因组间距；输出剪接坐标 + 基因组坐标双套位置。**v12 起支持错配容差**（参数同 molbio_design_primers，错配在 spliced/genomic 双坐标下报告）。**v13 起同样支持盐/浓度旋钮与 `target_position`**（剪接坐标） |
 | `molbio_primer_tm` | 单条引物 Tm 估算（Na⁺/Mg²⁺/dNTP 盐校正，von Ahsen 2001） |
 | `molbio_primer_check` | 引物结构筛查：重复序列、自互补（3' 端加权）、发夹、引物对二聚体；**v12 起增加 Primer3 同款热力学指标**（self-any/self-end 比对分、发夹 Tm、二聚体 Tm、3' 端稳定性/GC） |
 
@@ -37,6 +38,7 @@
 | --- | --- |
 | `molbio_unique_cutters` | 克隆选酶：载体单切 + 插入零切的"理想酶"列表（可限定 MCS 区间）、区间双切酶（片段切出）、排除切插入的酶 |
 | `molbio_clone_simulate` | **酶切-连接**（1-2 酶，`orientation=auto` 默认自动反向互补方向写反的插入片段）与 **Gibson 组装**（自动生成同源臂和 insert-to-order）模拟：输出最终质粒序列、特征坐标平移、连接点序列、验证酶切预测（对比空载体，单酶时含反向连接预测）；`save_path` 存 FASTA、**`map_path` 一步写出新质粒图谱 SVG**（含平移后的特征与验证酶标记） |
+| `molbio_golden_gate` | **v13 Golden Gate 组装**：IIS 酶（BsaI 等）多片段组装模拟——自动设计唯一、非回文、非互补的 4 bp 突出端（载体已有盒子则读取、裸载体给 `replace_region` 则自动加盒子并设计两端突出端）、检查酶不切片段/裸载体、生成带识别位点的订购片段（fragments_to_order）、拼出最终质粒（连接处无酶切位点；载体盒子位点保留在骨架上，下一级组装换另一种 IIS 酶）、特征坐标平移与验证酶切；`save_path`/`map_path` 直接出 FASTA/SVG |
 | `molbio_clone_primers` | 扩增引物加尾：酶切位点 + 保护碱基（内置推荐表）或 Gibson 同源臂；自动复检全长 Tm（NN 估算）/GC/二聚体，并警告"酶也切模板内部" |
 | `molbio_mutagenesis_primers` | QuickChange 式定点突变引物：支持 `A123G`/`123A>G`/`123_125del`/`after123insGCT`，突变居中、G/C 端、Tm/GC/结构复检，报告氨基酸变化（frame 1 假设） |
 
@@ -53,6 +55,7 @@
 | `molbio_qpcr_analysis` | ΔΔCt 法：各组均值/SD、ΔCt、ΔΔCt、fold change（可设扩增效率） |
 | `molbio_qpcr_efficiency` | 稀释系列 → 标准曲线：斜率/截距/R²、扩增效率 E=10^(−1/slope)−1；`plot_path` 直接写出带拟合线的 SVG 标准曲线 |
 | `molbio_plot` | 通用 SVG 图表：柱状图（均值±SD 误差棒）与散点图（可选最小二乘拟合线），写成工作区文件 |
+| `molbio_virtual_gel` | **v13 虚拟琼脂糖凝胶**：各泳道给出预期片段大小（酶切/PCR/连接检查）→ SVG 凝胶图 + 分子量 ladder（1kb/100bp），与真实胶对照；`output_path` 写工作区文件 |
 | `molbio_lab_math` | 稀释计算（C₁V₁=C₂V₂）、摩尔浓度、DNA 拷贝数 |
 
 ### 蛋白质
@@ -98,17 +101,17 @@
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 39 个工具
-├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 42 个工具
+├── lib.mjs          # 基础库：IUPAC、翻译、酶表（含双链向切点查找）、NN 热力学、qPCR、lab math
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── genbank.mjs      # GenBank flatfile 解析器
 ├── snapgene.mjs     # SnapGene .dna 二进制解析器（含极简 XML 扫描器）
 ├── plasmid.mjs      # SVG 质粒图谱渲染器（环形/线形，GC skew/标记）
 ├── align.mjs        # Smith-Waterman 局部比对 + 锚点窗口（Sanger 验证用）
-├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/克隆引物/突变引物
+├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
 ├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证报告
 ├── protein.mjs      # 蛋白性质/肽段酶切/密码子优化
-├── plot.mjs         # SVG 柱状/散点图渲染
+├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶渲染
 ├── seqio.mjs        # FASTA/FASTQ 解析与统计
 ├── records.mjs      # 协议库/实验日志存储
 ├── papers.mjs       # 文献库存储（经 harness fs 服务 + 沙箱政策）
@@ -126,7 +129,7 @@ dsh-molbio-tools/
 ## 安装（推荐：专属模式 preset）
 
 **推荐给最终用户的方式**：安装后预设选择器出现 **Molecular Biology Lab** 专属模式，
-molbio 工具只在该模式出现，不会把 39 个工具和提示段注入到其它会话（避免污染无关场景）。
+molbio 工具只在该模式出现，不会把 42 个工具和提示段注入到其它会话（避免污染无关场景）。
 
 仓库的 `preset/molbio-lab/` 即完整预设目录，把它复制到对方的 harness 用户目录即可：
 
@@ -196,6 +199,11 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 - **错配容差（v12）**：`max_mismatches > 0` 时，若某窗口没有精确引物通过全部约束，设计器用**最少的替换**尝试挽救（只针对可修复的约束：GC 失衡、run、Tm 微差）。3' 末端碱基永远不错配，默认在 3' 端 `mismatch_3prime_zone`（默认 5 bp）关键区内也不放错配（`max_3prime_mismatches` 可放宽）。每处错配逐条报告：引物内位置、模板位置、模板碱基/引物碱基、距 3' 端距离；每个错配都会加重排序罚分——存在精确引物时精确引物永远优先。
 - **Primer3 对齐的结构筛查（v12）**：自互补（self-any/self-end）为比对分（match +1 / mismatch −1 / gap −0.25，阈值 8.0/3.0）；发夹与引物二聚体（any/end）用与 Tm 相同的 SantaLucia NN 参数折成 Tm（默认阈值 47 °C，`max_hairpin_tm`/`max_dimer_tm`/`max_dimer_end_tm`）；3' 端稳定性 = 末 5 碱基的 ΔG(37 °C)（`max_end_stability`，默认 9 kcal/mol）；末 5 碱基 GC 数（`max_end_gc`，默认 5）；GC clamp 为 0-3 连续 G/C 分级（`gc_clamp`，默认 1，`require_gc_clamp` 为兼容别名）。数值均为估算，与 Primer3 同量纲便于互相校验。
 - **非特异结合检查（v12）**：`check_mispriming: true` 时，按 k-mer 索引检查每条引物 3' 尾（默认 8 bp、允许 1 个错配且末端碱基必须配对）在模板双链上的额外退火位点；超过 `mispriming_max_sites` 的引物对被拒绝，其余按位点数罚分并在 `mispriming_sites` 中报告位点与链向。
+- **反应条件旋钮（v13）**：两个设计工具暴露 `na_mm`/`mg_mm`/`dntp_mm`/`primer_nm`（默认 50/1.5/0.8/200，与 README 旧版固定值一致），直接驱动 Tm 模型的 von Ahsen 2001 盐校正与发夹/二聚体折叠浓度；输出 `conditions` 回显实际使用的条件。
+- **3' 目标位置偏好（v13）**：`target_position`（模板坐标，跨内含子设计为剪接坐标）+ `target_penalty` 按"较近引物 3' 端到目标的距离"加重排序罚分，用于 SNP 分型/定点设计；每对与每条引物报告 `target_distance`。无目标时该字段不出现。
+- **酶目录与双链向切点（v13）**：`molbio_enzyme_lookup` 报告 IIS 酶在**反向识别位点**（如 BsaI 对 GAGACC）的切点——这是 `molbio_restriction_sites` 不报告的；`molbio_golden_gate` 的内部位点检查同样按双链向。
+- **Golden Gate（v13）**：`molbio_golden_gate` 按标准 BsaI 类几何建模（识别位点 + filler + 4 bp 5' 突出端）：连接处不留识别位点，**载体盒子的两个识别位点保留在骨架上**（标准 destination 载体行为，下一级组装换另一种 IIS 酶）；输出质粒与特征坐标以反向切点为线性化起点（环状质粒，仅显示原点不同），`fragments_to_order` 给出可直接下单的片段序列。突出端设计确定性（按 |GC−2| 排序的 4-mer 池贪心选取），唯一、非回文、非互补，并回溯验证连接处不重建酶位点。
+- **虚拟凝胶（v13）**：`molbio_virtual_gel` 用 log₁₀ 迁移率模型绘制预期条带（`2 + 2·log₁₀(bp)` 条带粗细），是"预期图"而非真实胶的模拟。
 
 ## 典型用法示例
 
@@ -203,6 +211,9 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 "解析这个 .dna 文件并画出质粒图谱"        → molbio_plasmid_map_file(path, enzymes:[...]) → 工具直接写入 <名称>.svg
 "看看 pUC118.dna 里有哪些特征和引物"      → molbio_parse_snapgene(path)
 "把这段序列克隆进 pUC118（EcoRI/HindIII），模拟最终质粒" → molbio_unique_cutters 选酶 → molbio_clone_simulate → molbio_plasmid_map 画新质粒
+"用 BsaI 把三个片段 Golden Gate 装进 pL1" → molbio_golden_gate(vector, inserts:[...], replace_region:{...}) → fragments_to_order 下单 + save_path/map_path
+"我的载体里 BsaI 会不会把插入片段切了？" → molbio_enzyme_lookup(sequence: 片段, enzymes:[BsaI])
+"酶切应该出哪几条带？画个图" → molbio_restriction_sites → molbio_virtual_gel(lanes:[{fragments}])
 "给插入片段设计带酶切位点的克隆引物"      → molbio_clone_primers
 "帮我验证这个测序结果和质粒是否一致"      → molbio_verify_sanger(trace_path, reference_path)
 "帮我在外显子 3 上设计一对 qPCR 引物，产物 80-150 bp" → molbio_design_primers (amplicon_min/max) → molbio_primer_check 复核

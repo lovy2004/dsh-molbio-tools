@@ -13,6 +13,8 @@ import {
   MolbioInputError,
   baseCounts,
   digest,
+  enzymeCuts,
+  enzymePattern,
   findRuns,
   isIisEnzyme,
   normalizeSequence,
@@ -313,6 +315,267 @@ export function simulateClone({ vectorSeq, vectorFeatures, insert, method, enzym
     result.verify = digestComparison(result.final_sequence, vectorSeq, circular, verifyEnzymes, verifyEnzymes.length);
   }
   return result;
+}
+
+// ── Golden Gate assembly (v13) ──────────────────────────────────────────────
+//
+// Geometry model (all sequences top-strand 5'→3', 0-based positions):
+// a type IIS enzyme with recognition `site` (length L) cuts the binding strand
+// `cut` bases from the site start (L + filler downstream of the site) and the
+// complement strand `bottom` bases from the site end — the classic (N/N)
+// notation. Every enzyme in the built-in table produces a 4 bp 5' overhang:
+//  - forward site  [S][filler][x]gene[z][filler][rc(S)]  → the gene keeps a
+//    top-strand 5' overhang x at its left end and a bottom-strand 5' overhang
+//    rc(z) at its right end;
+//  - the vector cassette (inward pair) keeps both sites with the backbone and
+//    discards the stuffer between the cuts; the backbone's right end carries
+//    the bottom overhang rc(y) and its left end the top overhang z'.
+// Annealing therefore requires x_1 = y, x_{k+1} = z_k, and z_n = z', and the
+// final top strand is backbone + y + gene_1 + z_1 + ... + z_{n-1} + gene_n.
+
+const GG_BASES = ['A', 'C', 'G', 'T'];
+
+/** All 256 4-mers, ordered by |GC − 2| then lexicographically (deterministic). */
+function ggJunctionCandidates() {
+  const pool = [];
+  for (let i = 0; i < 256; i++) {
+    let n = i;
+    let seq = '';
+    for (let p = 0; p < 4; p++) {
+      seq += GG_BASES[n % 4];
+      n = Math.floor(n / 4);
+    }
+    let gc = 0;
+    for (const base of seq) if (base === 'G' || base === 'C') gc++;
+    pool.push({ seq, score: Math.abs(gc - 2) });
+  }
+  pool.sort((a, b) => a.score - b.score || (a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0));
+  return pool.map((entry) => entry.seq);
+}
+
+/** A junction is usable when it is non-palindromic and unique up to complement. */
+function ggJunctionOk(seq, used) {
+  if (seq === reverseComplement(seq)) return false;
+  for (const other of used) {
+    if (seq === other || seq === reverseComplement(other)) return false;
+  }
+  return true;
+}
+
+/**
+ * Deterministic backtracking over the candidate pool for the interior
+ * junctions; a combination is accepted only when the assembled plasmid does
+ * not recreate an enzyme recognition site at a seam. The vector's own two
+ * cassette sites remain in the backbone (standard destination-vector
+ * behavior), so the assembled plasmid must show EXACTLY those 2 cuts.
+ */
+function ggSearchInteriors(fixed, genes, backboneTop, enzymeName, maxLeafChecks = 500) {
+  const candidates = ggJunctionCandidates();
+  const used = new Set(fixed);
+  const chosen = [];
+  let leafChecks = 0;
+  let exhausted = false;
+  const probe = () => {
+    leafChecks++;
+    const finalSeq = backboneTop + genes.reduce((acc, gene, index) => acc + (index === 0 ? fixed[0] : chosen[index - 1]) + gene, '');
+    return enzymeCuts(finalSeq, enzymeName).length === 2;
+  };
+  const rec = (k) => {
+    if (k === genes.length - 1) {
+      if (probe()) return true;
+      if (leafChecks >= maxLeafChecks) exhausted = true;
+      return false;
+    }
+    for (const cand of candidates) {
+      if (!ggJunctionOk(cand, used)) continue;
+      used.add(cand);
+      chosen.push(cand);
+      if (rec(k + 1)) return true;
+      chosen.pop();
+      used.delete(cand);
+      if (exhausted) return false;
+    }
+    return false;
+  };
+  if (!rec(0)) return null;
+  return chosen;
+}
+
+/**
+ * Golden Gate assembly simulation (v13). Inserts are BARE fragment sequences
+ * in assembly order; the tool designs the junctions (or reads the vector
+ * cassette's), builds the fragments to order with the IIS recognition sites
+ * and filler bases on the flanks, assembles the final plasmid, and remaps
+ * features. Pass replaceRegion {start, end} (1-based inclusive) to have the
+ * tool ADD the cassette around that region of a bare vector and design both
+ * vector junctions too; otherwise the vector must already carry exactly one
+ * forward and one reverse-complemented recognition site (the inward cassette).
+ */
+export function simulateGoldenGate({ vectorSeq, vectorFeatures, inserts, enzyme = 'BsaI', circular = true, replaceRegion }) {
+  const notes = [];
+  const resolved = enzymePattern(enzyme);
+  if (resolved === undefined || !resolved.iis) {
+    throw new MolbioInputError(`${enzyme} is not a type IIS enzyme in the built-in table; Golden Gate needs an IIS enzyme (e.g. BsaI, BsmBI, Esp3I, BbsI, BspQI, SapI, PaqCI, BtgZI)`);
+  }
+  const { pattern: site, cutOffset: cut, bottom } = resolved;
+  const siteLength = site.length;
+  const filler = cut - siteLength;
+  const overhangLength = siteLength + bottom - cut;
+  if (overhangLength !== 4) {
+    throw new MolbioInputError(`${enzyme} produces a ${overhangLength} bp overhang; this simulator supports the standard 4 bp 5' overhang class`);
+  }
+  if (!Array.isArray(inserts) || inserts.length < 1 || inserts.length > 24) {
+    throw new MolbioInputError('inserts must be an array of 1-24 fragment sequences in assembly order');
+  }
+  const genes = inserts.map((raw, index) => {
+    const gene = normalizeSequence(raw, `inserts[${index}]`);
+    if (gene.length < 12) throw new MolbioInputError(`inserts[${index}] is too short for assembly (${gene.length} bp; need >= 12)`);
+    for (const base of gene) {
+      if (!DNA_BASES.has(base)) throw new MolbioInputError(`inserts[${index}] must be unambiguous ACGT for Golden Gate (found ${JSON.stringify(base)})`);
+    }
+    const internal = enzymeCuts(gene, enzyme);
+    if (internal.length > 0) {
+      throw new MolbioInputError(`${enzyme} cuts INSIDE inserts[${index}] ${internal.length} time(s) at bp ${internal.map((c) => c.cut_position + 1).join(', ')} — remove those sites or choose another enzyme`);
+    }
+    return gene;
+  });
+
+  let workingVector = vectorSeq;
+  let workingFeatures = vectorFeatures;
+  let y;
+  let zPrime;
+  let c1; // 0-based top cut at the forward cassette site (first base of the stuffer)
+  let c2; // 0-based top cut at the reverse cassette site (first base of the right backbone piece)
+
+  if (replaceRegion !== undefined) {
+    const rs0 = replaceRegion.start - 1;
+    const re0 = replaceRegion.end - 1;
+    if (!Number.isInteger(replaceRegion.start) || !Number.isInteger(replaceRegion.end) || rs0 < 0 || re0 >= vectorSeq.length || rs0 > re0) {
+      throw new MolbioInputError(`region ${replaceRegion.start}-${replaceRegion.end} is outside the vector (length ${vectorSeq.length})`);
+    }
+    const preExisting = enzymeCuts(vectorSeq, enzyme);
+    if (preExisting.length > 0) {
+      throw new MolbioInputError(`${enzyme} already cuts the bare vector ${preExisting.length} time(s) (bp ${preExisting.map((c) => c.cut_position + 1).join(', ')}) — remove those sites or pick another enzyme`);
+    }
+    // Design both vector junctions, then add the inward cassette around the region.
+    const pool = ggJunctionCandidates();
+    y = pool.find((cand) => ggJunctionOk(cand, new Set()));
+    zPrime = pool.find((cand) => ggJunctionOk(cand, new Set([y])));
+    const fillerBases = 'A'.repeat(filler);
+    const cassette = site + fillerBases + y + vectorSeq.slice(rs0, re0 + 1) + zPrime + fillerBases + reverseComplement(site);
+    workingVector = vectorSeq.slice(0, rs0) + cassette + vectorSeq.slice(re0 + 1);
+    // The cassette insertion shifts every feature downstream of the region;
+    // features inside the region move with the inserted prefix, and features
+    // crossing a boundary are stretched over the cassette (remapFeatures
+    // reports them as spanning the insertion). Feature coordinates are 1-based.
+    const cassetteDelta = cassette.length - (re0 - rs0 + 1);
+    const prefixShift = siteLength + filler + 4; // S + filler bases + the left junction
+    const regionStart1 = rs0 + 1;
+    const regionEnd1 = re0 + 1;
+    workingFeatures = workingFeatures.map((feature) => {
+      if (feature.end < regionStart1) return { ...feature };
+      if (feature.start > regionEnd1) return { ...feature, start: feature.start + cassetteDelta, end: feature.end + cassetteDelta };
+      if (feature.start >= regionStart1 && feature.end <= regionEnd1) return { ...feature, start: feature.start + prefixShift, end: feature.end + prefixShift };
+      const newStart = feature.start >= regionStart1 ? feature.start + prefixShift : feature.start;
+      return { ...feature, start: newStart, end: feature.end + cassetteDelta };
+    });
+    c1 = rs0 + cut;
+    c2 = rs0 + cassette.length - siteLength - filler; // start of rc(site), minus filler = the reverse top cut
+    notes.push(`no cassette found in the bare vector — the tool added the ${site} cassette around ${replaceRegion.start}-${replaceRegion.end} and designed both vector junctions (${y} / ${zPrime}); pass the vector WITH your own cassette to keep it instead.`);
+  } else {
+    const events = enzymeCuts(vectorSeq, enzyme);
+    const fwd = events.filter((event) => event.orientation === 'forward');
+    const rev = events.filter((event) => event.orientation === 'reverse');
+    if (fwd.length !== 1 || rev.length !== 1) {
+      throw new MolbioInputError(`the vector must carry exactly one forward ${site} site (found ${fwd.length}) and one reverse-complemented ${reverseComplement(site)} site (found ${rev.length}); found cuts at bp ${events.map((e) => e.cut_position + 1).join(', ')}. Pass replace_region to let the tool add the cassette to a bare vector instead.`);
+    }
+    c1 = fwd[0].cut_position;
+    c2 = rev[0].cut_position;
+    y = vectorSeq.slice(c1, c1 + 4);
+    zPrime = vectorSeq.slice(c2 - 4, c2);
+    if (y.length < 4 || zPrime.length < 4) throw new MolbioInputError('the vector cassette sites sit too close to an end for a 4 bp overhang');
+    if (!ggJunctionOk(y, new Set([zPrime])) || !ggJunctionOk(zPrime, new Set([y]))) {
+      throw new MolbioInputError(`the vector cassette junctions (${y} / ${zPrime}) are unusable: palindromic, identical, or complementary — choose a different cassette or pass replace_region so the tool designs them`);
+    }
+  }
+
+  // Uniform presentation: linearize at the reverse cassette cut (c2), so the
+  // backbone piece is presented[0 .. c1p) and the removed stuffer is the tail
+  // [c1p .. len). Features rotate with the sequence; seam-crossers are dropped
+  // with a note. The plasmid is circular, so this only sets the display origin.
+  const presented = workingVector.slice(c2) + workingVector.slice(0, c2);
+  const c1p = c2 < c1 ? c1 - c2 : c1 - c2 + workingVector.length;
+  const rotatedFeatures = [];
+  const rotationDropped = [];
+  for (const feature of workingFeatures) {
+    const start = ((feature.start - 1 - c2 + workingVector.length) % workingVector.length) + 1;
+    const end = ((feature.end - 1 - c2 + workingVector.length) % workingVector.length) + 1;
+    if (start > end) {
+      rotationDropped.push({ ...feature, note: 'crosses the vector display origin; dropped during Golden Gate rotation' });
+    } else {
+      rotatedFeatures.push({ ...feature, start, end });
+    }
+  }
+  workingFeatures = rotatedFeatures;
+  notes.push(`final sequence, feature coordinates, and junction positions are linearized at bp ${c2 + 1} of the input vector (the reverse cassette cut); the plasmid is circular, so this only sets the display origin.`);
+  if (rotationDropped.length > 0) {
+    notes.push(`${rotationDropped.length} feature(s) crossed the vector display origin and were dropped during rotation: ${rotationDropped.map((f) => f.label).join(', ')}`);
+  }
+
+  const backboneTop = presented.slice(0, c1p);
+  const backboneLength = backboneTop.length;
+  const stufferLength = presented.length - backboneLength;
+
+  // Interior junctions (backtracking over the deterministic pool).
+  const chosenInteriors = genes.length > 1
+    ? ggSearchInteriors([y, zPrime], genes, backboneTop, enzyme)
+    : [];
+  if (chosenInteriors === null) {
+    throw new MolbioInputError(`no junction combination for ${genes.length} fragments avoids recreating ${enzyme} sites at a seam; try different fragment boundaries`);
+  }
+  const junctions = [y, ...chosenInteriors, zPrime];
+
+  const insertBlock = genes.reduce((acc, gene, index) => acc + junctions[index] + gene, '');
+  const finalSeq = backboneTop + insertBlock;
+  const insertBlockLength = insertBlock.length;
+  const delta = insertBlockLength - stufferLength;
+  const insertStart = backboneLength + 1;
+  const { kept, dropped } = remapFeatures(workingFeatures, backboneLength + 1, presented.length, delta, insertStart, insertBlockLength, 'GG insert');
+
+  const junctionReport = junctions.map((seq, index) => {
+    let position = backboneLength + 1;
+    for (let k = 0; k < index; k++) position += 4 + genes[k].length;
+    return { position, sequence: seq };
+  });
+
+  const residual = enzymeCuts(finalSeq, enzyme);
+  if (residual.length !== 2) {
+    throw new MolbioInputError(`the assembled plasmid has ${residual.length} ${enzyme} site(s) (expected exactly the 2 retained vector cassette sites; extra sites at bp ${residual.map((c) => c.cut_position + 1).join(', ')}) — this should not happen; report it`);
+  }
+  notes.push(`the vector cassette ${site}/${reverseComplement(site)} sites remain in the backbone (standard destination-vector behavior); assemble the next Golden Gate level with a different type IIS enzyme.`);
+
+  const verify = digestComparison(finalSeq, vectorSeq, circular, ENZYME_NAMES);
+  const fragmentsToOrder = genes.map((gene, index) => {
+    const left = junctions[index];
+    const right = junctions[index + 1];
+    const ordered = site + 'A'.repeat(filler) + left + gene + right + 'A'.repeat(filler) + reverseComplement(site);
+    return { index: index + 1, sequence: ordered, length: ordered.length, left_overhang: left, right_overhang: right, insert_length: gene.length };
+  });
+
+  return {
+    method: 'golden_gate',
+    enzyme,
+    enzyme_site: resolved.display,
+    overhang_length: overhangLength,
+    fragments_to_order: fragmentsToOrder,
+    junctions: junctionReport,
+    final_sequence: finalSeq,
+    delta,
+    features: kept,
+    dropped_features: dropped,
+    verify,
+    notes,
+  };
 }
 
 // ── cloning primers ─────────────────────────────────────────────────────────
