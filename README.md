@@ -114,7 +114,7 @@ dsh-molbio-tools/
 ├── papers.mjs       # 文献库存储（经 harness fs 服务 + 沙箱政策）
 ├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
-│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v12/）
+│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v13/）
 ├── test/
 │   └── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
 ├── docs/
@@ -135,7 +135,7 @@ molbio 工具只在该模式出现，不会把 39 个工具和提示段注入到
 ├── agent.cordis.yml                 # 标准编码 Agent + 末尾的 tool-molbio 行
 ├── preset.yml                       # 显示名称与描述
 └── plugins/
-    └── dsh-molbio-tools-v12/        # 插件文件（版本目录，见下文）
+    └── dsh-molbio-tools-v13/        # 插件文件（版本目录，见下文）
 ```
 
 对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
@@ -143,12 +143,12 @@ molbio 工具只在该模式出现，不会把 39 个工具和提示段注入到
 ### 插件更新（版本目录规则）
 
 DSH 的 standing 挂载按 ESM 模块 URL 缓存模块。**每次更新必须新建版本目录**
-（如 `dsh-molbio-tools-v12/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
+（如 `dsh-molbio-tools-v13/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
 目录里原地改文件。分发者从包根目录把 `.mjs` 文件复制进新版本目录即可：
 
 ```
-cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v12/
-# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v12/index.mjs'
+cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v13/
+# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v13/index.mjs'
 ```
 
 ## 安装（可选：官方组合包 bundle，全局可见）
