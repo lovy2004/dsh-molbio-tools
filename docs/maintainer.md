@@ -29,6 +29,17 @@
 `MolbioInputError extends Error`（零依赖无法 import `HarnessError`，语义上等价于参数/
 输入错误）；未实现可选的 `presentCall`/`presentResult`。
 
+### 自动查看（auto-view）
+
+图片工具写完 SVG 后通过 `view.mjs` 直接调用操作系统默认应用打开（Windows
+`Invoke-Item`、macOS `open`、桌面 Linux `xdg-open`/`$BROWSER`、WSL 经 `wslpath`
+转译），镜像网关 `host.openPath` 的语义与 `canOpenNativePath` 的桌面可达性判定
+（headless Linux 不 spawn；`MOLBIO_AUTO_VIEW=0` 全局关闭，冒烟测试依赖它避免
+真实弹窗）。选择 OS 打开而非浏览器内嵌面板的原因：preset 插件无客户端打包管线，
+无法挂客户端半（路线图中的浏览器内嵌面板仍保留）；opener 用可注入 `internals`
+seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关）并回显
+`auto_viewed`。
+
 ## 开发与测试
 
 ```bash
@@ -41,7 +52,8 @@ node test/smoke.mjs
 SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
 比对、蛋白 MW/pI/消光系数手算值、酶切规则（P 前不切）、100% 效率标准曲线、FASTA/FASTQ
 统计与转换、pUC118 特征提取、efetch XML 解析、BibTeX 转义、协议/实验记录往返、文献库
-增删改查往返、v12 错配容差（精确优先不劣化、无解→有解救援、双链错配映射不变式、
+增删改查往返、auto-view opener 平台门控与命令交接（internals seam，MOLBIO_AUTO_VIEW=0
+防真实 spawn）、v12 错配容差（精确优先不劣化、无解→有解救援、双链错配映射不变式、
 3' 关键区保护与放开、跨内含子 spliced/genomic 双坐标错配报告、参数校验错误路径）、
 v12 Primer3 对齐结构筛查（self-any/self-end 比对分阈值 8.0/3.0 的已知值、8 bp GC 茎
 发夹 >47 °C 与 4 bp 茎不触发的边界、G/C 二聚体 67 °C 在默认阈值被拒/放宽后恢复、
@@ -49,8 +61,8 @@ v12 Primer3 对齐结构筛查（self-any/self-end 比对分阈值 8.0/3.0 的�
 max_sites 拒绝、primer_check 新增热力学字段）、v13 反应条件旋钮（conditions 回显、
 高盐 Tm 上升的引擎级已知值、四参数范围校验）、v13 3' 目标位置偏好（双目标位点排名
 收敛、target_distance 与两引物距离的最小值一致、跨内含子剪接坐标目标、越界报错）、
-v13 酶目录（90+ 全表、BsaI 几何 (1/5)/4 bp 突出端/非回文、双链向切点 [8,16] 与
-[17,8,7] 片段手算值、环状单切、未知酶报错）、v13 Golden Gate（裸载体加盒子 + 载体
+v13 酶目录（90+ 全表、BsaI 几何 (1/5)/4 bp 突出端/非回文、双链向切点 [8,12] 与
+[21,7,4] 片段手算值、环状单切、未知酶报错）、v13 Golden Gate（裸载体加盒子 + 载体
 带盒子两种模式：突出端唯一/非回文/非互补规则、订购片段与连接点序列一致、最终质粒
 按环状旋转包含手算序列、恰好保留 2 个盒子位点、区域内特征丢弃/下游特征平移、
 cassette 模式三片段组装、片段内部位点/非 IIS 酶/缺少盒子/裸载体已有位点/回文盒子

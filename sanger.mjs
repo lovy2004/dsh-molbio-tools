@@ -121,22 +121,71 @@ export function readTraceFromBytes(bytes, path) {
 
 // ── verification ────────────────────────────────────────────────────────────
 
-/** Report amino-acid consequences of single-base changes inside a CDS window. */
+/** Translate a reference window in frame (frame 1 of the window start). */
+function translateWindow(seq) {
+  let protein = '';
+  for (let k = 0; k + 3 <= seq.length; k += 3) protein += codonToAa(seq.slice(k, k + 3));
+  return protein;
+}
+
+/**
+ * Report amino-acid consequences of trace differences inside a CDS window
+ * (frame 1 relative to cdsStart, top strand). Consecutive single-base
+ * deletions in the difference list are merged into one event: a deletion
+ * whose length is NOT a multiple of 3 shifts the reading frame, while an
+ * in-frame deletion removes whole codons and is reported as such.
+ */
 function aaConsequences(reference, differences, cdsStart, cdsEnd) {
   const out = [];
   const inside = differences.filter((d) => d.kind !== 'insertion' && d.ref_pos >= cdsStart && d.ref_pos <= cdsEnd);
-  for (const d of inside.slice(0, 50)) {
+  let i = 0;
+  while (i < inside.length && out.length < 50) {
+    const d = inside[i];
     if (d.kind === 'deletion') {
-      out.push({ ref_pos: d.ref_pos, kind: 'frameshift', note: 'deletion shifts the reading frame' });
+      // Merge consecutive single-base deletions into one deletion event.
+      let j = i;
+      while (j + 1 < inside.length && inside[j + 1].kind === 'deletion' && inside[j + 1].ref_pos === inside[j].ref_pos + 1) j++;
+      const delLen = j - i + 1;
+      const delStart = d.ref_pos;
+      const delEnd = delStart + delLen - 1;
+      const windowStart = cdsStart - 1 + Math.floor((delStart - cdsStart) / 3) * 3;
+      const windowEnd = Math.min(reference.length, windowStart + Math.ceil(delLen / 3) * 3);
+      const before = reference.slice(windowStart, windowEnd);
+      const after = before.slice(0, delStart - 1 - windowStart) + before.slice(delEnd - windowStart);
+      if (delLen % 3 !== 0) {
+        out.push({
+          ref_pos: delStart,
+          kind: 'frameshift',
+          length: delLen,
+          note: `${delLen} bp deletion is not a multiple of 3 and shifts the reading frame`,
+        });
+      } else {
+        out.push({
+          ref_pos: delStart,
+          kind: 'in_frame_deletion',
+          length: delLen,
+          codon_before: before,
+          codon_after: after,
+          aa_before: translateWindow(before),
+          aa_after: translateWindow(after),
+          deleted_bases: reference.slice(delStart - 1, delEnd),
+          note: `${delLen} bp deletion is a multiple of 3; the reading frame is preserved`,
+        });
+      }
+      i = j + 1;
       continue;
     }
     // substitution: translate the original and mutated codon (frame relative to cdsStart)
     const codonIndex = Math.floor((d.ref_pos - cdsStart) / 3);
     const codonStart = cdsStart - 1 + codonIndex * 3;
     const codonEnd = codonStart + 3;
-    if (codonEnd > reference.length) continue;
+    if (codonEnd > reference.length) {
+      i++;
+      continue;
+    }
     const originalCodon = reference.slice(codonStart, codonEnd);
-    const mutatedCodon = originalCodon.slice(0, d.ref_pos - cdsStart) + d.trace_base + originalCodon.slice(d.ref_pos - cdsStart + 1);
+    const within = d.ref_pos - cdsStart - codonIndex * 3; // position of the mutation within its codon (0-2)
+    const mutatedCodon = originalCodon.slice(0, within) + d.trace_base + originalCodon.slice(within + 1);
     const aaBefore = codonToAa(originalCodon);
     const aaAfter = codonToAa(mutatedCodon);
     out.push({
@@ -147,6 +196,7 @@ function aaConsequences(reference, differences, cdsStart, cdsEnd) {
       aa_before: aaBefore,
       aa_after: aaAfter,
     });
+    i++;
   }
   return out;
 }

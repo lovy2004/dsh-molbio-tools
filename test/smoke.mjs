@@ -20,6 +20,12 @@ const { assertSupportedJsonSchema, validateJsonSchemaValue } = dshTools;
 
 const plugin = await import('../index.mjs');
 const lib = await import('../lib.mjs');
+const view = await import('../view.mjs');
+
+// The auto-view opener would spawn real viewer processes on the machine
+// running the tests — disable it globally; the view module gets its own
+// unit checks below through the injectable internals seam.
+process.env.MOLBIO_AUTO_VIEW = '0';
 
 // ── mock registry ───────────────────────────────────────────────────────────
 
@@ -139,6 +145,32 @@ function makeTemplate(n, seed = 42) {
 }
 
 // ── known-value checks ──────────────────────────────────────────────────────
+
+{
+  // auto-view opener: platform gating and the command hand-off (internals seam)
+  assert.equal(view.canAutoView({ platform: 'win32', env: {} }), true);
+  assert.equal(view.canAutoView({ platform: 'darwin', env: {} }), true);
+  assert.equal(view.canAutoView({ platform: 'linux', env: {} }), false);
+  assert.equal(view.canAutoView({ platform: 'linux', env: { DISPLAY: ':0' } }), true);
+  assert.equal(view.canAutoView({ platform: 'win32', env: { MOLBIO_AUTO_VIEW: '0' } }), false);
+  const calls = [];
+  const fakeRun = (cmd, args) => {
+    calls.push({ cmd, args });
+    return undefined;
+  };
+  await view.openDefaultViewer('C:/tmp/map.svg', { platform: 'win32', env: {}, run: fakeRun });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'powershell.exe');
+  assert.ok(calls[0].args.join(' ').includes('Invoke-Item -LiteralPath') && calls[0].args.join(' ').includes('C:/tmp/map.svg'));
+  calls.length = 0;
+  await view.openDefaultViewer('/tmp/map.svg', { platform: 'linux', env: { BROWSER: 'firefox', DISPLAY: ':0' }, run: fakeRun });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'firefox');
+  assert.deepEqual(calls[0].args, ['/tmp/map.svg']);
+  calls.length = 0;
+  assert.equal(await view.openDefaultViewer('/tmp/map.svg', { platform: 'linux', env: {}, run: fakeRun }), false, 'headless Linux never spawns a viewer');
+  assert.equal(calls.length, 0);
+}
 
 {
   const out = await run('molbio_reverse_complement', { sequence: 'ATGC' });
@@ -660,6 +692,54 @@ function makeTemplate(n, seed = 42) {
   const circular = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/span.seq', reference });
   assert.equal(circular.verdict, 'match');
   assert.ok(circular.differences.length === 0);
+}
+
+{
+  // regression: genetic-code fixes — vertebrate mitochondrial AGA/AGG are
+  // stop codons (NCBI table 2); bacterial TGA is Trp (NCBI table 11)
+  const mito = lib.translateFrames('AGAAGGATA', '1', 'mitochondrial_vertebrate');
+  assert.equal(mito.results[0].protein, '**M');
+  assert.equal(mito.results[0].stops, 2);
+  const bac = lib.translateFrames('TGATAA', '1', 'bacterial');
+  assert.equal(bac.results[0].protein, 'W*');
+  assert.equal(bac.results[0].stops, 1);
+}
+
+{
+  // regression: Sanger amino-acid consequences — codon-local substitution
+  // slicing (mutations past the first codon), in-frame vs frameshift deletions
+  const reference = 'ATGTTTGGGCCCTAA' + 'A'.repeat(30);
+  const writeTrace = (label, trace) => memFs.files.set(`C:/tmp/${label}.seq`, `>${label}\n${trace}\n`);
+  const verify = (label) => run('molbio_verify_sanger', { trace_path: `C:/tmp/${label}.seq`, reference, cds_start: 1, cds_end: 12 });
+
+  // substitution at CDS base 5 (second codon TTT, second position): F→Y
+  writeTrace('aa_sub', reference.slice(0, 4) + 'A' + reference.slice(5));
+  const missense = await verify('aa_sub');
+  const change = missense.aa_changes.find((c) => c.ref_pos === 5);
+  assert.equal(change.kind, 'missense');
+  assert.equal(change.aa_before, 'F');
+  assert.equal(change.aa_after, 'Y');
+  assert.equal(change.codon_after, 'TAT');
+
+  // silent third-position change at CDS base 9: GGG→GGC
+  writeTrace('aa_silent', reference.slice(0, 8) + 'C' + reference.slice(9));
+  const silent = await verify('aa_silent');
+  assert.equal(silent.aa_changes.find((c) => c.ref_pos === 9).kind, 'silent');
+
+  // in-frame 3 bp deletion (bases 4-6, the whole TTT codon)
+  writeTrace('aa_del3', reference.slice(0, 3) + reference.slice(6));
+  const inFrame = await verify('aa_del3');
+  const delEntry = inFrame.aa_changes.find((c) => c.kind === 'in_frame_deletion');
+  assert.equal(delEntry.length, 3);
+  assert.equal(delEntry.aa_before, 'F');
+  assert.equal(delEntry.aa_after, '');
+  assert.equal(delEntry.deleted_bases, 'TTT');
+
+  // 1 bp deletion (base 5): frameshift
+  writeTrace('aa_del1', reference.slice(0, 4) + reference.slice(5));
+  const frameShift = await verify('aa_del1');
+  assert.equal(frameShift.aa_changes.some((c) => c.kind === 'frameshift'), true);
+  assert.equal(frameShift.aa_changes.some((c) => c.kind === 'in_frame_deletion'), false);
 }
 
 // ── protein and quantitative tools (batch 2) ────────────────────────────────
@@ -1273,8 +1353,8 @@ function splicedToGenomic(splicedPos, exons) {
   const seq = 'GGTCTC' + 'A'.repeat(10) + 'GAGACC' + 'C'.repeat(10);
   const scanned = await run('molbio_enzyme_lookup', { sequence: seq, enzymes: ['BsaI'] });
   assert.equal(scanned.enzymes[0].cuts, 2);
-  assert.deepEqual(scanned.enzymes[0].cut_events.map((cut) => cut.cut_position), [8, 16]);
-  assert.deepEqual(scanned.enzymes[0].fragments, [17, 8, 7]);
+  assert.deepEqual(scanned.enzymes[0].cut_events.map((cut) => cut.cut_position), [8, 12]);
+  assert.deepEqual(scanned.enzymes[0].fragments, [21, 7, 4]);
   const circularEco = await run('molbio_enzyme_lookup', { sequence: 'GAATTC', enzymes: ['EcoRI'], circular: true });
   assert.deepEqual(circularEco.enzymes[0].fragments, [6]);
   await assert.rejects(() => run('molbio_enzyme_lookup', { enzymes: ['NotAnEnzyme'] }), /unknown enzyme/);
@@ -1332,14 +1412,14 @@ function splicedToGenomic(splicedPos, exons) {
     }
   }
   // final plasmid = vector with cassette retained + fragments, up to rotation
-  const expected = vector.slice(0, 60) + 'GGTCTC' + 'A' + out.junctions[0].sequence + g1 + out.junctions[1].sequence + g2 + 'A' + 'GAGACC' + vector.slice(100);
+  const expected = vector.slice(0, 60) + 'GGTCTC' + 'A' + out.junctions[0].sequence + g1 + out.junctions[1].sequence + g2 + out.junctions[2].sequence + 'A' + 'GAGACC' + vector.slice(100);
   assert.equal(out.length, expected.length);
   assert.ok((out.final_sequence + out.final_sequence).includes(expected), 'final sequence must equal the expected assembly up to circular rotation');
   assert.equal(lib.enzymeCuts(out.final_sequence, 'BsaI').length, 2, 'exactly the 2 retained vector cassette sites');
   assert.ok(out.dropped_features.some((feature) => feature.label === 'lacZ'), 'feature inside the replaced region is dropped');
   const ampR = out.features.find((feature) => feature.label === 'AmpR');
-  assert.deepEqual([ampR.start, ampR.end], [27, 67], 'AmpR shifts into the linearized backbone frame');
-  assert.equal(out.delta, 78);
+  assert.deepEqual([ampR.start, ampR.end], [31, 71], 'AmpR shifts into the linearized backbone frame');
+  assert.equal(out.delta, 82);
   assert.ok(out.verify.length > 0, 'verification digests are produced');
   assert.equal(out.save_path, 'C:/tmp/gg.fa');
   assert.equal(out.map_path, 'C:/tmp/gg.svg');
@@ -1361,8 +1441,8 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(cassetteOut.junctions[0].sequence, 'CGAC');
   assert.equal(cassetteOut.junctions[3].sequence, 'GTCT');
   assert.equal(cassetteOut.fragments_to_order[0].sequence, 'GGTCTC' + 'A' + 'CGAC' + f1 + cassetteOut.junctions[1].sequence + 'A' + 'GAGACC');
-  // top strand = backbone (with the retained cassette; linearized at the reverse cut, so the filler A leads) + left junction + fragments + interiors
-  const cassetteExpected = 'A' + 'GAGACC' + right + left + 'GGTCTC' + 'A' + 'CGAC' + f1 + cassetteOut.junctions[1].sequence + f2 + cassetteOut.junctions[2].sequence + f3;
+  // top strand = backbone (with the retained cassette; linearized at the reverse top cut, so the vector junction zPrime leads) + left junction + fragments + interiors
+  const cassetteExpected = cassetteOut.junctions[3].sequence + 'A' + 'GAGACC' + right + left + 'GGTCTC' + 'A' + 'CGAC' + f1 + cassetteOut.junctions[1].sequence + f2 + cassetteOut.junctions[2].sequence + f3;
   assert.equal(cassetteOut.length, cassetteExpected.length);
   assert.ok((cassetteOut.final_sequence + cassetteOut.final_sequence).includes(cassetteExpected), 'cassette-mode assembly up to circular rotation');
   assert.equal(lib.enzymeCuts(cassetteOut.final_sequence, 'BsaI').length, 2);

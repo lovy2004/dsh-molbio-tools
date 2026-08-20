@@ -480,7 +480,7 @@ export function simulateGoldenGate({ vectorSeq, vectorFeatures, inserts, enzyme 
       return { ...feature, start: newStart, end: feature.end + cassetteDelta };
     });
     c1 = rs0 + cut;
-    c2 = rs0 + cassette.length - siteLength - filler; // start of rc(site), minus filler = the reverse top cut
+    c2 = rs0 + cassette.length - siteLength - filler - overhangLength; // first base of zPrime = the reverse top-strand cut
     notes.push(`no cassette found in the bare vector — the tool added the ${site} cassette around ${replaceRegion.start}-${replaceRegion.end} and designed both vector junctions (${y} / ${zPrime}); pass the vector WITH your own cassette to keep it instead.`);
   } else {
     const events = enzymeCuts(vectorSeq, enzyme);
@@ -492,7 +492,7 @@ export function simulateGoldenGate({ vectorSeq, vectorFeatures, inserts, enzyme 
     c1 = fwd[0].cut_position;
     c2 = rev[0].cut_position;
     y = vectorSeq.slice(c1, c1 + 4);
-    zPrime = vectorSeq.slice(c2 - 4, c2);
+    zPrime = vectorSeq.slice(c2, c2 + 4);
     if (y.length < 4 || zPrime.length < 4) throw new MolbioInputError('the vector cassette sites sit too close to an end for a 4 bp overhang');
     if (!ggJunctionOk(y, new Set([zPrime])) || !ggJunctionOk(zPrime, new Set([y]))) {
       throw new MolbioInputError(`the vector cassette junctions (${y} / ${zPrime}) are unusable: palindromic, identical, or complementary — choose a different cassette or pass replace_region so the tool designs them`);
@@ -543,6 +543,9 @@ export function simulateGoldenGate({ vectorSeq, vectorFeatures, inserts, enzyme 
   const { kept, dropped } = remapFeatures(workingFeatures, backboneLength + 1, presented.length, delta, insertStart, insertBlockLength, 'GG insert');
 
   const junctionReport = junctions.map((seq, index) => {
+    // The final junction zPrime is the backbone's own 5' overhang, which now
+    // sits at the very start of the linearized final sequence.
+    if (index === junctions.length - 1) return { position: 1, sequence: seq };
     let position = backboneLength + 1;
     for (let k = 0; k < index; k++) position += 4 + genes[k].length;
     return { position, sequence: seq };

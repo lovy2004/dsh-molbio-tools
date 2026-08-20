@@ -28,9 +28,9 @@
 | 工具 | 功能 |
 | --- | --- |
 | `molbio_parse_snapgene` | **SnapGene `.dna` 文件解析**（研究者最常用的格式）：图谱名称、拓扑（环状/线形）、注释特征（类型/区段/链向/标签，支持多段 join 与 HTML 文本清洗）、序列、描述、accession、已保存引物 |
-| `molbio_plasmid_map_file` | **一步成图**：直接读 `.dna`（SnapGene）或 `.gb`/`.gbk`（GenBank）文件，**把 SVG 图谱写入工作区文件**并返回 `svg_path`（默认 `<名称>.svg`，可用 `output_path` 指定） |
+| `molbio_plasmid_map_file` | **一步成图**：直接读 `.dna`（SnapGene）或 `.gb`/`.gbk`（GenBank）文件，**把 SVG 图谱写入工作区文件**并返回 `svg_path`（默认 `<名称>.svg`，可用 `output_path` 指定）；写入后**自动用系统默认应用打开**（`auto_view`，默认开启） |
 | `molbio_parse_genbank` | GenBank flatfile 文本解析（complement/join 定位、/gene、/product 等） |
-| `molbio_plasmid_map` | 从序列 + 特征数组渲染并**直接写入 SVG 文件**（环形默认/线形可选）：特征分道、链向箭头、酶切标记、bp 刻度；同样返回 `svg_path` |
+| `molbio_plasmid_map` | 从序列 + 特征数组渲染并**直接写入 SVG 文件**（环形默认/线形可选）：特征分道、链向箭头、酶切标记、bp 刻度；同样返回 `svg_path` 并自动打开 |
 
 ### 克隆构建
 
@@ -53,9 +53,9 @@
 | 工具 | 功能 |
 | --- | --- |
 | `molbio_qpcr_analysis` | ΔΔCt 法：各组均值/SD、ΔCt、ΔΔCt、fold change（可设扩增效率） |
-| `molbio_qpcr_efficiency` | 稀释系列 → 标准曲线：斜率/截距/R²、扩增效率 E=10^(−1/slope)−1；`plot_path` 直接写出带拟合线的 SVG 标准曲线 |
-| `molbio_plot` | 通用 SVG 图表：柱状图（均值±SD 误差棒）与散点图（可选最小二乘拟合线），写成工作区文件 |
-| `molbio_virtual_gel` | **v13 虚拟琼脂糖凝胶**：各泳道给出预期片段大小（酶切/PCR/连接检查）→ SVG 凝胶图 + 分子量 ladder（1kb/100bp），与真实胶对照；`output_path` 写工作区文件 |
+| `molbio_qpcr_efficiency` | 稀释系列 → 标准曲线：斜率/截距/R²、扩增效率 E=10^(−1/slope)−1；`plot_path` 直接写出带拟合线的 SVG 标准曲线并自动打开 |
+| `molbio_plot` | 通用 SVG 图表：柱状图（均值±SD 误差棒）与散点图（可选最小二乘拟合线），写成工作区文件并自动打开 |
+| `molbio_virtual_gel` | **v13 虚拟琼脂糖凝胶**：各泳道给出预期片段大小（酶切/PCR/连接检查）→ SVG 凝胶图 + 分子量 ladder（1kb/100bp），与真实胶对照；`output_path` 写工作区文件并自动打开 |
 | `molbio_lab_math` | 稀释计算（C₁V₁=C₂V₂）、摩尔浓度、DNA 拷贝数 |
 
 ### 蛋白质
@@ -115,9 +115,10 @@ dsh-molbio-tools/
 ├── seqio.mjs        # FASTA/FASTQ 解析与统计
 ├── records.mjs      # 协议库/实验日志存储
 ├── papers.mjs       # 文献库存储（经 harness fs 服务 + 沙箱政策）
+├── view.mjs         # 自动查看：把生成的 SVG 交给系统默认应用打开（镜像 host.openPath 语义）
 ├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
-│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v13/）
+│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v14/）
 ├── test/
 │   └── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
 ├── docs/
@@ -138,7 +139,7 @@ molbio 工具只在该模式出现，不会把 42 个工具和提示段注入到
 ├── agent.cordis.yml                 # 标准编码 Agent + 末尾的 tool-molbio 行
 ├── preset.yml                       # 显示名称与描述
 └── plugins/
-    └── dsh-molbio-tools-v13/        # 插件文件（版本目录，见下文）
+    └── dsh-molbio-tools-v14/        # 插件文件（版本目录，见下文）
 ```
 
 对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
@@ -146,12 +147,12 @@ molbio 工具只在该模式出现，不会把 42 个工具和提示段注入到
 ### 插件更新（版本目录规则）
 
 DSH 的 standing 挂载按 ESM 模块 URL 缓存模块。**每次更新必须新建版本目录**
-（如 `dsh-molbio-tools-v13/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
+（如 `dsh-molbio-tools-v14/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
 目录里原地改文件。分发者从包根目录把 `.mjs` 文件复制进新版本目录即可：
 
 ```
-cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v13/
-# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v13/index.mjs'
+cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v14/
+# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v14/index.mjs'
 ```
 
 ## 安装（可选：官方组合包 bundle，全局可见）
@@ -189,6 +190,7 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 
 - **纯计算工具**（序列/引物/统计）确定性、无副作用；输入输出均为可持久化的 JSON。
 - **图谱工具直接写文件**：`molbio_plasmid_map` / `molbio_plasmid_map_file` 把 SVG 写入工作区（`ctx.fs` + 会话沙箱政策），模型上下文里只出现文件路径，避免大文本截断。
+- **自动查看（auto-view）**：所有生成图片的工具（`molbio_plasmid_map`、`molbio_plasmid_map_file`、`molbio_clone_simulate`/`molbio_golden_gate` 的 `map_path`、`molbio_qpcr_efficiency` 的 `plot_path`、`molbio_plot`、`molbio_virtual_gel`）写完 SVG 后**自动用操作系统默认应用打开**（Windows 为 `Invoke-Item`、macOS 为 `open`、桌面 Linux 为 `xdg-open`/`$BROWSER`、WSL 自动转译为 Windows 路径），结果中的 `auto_viewed` 字段报告交接是否成功。每调用可用 `auto_view: false` 关闭；无桌面环境（headless Linux）与 `MOLBIO_AUTO_VIEW=0` 时自动跳过。
 - **克隆模拟约定**：酶切-连接要求"插入片段按 5'→3' 书写、上游酶在 5' 端"；单酶连接会给出双向连接说明与两种方向的验证酶切；特征坐标按插入/缺失自动平移，跨越连接点的特征标注 `spans_insertion`。
 - **Sanger 验证**：参考序列按环状处理（读段跨 origin 也能正确对齐）；`.ab1` 低质量（<20）位点单独标注且不计入"differences_found"判定；氨基酸后果按 frame 1 假设报告。
 - **文献库与检索**走 harness 的 `fs`/`web` 服务：库文件默认 `papers.json` 在工作区内，写入遵循会话的沙箱政策（`ctx.sandboxPolicy`），与其他文件工具同权。

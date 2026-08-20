@@ -66,6 +66,7 @@ import {
   workspaceFilePath,
   writeWorkspaceFile,
 } from './papers.mjs';
+import { openDefaultViewer } from './view.mjs';
 
 export const name = 'dsh-molbio-tools';
 export const inject = ['tools', 'systemPrompt'];
@@ -1106,20 +1107,43 @@ function svgFileName(name) {
   return (cleaned === '' ? 'plasmid' : cleaned) + '.svg';
 }
 
-/** Write an SVG map into the session workspace through the sandboxed fs seam. */
+/**
+ * Write an SVG image into the session workspace through the sandboxed fs
+ * seam, then (unless auto_view is false) hand it to the OS default viewer so
+ * the user sees it without opening the file manually. Returns the written
+ * path and whether the auto-view hand-off succeeded.
+ */
 async function writeSvgFile(ctx, exec, args, svg, defaultName) {
   const fs = fsService(ctx);
   const sandboxPolicyService = ctx.get('sandboxPolicy');
   const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
   const file = workspaceFilePath(args.output_path ?? svgFileName(defaultName), exec, policy?.workspaceRoot);
   await writeWorkspaceFile(fs, file, svg, policy);
-  return file;
+  let viewed = false;
+  if (args.auto_view !== false) {
+    try {
+      viewed = await openDefaultViewer(file);
+    } catch {
+      viewed = false;
+    }
+  }
+  return { file, viewed };
+}
+
+/** Auto-view one image written by a direct write path (clone/Golden Gate/qPCR/plot tools). */
+async function autoViewWritten(args, file) {
+  if (args.auto_view === false) return false;
+  try {
+    return await openDefaultViewer(file);
+  } catch {
+    return false;
+  }
 }
 
 const plasmidMapTool = (ctx) => define({
   safe: false,
   name: 'molbio_plasmid_map',
-  description: 'Render a plasmid map (circular by default, or linear) from a sequence plus features (from molbio_parse_genbank / molbio_parse_snapgene or hand-written) and WRITE it as a standalone SVG file in the session workspace. The tool writes the file itself — the SVG text never reaches the conversation, so do not try to re-render or copy it. Tell the user the returned svg_path and that they can open it in a browser.',
+  description: 'Render a plasmid map (circular by default, or linear) from a sequence plus features (from molbio_parse_genbank / molbio_parse_snapgene or hand-written) and WRITE it as a standalone SVG file in the session workspace. The tool writes the file itself — the SVG text never reaches the conversation, so do not try to re-render or copy it. After writing, the tool also opens the SVG automatically with the OS default application (auto_view, default true) so the user sees the picture without hunting for the file; pass auto_view: false to skip.',
   parameters: {
     type: 'object',
     required: ['sequence'],
@@ -1132,6 +1156,7 @@ const plasmidMapTool = (ctx) => define({
       gc_skew: { type: 'boolean', description: 'Draw the GC skew ring (default false).' },
       show_unique_cutters: { type: 'boolean', description: 'Mark enzymes that cut this sequence exactly once (green labels, default false).' },
       output_path: { type: 'string', description: 'Optional SVG file path; default: <name>.svg in the session workspace.' },
+      auto_view: { type: 'boolean', description: 'Open the SVG automatically with the OS default application after writing (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -1145,13 +1170,15 @@ const plasmidMapTool = (ctx) => define({
       circular: { type: 'boolean' },
       feature_count: { type: 'integer' },
       enzyme_count: { type: 'integer' },
+      auto_viewed: { type: 'boolean' },
     },
   },
   render(value) {
     const enzymeNote = value.enzyme_count > 0
       ? `${value.enzyme_count} restriction enzyme cut site(s) marked.`
       : 'no restriction enzymes requested; pass `enzymes` to mark cut sites.';
-    return `SVG plasmid map saved to ${value.svg_path} (${value.name}, ${value.length} bp, ${value.circular ? 'circular' : 'linear'}, ${value.feature_count} feature(s)). ${enzymeNote} Tell the user to open the file in a browser.`;
+    const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
+    return `SVG plasmid map saved to ${value.svg_path} (${value.name}, ${value.length} bp, ${value.circular ? 'circular' : 'linear'}, ${value.feature_count} feature(s)). ${enzymeNote} ${viewNote}`;
   },
   async execute(args, exec) {
     const sequence = normalizeSequence(args.sequence, 'plasmid sequence');
@@ -1192,7 +1219,7 @@ const plasmidMapTool = (ctx) => define({
       sequence,
       gc_skew: args.gc_skew === true,
     });
-    const file = await writeSvgFile(ctx, exec, args, svg, name);
+    const { file, viewed } = await writeSvgFile(ctx, exec, args, svg, name);
     return {
       svg_path: file,
       name,
@@ -1200,6 +1227,7 @@ const plasmidMapTool = (ctx) => define({
       circular,
       feature_count: features.length,
       enzyme_count: enzymes.reduce((sum, enzyme) => sum + enzyme.cut_offsets.length, 0),
+      auto_viewed: viewed,
     };
   },
 });
@@ -1299,7 +1327,7 @@ const parseSnapgeneTool = (ctx) => define({
 const plasmidMapFileTool = (ctx) => define({
   safe: false,
   name: 'molbio_plasmid_map_file',
-  description: 'Read a plasmid file (.dna SnapGene, or .gb/.gbk GenBank) from disk and render its map, WRITING it as a standalone SVG file in the session workspace in one call. Features come from the file\'s annotations; optionally mark restriction enzyme cut sites. The tool writes the file itself — the SVG text never reaches the conversation, so do not try to re-render or copy it. Tell the user the returned svg_path and that they can open it in a browser.',
+  description: 'Read a plasmid file (.dna SnapGene, or .gb/.gbk GenBank) from disk and render its map, WRITING it as a standalone SVG file in the session workspace in one call. Features come from the file\'s annotations; optionally mark restriction enzyme cut sites. The tool writes the file itself — the SVG text never reaches the conversation, so do not try to re-render or copy it. After writing, the tool also opens the SVG automatically with the OS default application (auto_view, default true) so the user sees the picture without hunting for the file; pass auto_view: false to skip.',
   parameters: {
     type: 'object',
     required: ['path'],
@@ -1311,6 +1339,7 @@ const plasmidMapFileTool = (ctx) => define({
       gc_skew: { type: 'boolean', description: 'Draw the GC skew ring (default false).' },
       show_unique_cutters: { type: 'boolean', description: 'Mark enzymes that cut this plasmid exactly once (green labels, default false).' },
       output_path: { type: 'string', description: 'Optional SVG file path; default: <name>.svg in the session workspace.' },
+      auto_view: { type: 'boolean', description: 'Open the SVG automatically with the OS default application after writing (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -1324,10 +1353,12 @@ const plasmidMapFileTool = (ctx) => define({
       circular: { type: 'boolean' },
       feature_count: { type: 'integer' },
       enzyme_count: { type: 'integer' },
+      auto_viewed: { type: 'boolean' },
     },
   },
   render(value) {
-    return `SVG plasmid map saved to ${value.svg_path} (${value.name}, ${value.length} bp, ${value.circular ? 'circular' : 'linear'}, ${value.feature_count} feature(s), ${value.enzyme_count} enzyme cut mark(s)). Tell the user to open the file in a browser.`;
+    const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
+    return `SVG plasmid map saved to ${value.svg_path} (${value.name}, ${value.length} bp, ${value.circular ? 'circular' : 'linear'}, ${value.feature_count} feature(s), ${value.enzyme_count} enzyme cut mark(s)). ${viewNote}`;
   },
   async execute(args, exec) {
     const lower = args.path.toLowerCase();
@@ -1366,7 +1397,7 @@ const plasmidMapFileTool = (ctx) => define({
       sequence: parsed.sequence,
       gc_skew: args.gc_skew === true,
     });
-    const file = await writeSvgFile(ctx, exec, args, svg, name);
+    const { file, viewed } = await writeSvgFile(ctx, exec, args, svg, name);
     return {
       svg_path: file,
       name,
@@ -1374,6 +1405,7 @@ const plasmidMapFileTool = (ctx) => define({
       circular,
       feature_count: parsed.features.length,
       enzyme_count: enzymes.reduce((sum, enzyme) => sum + enzyme.cut_offsets.length, 0),
+      auto_viewed: viewed,
     };
   },
 });
@@ -1784,7 +1816,7 @@ const uniqueCuttersTool = (ctx) => define({
 const cloneSimulateTool = (ctx) => define({
   safe: (args) => args.save_path === undefined && args.map_path === undefined,
   name: 'molbio_clone_simulate',
-  description: 'Simulate a cloning reaction in silico and return the final plasmid sequence with its remapped features. method=restriction: the tool itself checks that each enzyme cuts the vector exactly once (do not pre-verify by thinking), digests the insert with the same enzymes, ligates, remaps feature coordinates, and predicts verification digests; add_flanks: true lets the tool add the enzyme sites to a bare insert; orientation=auto (default) reverse-complements an inverted insert automatically. method=gibson: replace the vector region (region_start..region_end) with the insert and report the insert-to-order with homology arms. Save the final plasmid with save_path (FASTA) and/or draw the new plasmid map directly with map_path (SVG).',
+  description: 'Simulate a cloning reaction in silico and return the final plasmid sequence with its remapped features. method=restriction: the tool itself checks that each enzyme cuts the vector exactly once (do not pre-verify by thinking), digests the insert with the same enzymes, ligates, remaps feature coordinates, and predicts verification digests; add_flanks: true lets the tool add the enzyme sites to a bare insert; orientation=auto (default) reverse-complements an inverted insert automatically. method=gibson: replace the vector region (region_start..region_end) with the insert and report the insert-to-order with homology arms. Save the final plasmid with save_path (FASTA) and/or draw the new plasmid map directly with map_path (SVG), which then opens automatically with the OS default application (auto_view default true; set auto_view: false to skip).',
   parameters: {
     type: 'object',
     required: ['insert'],
@@ -1802,6 +1834,7 @@ const cloneSimulateTool = (ctx) => define({
       verify_enzymes: { type: 'array', items: { type: 'string' }, description: 'Enzymes for the verification digest (default: automatically chosen diagnostic enzymes).' },
       save_path: { type: 'string', description: 'Optional path to save the final plasmid as FASTA in the workspace.' },
       map_path: { type: 'string', description: 'Optional path to also draw the new plasmid map (SVG) with the remapped features and the top verification enzymes marked.' },
+      auto_view: { type: 'boolean', description: 'Open the generated map SVG automatically with the OS default application (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -1845,6 +1878,7 @@ const cloneSimulateTool = (ctx) => define({
       notes: { type: 'array', items: { type: 'string' } },
       save_path: { type: 'string' },
       map_path: { type: 'string' },
+      auto_viewed: { type: 'boolean' },
       insert_reverse_complemented: { type: 'boolean' },
       insert_with_flanks: { type: 'string' },
     },
@@ -1864,7 +1898,7 @@ const cloneSimulateTool = (ctx) => define({
     }
     for (const note of value.notes) lines.push(`note: ${note}`);
     if (value.save_path !== undefined) lines.push(`final plasmid saved to ${value.save_path}`);
-    if (value.map_path !== undefined) lines.push(`plasmid map SVG written to ${value.map_path}`);
+    if (value.map_path !== undefined) lines.push(`plasmid map SVG written to ${value.map_path}${value.auto_viewed === true ? ' and opened automatically in your default viewer' : ''}`);
     lines.push('The remapped `features` and `final_sequence` in the output value are ready for molbio_plasmid_map — do not recompute coordinates by hand.');
     return lines.join('\n');
   },
@@ -1933,6 +1967,7 @@ const cloneSimulateTool = (ctx) => define({
       const file = workspaceFilePath(args.map_path, exec, policy?.workspaceRoot);
       await writeWorkspaceFile(fs, file, svg, policy);
       out.map_path = file;
+      out.auto_viewed = await autoViewWritten(args, file);
     }
     return out;
   },
@@ -1967,7 +2002,7 @@ const GG_FRAGMENT_SCHEMA = {
 const goldenGateTool = (ctx) => define({
   safe: false,
   name: 'molbio_golden_gate',
-  description: 'Simulate a Golden Gate assembly (type IIS enzyme, e.g. BsaI) in silico. Pass the vector (with its own inward BsaI-style cassette, or BARE with replace_region so the tool adds the cassette and designs both vector junctions) and the BARE fragment sequences in assembly order: the tool designs unique, non-palindromic, non-complementary 4 bp junctions, checks that the enzyme never cuts inside a fragment or the bare vector, builds the fragments-to-order with recognition sites and filler bases, assembles the final plasmid (no recognition site appears at any junction; the vector cassette sites stay in the backbone, as in standard destination vectors), remaps feature coordinates, and predicts verification digests. Save the final plasmid with save_path (FASTA) and/or draw the map with map_path (SVG).',
+  description: 'Simulate a Golden Gate assembly (type IIS enzyme, e.g. BsaI) in silico. Pass the vector (with its own inward BsaI-style cassette, or BARE with replace_region so the tool adds the cassette and designs both vector junctions) and the BARE fragment sequences in assembly order: the tool designs unique, non-palindromic, non-complementary 4 bp junctions, checks that the enzyme never cuts inside a fragment or the bare vector, builds the fragments-to-order with recognition sites and filler bases, assembles the final plasmid (no recognition site appears at any junction; the vector cassette sites stay in the backbone, as in standard destination vectors), remaps feature coordinates, and predicts verification digests. Save the final plasmid with save_path (FASTA) and/or draw the map with map_path (SVG), which then opens automatically with the OS default application (auto_view default true; set auto_view: false to skip).',
   parameters: {
     type: 'object',
     required: ['inserts'],
@@ -1988,6 +2023,7 @@ const goldenGateTool = (ctx) => define({
       verify_enzymes: { type: 'array', items: { type: 'string' }, description: 'Enzymes for the verification digest (default: automatically chosen diagnostic enzymes).' },
       save_path: { type: 'string', description: 'Optional path to save the final plasmid as FASTA in the workspace.' },
       map_path: { type: 'string', description: 'Optional path to also draw the new plasmid map (SVG) with the remapped features and the top verification enzymes marked.' },
+      auto_view: { type: 'boolean', description: 'Open the generated map SVG automatically with the OS default application (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -2022,6 +2058,7 @@ const goldenGateTool = (ctx) => define({
       notes: { type: 'array', items: { type: 'string' } },
       save_path: { type: 'string' },
       map_path: { type: 'string' },
+      auto_viewed: { type: 'boolean' },
     },
   },
   render(value) {
@@ -2041,7 +2078,7 @@ const goldenGateTool = (ctx) => define({
     }
     for (const note of value.notes) lines.push(`note: ${note}`);
     if (value.save_path !== undefined) lines.push(`final plasmid saved to ${value.save_path}`);
-    if (value.map_path !== undefined) lines.push(`plasmid map SVG written to ${value.map_path}`);
+    if (value.map_path !== undefined) lines.push(`plasmid map SVG written to ${value.map_path}${value.auto_viewed === true ? ' and opened automatically in your default viewer' : ''}`);
     lines.push('The remapped `features` and `final_sequence` are ready for molbio_plasmid_map — do not recompute coordinates by hand.');
     return lines.join('\n');
   },
@@ -2100,6 +2137,7 @@ const goldenGateTool = (ctx) => define({
       const file = workspaceFilePath(args.map_path, exec, policy?.workspaceRoot);
       await writeWorkspaceFile(fs, file, svg, policy);
       out.map_path = file;
+      out.auto_viewed = await autoViewWritten(args, file);
     }
     return out;
   },
@@ -2333,11 +2371,13 @@ const verifySangerTool = (ctx) => define({
           required: ['ref_pos', 'kind'],
           properties: {
             ref_pos: { type: 'integer' },
-            kind: { type: 'string', enum: ['silent', 'missense', 'stop_codon_change', 'frameshift'] },
+            kind: { type: 'string', enum: ['silent', 'missense', 'stop_codon_change', 'frameshift', 'in_frame_deletion'] },
+            length: { type: 'integer' },
             codon_before: { type: 'string' },
             codon_after: { type: 'string' },
             aa_before: { type: 'string' },
             aa_after: { type: 'string' },
+            deleted_bases: { type: 'string' },
             note: { type: 'string' },
           },
         },
@@ -2360,6 +2400,7 @@ const verifySangerTool = (ctx) => define({
       lines.push('amino-acid consequences in the CDS window:');
       for (const change of value.aa_changes) {
         if (change.kind === 'frameshift') lines.push(`  @${change.ref_pos}: frameshift (${change.note})`);
+        else if (change.kind === 'in_frame_deletion') lines.push(`  @${change.ref_pos}: in-frame deletion of ${change.length} bp (${change.deleted_bases ?? ''} removed; aa ${change.aa_before ?? ''} deleted)`);
         else lines.push(`  @${change.ref_pos}: ${change.kind} ${change.aa_before}${change.aa_before === change.aa_after ? '' : '→' + change.aa_after} (${change.codon_before}→${change.codon_after})`);
       }
     }
@@ -2536,7 +2577,7 @@ const codonOptimizeTool = define({
 const qpcrEfficiencyTool = (ctx) => define({
   safe: (args) => args.plot_path === undefined || args.plot_path === '',
   name: 'molbio_qpcr_efficiency',
-  description: 'Fit a qPCR standard curve from a dilution series: dilution_factors (e.g. [1, 10, 100, 1000]) with the matching ct_values. Fits Ct vs log10(relative quantity), reports slope, intercept, R², and amplification efficiency E = 10^(−1/slope) − 1. Pass plot_path to write the scatter + fit line as an SVG file in the workspace.',
+  description: 'Fit a qPCR standard curve from a dilution series: dilution_factors (e.g. [1, 10, 100, 1000]) with the matching ct_values. Fits Ct vs log10(relative quantity), reports slope, intercept, R², and amplification efficiency E = 10^(−1/slope) − 1. Pass plot_path to write the scatter + fit line as an SVG file in the workspace and open it automatically with the OS default application (auto_view default true).',
   parameters: {
     type: 'object',
     required: ['dilution_factors', 'ct_values'],
@@ -2544,6 +2585,7 @@ const qpcrEfficiencyTool = (ctx) => define({
       dilution_factors: { type: 'array', items: { type: 'number' }, description: 'Dilution factors, e.g. [1, 10, 100, 1000].' },
       ct_values: { type: 'array', items: { type: 'number' }, description: 'Ct values matching the dilution factors.' },
       plot_path: { type: 'string', description: 'Optional path to write the standard-curve SVG plot.' },
+      auto_view: { type: 'boolean', description: 'Open the plot automatically with the OS default application (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -2570,6 +2612,7 @@ const qpcrEfficiencyTool = (ctx) => define({
         },
       },
       plot_path: { type: 'string' },
+      auto_viewed: { type: 'boolean' },
     },
   },
   render(value) {
@@ -2577,7 +2620,7 @@ const qpcrEfficiencyTool = (ctx) => define({
       `standard curve from ${value.n} points: Ct = ${value.intercept} + ${value.slope}·log10(relative quantity)`,
       `R² = ${value.r_squared} · efficiency = ${value.efficiency_percent}%`,
     ];
-    if (value.plot_path !== undefined) lines.push(`plot written to ${value.plot_path}`);
+    if (value.plot_path !== undefined) lines.push(`plot written to ${value.plot_path}${value.auto_viewed === true ? ' and opened automatically in your default viewer' : ''}`);
     return lines.join('\n');
   },
   async execute(args, exec) {
@@ -2619,6 +2662,7 @@ const qpcrEfficiencyTool = (ctx) => define({
       });
       await writeWorkspaceFile(fs, file, svg, policy);
       out.plot_path = file;
+      out.auto_viewed = await autoViewWritten(args, file);
     }
     return out;
   },
@@ -2627,7 +2671,7 @@ const qpcrEfficiencyTool = (ctx) => define({
 const plotTool = (ctx) => define({
   safe: false,
   name: 'molbio_plot',
-  description: 'Draw a chart as a standalone SVG file in the workspace. kind=bar: labels/values with optional error bars (e.g. qPCR fold change mean ± SD). kind=scatter: x/y series, with fit=true adding a least-squares line. output_path is required — the SVG is written by the tool.',
+  description: 'Draw a chart as a standalone SVG file in the workspace. kind=bar: labels/values with optional error bars (e.g. qPCR fold change mean ± SD). kind=scatter: x/y series, with fit=true adding a least-squares line. output_path is required — the SVG is written by the tool and then opened automatically with the OS default application (auto_view default true; set auto_view: false to skip).',
   parameters: {
     type: 'object',
     required: ['kind', 'output_path'],
@@ -2643,6 +2687,7 @@ const plotTool = (ctx) => define({
       x: { type: 'array', items: { type: 'number' }, description: 'Scatter x values.' },
       y: { type: 'array', items: { type: 'number' }, description: 'Scatter y values.' },
       fit: { type: 'boolean', description: 'Scatter: draw the least-squares line (default false).' },
+      auto_view: { type: 'boolean', description: 'Open the chart automatically with the OS default application (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -2653,10 +2698,12 @@ const plotTool = (ctx) => define({
       plot_path: { type: 'string' },
       kind: { type: 'string', enum: ['bar', 'scatter'] },
       points: { type: 'integer' },
+      auto_viewed: { type: 'boolean' },
     },
   },
   render(value) {
-    return `chart written to ${value.plot_path} (${value.kind}, ${value.points} points) — tell the user to open it in a browser.`;
+    const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
+    return `chart written to ${value.plot_path} (${value.kind}, ${value.points} points). ${viewNote}`;
   },
   async execute(args, exec) {
     const fs = fsService(ctx);
@@ -2696,7 +2743,7 @@ const plotTool = (ctx) => define({
       throw new MolbioInputError('kind must be "bar" or "scatter"');
     }
     await writeWorkspaceFile(fs, file, svg, policy);
-    return { plot_path: file, kind: args.kind, points };
+    return { plot_path: file, kind: args.kind, points, auto_viewed: await autoViewWritten(args, file) };
   },
 });
 
@@ -2707,7 +2754,7 @@ const plotTool = (ctx) => define({
 const virtualGelTool = (ctx) => define({
   safe: false,
   name: 'molbio_virtual_gel',
-  description: 'Render a virtual agarose gel as an SVG file in the workspace. Each lane lists the EXPECTED DNA fragment sizes in bp (e.g. a restriction digest, a PCR, or a ligation check) and the tool draws the band pattern with a size ladder so the expected picture can be compared against a real gel. The tool writes the file itself — the SVG never reaches the conversation; tell the user the returned svg_path and that they can open it in a browser.',
+  description: 'Render a virtual agarose gel as an SVG file in the workspace. Each lane lists the EXPECTED DNA fragment sizes in bp (e.g. a restriction digest, a PCR, or a ligation check) and the tool draws the band pattern with a size ladder so the expected picture can be compared against a real gel. The tool writes the file itself — the SVG never reaches the conversation — and then opens it automatically with the OS default application (auto_view default true; set auto_view: false to skip).',
   parameters: {
     type: 'object',
     required: ['lanes'],
@@ -2728,6 +2775,7 @@ const virtualGelTool = (ctx) => define({
       ladder: { type: 'string', enum: ['1kb', '100bp'], description: 'Size ladder; default "1kb" (250 bp - 10 kb).' },
       title: { type: 'string', description: 'Gel title (default "Agarose gel").' },
       output_path: { type: 'string', description: 'Optional SVG file path; default: <title>.svg in the session workspace.' },
+      auto_view: { type: 'boolean', description: 'Open the gel automatically with the OS default application (default true; set false to skip).' },
     },
   },
   outputSchema: {
@@ -2739,10 +2787,12 @@ const virtualGelTool = (ctx) => define({
       lane_count: { type: 'integer' },
       band_count: { type: 'integer' },
       ladder: { type: 'string', enum: ['1kb', '100bp'] },
+      auto_viewed: { type: 'boolean' },
     },
   },
   render(value) {
-    return `Virtual gel SVG saved to ${value.svg_path}: ${value.lane_count} lane(s), ${value.band_count} band(s), ladder ${value.ladder}. Tell the user to open the file in a browser.`;
+    const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
+    return `Virtual gel SVG saved to ${value.svg_path}: ${value.lane_count} lane(s), ${value.band_count} band(s), ladder ${value.ladder}. ${viewNote}`;
   },
   async execute(args, exec) {
     if (!Array.isArray(args.lanes) || args.lanes.length < 1 || args.lanes.length > 12) {
@@ -2760,12 +2810,13 @@ const virtualGelTool = (ctx) => define({
     const ladder = args.ladder ?? '1kb';
     const title = args.title ?? 'Agarose gel';
     const svg = renderGel({ title, lanes, ladder, showLadder: true });
-    const file = await writeSvgFile(ctx, exec, { output_path: args.output_path }, svg, title);
+    const { file, viewed } = await writeSvgFile(ctx, exec, { output_path: args.output_path, auto_view: args.auto_view }, svg, title);
     return {
       svg_path: file,
       lane_count: lanes.length,
       band_count: lanes.reduce((sum, lane) => sum + lane.fragments.length, 0),
       ladder,
+      auto_viewed: viewed,
     };
   },
 });
@@ -3710,7 +3761,7 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Sequence math: molbio_reverse_complement, molbio_gc_content, molbio_translate, molbio_restriction_sites.
 - Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check.
 - qPCR and bench math: molbio_qpcr_analysis, molbio_lab_math.
-- Plasmids: molbio_parse_genbank (GenBank text), molbio_parse_snapgene (SnapGene .dna files — researchers usually have .dna files, so when the user names a .dna path use this), molbio_plasmid_map_file (reads a .dna/.gb file and writes the map SVG directly into the workspace in one call), molbio_plasmid_map (same, from a sequence + features). Both map tools WRITE the .svg file themselves and return svg_path — never try to reproduce SVG text in the conversation; just tell the user the file path to open in a browser.
+- Plasmids: molbio_parse_genbank (GenBank text), molbio_parse_snapgene (SnapGene .dna files — researchers usually have .dna files, so when the user names a .dna path use this), molbio_plasmid_map_file (reads a .dna/.gb file and writes the map SVG directly into the workspace in one call), molbio_plasmid_map (same, from a sequence + features). Both map tools WRITE the .svg file themselves and return svg_path — never try to reproduce SVG text in the conversation. Every image-writing tool (maps, plots, virtual gels, qPCR standard curves, clone/Golden Gate maps) opens the generated SVG automatically with the OS default application (auto_view defaults to true; the result's auto_viewed field says whether the hand-off worked), so there is normally nothing for the user to open manually; pass auto_view: false only when the caller explicitly wants no viewer window.
 - Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_golden_gate (type IIS multi-fragment assembly: the tool designs the 4 bp junctions and the fragments-to-order, and simulates the final plasmid — use it for BsaI-style Golden Gate instead of reasoning about overhangs by hand), molbio_enzyme_lookup (enzyme catalog: recognition/cut geometry/overhang, plus every cut of a sequence in both strand orientations), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers).
 - Verification: molbio_verify_sanger (read .ab1/.seq traces, align to the reference plasmid — circular-aware — and report mismatches/indels/amino-acid changes).
 - Proteins: molbio_protein_props (MW/pI/A280/GRAVY — estimates), molbio_peptide_digest (trypsin etc. for MS), molbio_codon_optimize (E. coli/yeast/human, can avoid restriction sites).

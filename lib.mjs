@@ -95,7 +95,7 @@ export const CODON_TABLE = {}; // built from strings below
   ];
   const rows = { standard };
   rows.bacterial = ['FFLLSSSSYY**CCWW', 'LLLLPPPPHHQQRRRR', 'IIIMTTTTNNKKSSRR', 'VVVVAAAADDEEGGGG'];
-  rows.mitochondrial_vertebrate = ['FFLLSSSSYY**CCWW', 'LLLLPPPPHHQQRRRR', 'IIMMTTTTNNKKSSRR', 'VVVVAAAADDEEGGGG'];
+  rows.mitochondrial_vertebrate = ['FFLLSSSSYY**CCWW', 'LLLLPPPPHHQQRRRR', 'IIMMTTTTNNKKSS**', 'VVVVAAAADDEEGGGG'];
   for (const [code, table] of Object.entries(rows)) {
     const map = {};
     for (let first = 0; first < 4; first++) {
@@ -371,12 +371,17 @@ export function isIisEnzyme(name) {
  * scanned once. Unlike digest(), which reports only the top-strand cut of
  * forward matches, this is the enzyme's complete cut set — a type IIS enzyme
  * such as BsaI also cuts at reverse-complemented recognition sites.
+ * `cut_position` is always the TOP-strand cut so fragment arithmetic stays on
+ * one strand: for a type IIS enzyme the reverse-site top cut sits `bottom`
+ * (N₂) bases 5' of the site start (the overhang plus the filler lie between
+ * the two cuts); for an ordinary non-palindromic enzyme it mirrors inside the
+ * site (start + L − cutOffset).
  * @returns {Array<{start, orientation, cut_position}>} 0-based positions.
  */
 export function enzymeCuts(seq, name) {
   const resolved = enzymePattern(name);
   if (resolved === undefined) throw new MolbioInputError(`unknown enzyme ${JSON.stringify(name)}; available: ${ENZYME_NAMES.join(', ')}`);
-  const { pattern, cutOffset } = resolved;
+  const { pattern, cutOffset, bottom, iis } = resolved;
   const out = [];
   for (const match of findAllMatches(seq, pattern)) {
     out.push({
@@ -391,7 +396,7 @@ export function enzymeCuts(seq, name) {
       out.push({
         start: match.start,
         orientation: 'reverse',
-        cut_position: Math.min(seq.length, Math.max(0, match.start + pattern.length - cutOffset)),
+        cut_position: Math.min(seq.length, Math.max(0, match.start - (iis ? bottom : cutOffset - pattern.length))),
       });
     }
   }
