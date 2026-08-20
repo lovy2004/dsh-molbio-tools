@@ -267,4 +267,4 @@
   # never modify a released directory in place — copy the new files into a
   # fresh version directory and update this row, or new sessions keep
   # running cached old modules.
-  name: './plugins/dsh-molbio-tools-v13/index.mjs'
+  name: './plugins/dsh-molbio-tools-v14/index.mjs'
