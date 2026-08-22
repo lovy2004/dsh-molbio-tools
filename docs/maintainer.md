@@ -85,14 +85,9 @@ preset 渠道（受 ESM 模块缓存约束）：
 3. bump `package.json` 的 `version`，commit + push（bundle 渠道天然免疫模块缓存：
    每个发布版本在 node_modules 中都是独立目录）。
 
-## 路线图（可选扩展）
+## 路线图
 
-- 质粒图谱的浏览器内实时面板（需要客户端打包管线，当前版本以 SVG 文件交付）
-- 引物设计 Primer3 对齐（v12 已完成）：错配容差（`max_mismatches`/`max_3prime_mismatches`/`mismatch_3prime_zone`；3' 末端不错配，默认避开 3' 关键区，错配逐条报告并计入排序罚分）；结构筛查改为 Primer3 同款模型（self-any/self-end 比对分、发夹/二聚体 NN→Tm 47 °C 阈值、末 5 碱基 ΔG/GC、GC clamp 0-3 分级）；mispriming 非特异结合检查；顺带修复 `resolveDesignOptions` 丢弃 `region_start/region_end` 的旧 bug
-- 设计工具暴露盐/引物浓度旋钮（v13 已完成）：`na_mm`/`mg_mm`/`dntp_mm`/`primer_nm` 贯通 Tm 模型与发夹/二聚体折叠浓度，输出 `conditions` 回显
-- 目标位置偏好（v13 已完成）：`target_position`/`target_penalty` 按较近引物 3' 端距离罚分，普通与跨内含子设计均支持
-- Golden Gate 完整模拟（v13 已完成）：IIS 酶 + 自动唯一/非回文/非互补 4 bp 突出端设计 + 多片段组装 + 订购片段 + 特征平移 + 出图；载体盒子位点保留在骨架
-- 限制酶目录查询（v13 已完成）：`molbio_enzyme_lookup` 双链向切点（IIS 反向识别位点）
-- 虚拟琼脂糖凝胶（v13 已完成）：`molbio_virtual_gel` SVG + ladder
-- 文献库的浏览器端面板
-- 序列比对 / 保守性分析（v15 已完成）：`molbio_msa_align`（渐进式多序列比对：仿射缺口半全局 NW + 5-mer 距离 UPGMA 引导树 + 和-对谱比对、"一旦有缺口永远有缺口"）与 `molbio_conservation`（共识/列 identity/熵基保守性打分/可变位点/两两同一性）
+- **v16（已定方向）**：Sequence logo SVG（由 `molbio_conservation` 的逐列碱基比例直接渲染）+ CRISPR gRNA 设计（SpCas9 `NGG` PAM 扫描、GC%/Tm/自互补/连续 T 筛选与排序打分，复用 v12 mispriming 的 k-mer 索引思路做参考序列上的错配容差脱靶搜索）
+- 质粒图谱的浏览器内实时面板（当前以 SVG 文件 + 系统默认查看器交付；受"preset 渠道无客户端打包管线"限制，见上方"自动查看"一节）
+- 文献库的浏览器端面板（同上，依赖客户端 UI 渠道）
+- 备选池（v17+ 按需挑选）：TaqMan 水解探针设计；多重 PCR 互扰检查；蛋白螺旋轮投影图（helical wheel）；疏水性窗口图（hydropathy plot，Kyte-Doolittle）；甲基化敏感位点（dam/dcm/EcoKI）与双酶切 buffer 兼容提示；客户端打包管线调研（上述两个浏览器面板的前置工程）
