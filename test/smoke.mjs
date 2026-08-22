@@ -322,6 +322,8 @@ function makeTemplate(n, seed = 42) {
     ['molbio_enzyme_lookup', { sequence: 'GAATTC', enzymes: ['EcoRI', 'BsaI'] }],
     ['molbio_golden_gate', { vector: 'A'.repeat(60) + 'C'.repeat(40) + 'T'.repeat(60), replace_region: { start: 61, end: 100 }, inserts: ['G'.repeat(30) + 'AATT' + 'C'.repeat(30)] }],
     ['molbio_align', { sequence1: 'ATGCATGCAT', sequence2: 'ATGCGTGCAT' }],
+    ['molbio_msa_align', { sequences: ['ACGTACGT', 'ACGTTCGT'] }],
+    ['molbio_conservation', { alignment: ['ACGT', 'ACGA'] }],
     ['molbio_fasta_fastq', { path: 'C:/tmp/seqs.fa', action: 'stats' }],
     ['molbio_extract_region', { source_path: 'C:/tmp/pUC118.dna', feature: 'ori' }],
     ['molbio_pubmed_abstract', { pmids: ['12345678'] }],
@@ -823,6 +825,124 @@ function makeTemplate(n, seed = 42) {
   const perfect = await run('molbio_align', { sequence1: a, sequence2: a });
   assert.equal(perfect.identity_percent, 100);
   assert.equal(perfect.differences.length, 0);
+}
+
+// ── v15: multiple sequence alignment and conservation ───────────────────────
+
+{
+  // pairwise identical: full match score, no gaps
+  const out = await run('molbio_msa_align', { sequences: ['ACGTACGT', 'ACGTACGT'] });
+  assert.equal(out.sequence_count, 2);
+  assert.equal(out.aligned_columns, 8);
+  assert.deepEqual(out.ids, ['seq1', 'seq2']);
+  assert.deepEqual(out.alignment, ['ACGTACGT', 'ACGTACGT']);
+  assert.equal(out.pairwise_identity_percent.mean, 100);
+  assert.equal(out.pairwise_identity_percent.min, 100);
+  assert.equal(out.score, 32); // 8 columns × match(4)
+
+  // one substitution (position 5)
+  const sub = await run('molbio_msa_align', { sequences: ['ACGTACGT', 'ACGTTCGT'] });
+  assert.equal(sub.aligned_columns, 8);
+  assert.deepEqual(sub.alignment, ['ACGTACGT', 'ACGTTCGT']);
+  assert.equal(sub.pairwise_identity_percent.mean, 87.5);
+  assert.equal(sub.score, 24); // 7×4 − 4
+
+  // affine-gap insertion: a single internal extra base becomes a gap, not a mismatch run
+  const ins = await run('molbio_msa_align', { sequences: ['CCCCCCCC', 'CCCCACCCC'] });
+  assert.equal(ins.aligned_columns, 9);
+  assert.deepEqual(ins.alignment, ['CCCC-CCCC', 'CCCCACCCC']);
+  assert.equal(ins.score, 26); // 8×4 − gap open 6
+
+  // U is treated as T
+  const rna = await run('molbio_msa_align', { sequences: ['ACGU', 'ACGT'] });
+  assert.equal(rna.pairwise_identity_percent.mean, 100);
+  assert.deepEqual(rna.alignment, ['ACGT', 'ACGT']);
+
+  // three-sequence progressive alignment: s2 = s1 with one substitution, s3 = s1 minus the middle block
+  const s1 = 'ACGTACGTACGT';
+  const s2 = 'ACGTTCGTACGT';
+  const s3 = 'ACGTACGT';
+  const three = await run('molbio_msa_align', { sequences: [s1, s2, s3] });
+  assert.equal(three.aligned_columns, 12);
+  assert.deepEqual(three.alignment.slice(0, 2), [s1, s2]);
+  assert.equal(three.alignment[2].replace(/-/g, ''), s3);
+  assert.deepEqual(three.alignment[2], '----ACGTACGT'); // free terminal gaps placed at the start (deterministic tie-break)
+  assert.equal(three.pairwise_identity_percent.mean, 72.22); // (11 + 8 + 7)/12 over 3 pairs
+  assert.equal(three.pairwise_identity_percent.min, 58.33);
+  assert.equal(three.pairwise_identity_percent.max, 91.67);
+
+  // deterministic: same input twice → identical output
+  const again = await run('molbio_msa_align', { sequences: [s1, s2, s3] });
+  assert.deepEqual(again, three);
+
+  // conservation from raw sequences (source=msa): position 5 is A/A/T → variable at 0.8
+  const cons = await run('molbio_conservation', { sequences: [s1, s2, s3] });
+  assert.equal(cons.source, 'msa');
+  assert.equal(cons.sequence_count, 3);
+  assert.equal(cons.aligned_columns, 12);
+  assert.equal(cons.consensus, s1);
+  assert.equal(cons.conserved_columns, 11);
+  assert.equal(cons.variable_positions.length, 1);
+  assert.deepEqual(cons.variable_positions[0], { column: 5, consensus: 'A', identity: 0.667 });
+  assert.equal(cons.variable_positions_truncated, false);
+  assert.ok(Math.abs(cons.identity_percent - 97.22) < 0.05, `identity_percent ${cons.identity_percent} ≈ 97.22`);
+  assert.equal(cons.pairwise_identity_percent.mean, 72.22);
+  assert.equal(cons.per_column.length, 12);
+  assert.deepEqual(cons.per_column[4], { column: 5, consensus: 'A', identity: 0.667, conservation: 0.541 });
+
+  // pre-aligned input with gap columns (source=alignment): all-gap counts as conserved
+  const rows = ['ACGT-', 'ACGT-', 'ACGA-', 'TCGT-'];
+  const aln = await run('molbio_conservation', { alignment: rows });
+  assert.equal(aln.source, 'alignment');
+  assert.equal(aln.consensus, 'ACGT-');
+  assert.equal(aln.identity_percent, 70); // (0.75 + 1 + 1 + 0.75 + 0)/5
+  assert.equal(aln.conserved_columns, 3); // columns 2, 3 and the all-gap column 5
+  assert.deepEqual(aln.variable_positions, [
+    { column: 1, consensus: 'A', identity: 0.75 },
+    { column: 4, consensus: 'T', identity: 0.75 },
+  ]);
+  assert.equal(aln.pairwise_identity_percent.mean, 60);
+  assert.equal(aln.pairwise_identity_percent.min, 40);
+  assert.equal(aln.pairwise_identity_percent.max, 80);
+  const relaxed = await run('molbio_conservation', { alignment: rows, threshold: 0.6 });
+  assert.equal(relaxed.conserved_columns, 5);
+  assert.equal(relaxed.variable_positions.length, 0);
+
+  // ambiguous residues: union consensus when no symbol reaches 50%
+  const amb = await run('molbio_conservation', { alignment: ['A', 'C', 'G'] });
+  assert.equal(amb.consensus, 'V');
+  assert.deepEqual(amb.per_column[0], { column: 1, consensus: 'V', identity: 0.333, conservation: 0.208 });
+
+  // FASTA input + aligned-FASTA output
+  memFs.files.set('C:/tmp/msa.fa', '>a1\nACGTACGT\n>a2\nACGTTCGT\n');
+  const fasta = await run('molbio_msa_align', { fasta_path: 'C:/tmp/msa.fa', save_path: 'C:/tmp/msa_aln.fa' });
+  assert.deepEqual(fasta.ids, ['a1', 'a2']);
+  assert.equal(fasta.pairwise_identity_percent.mean, 87.5);
+  assert.equal(fasta.saved_to, 'C:/tmp/msa_aln.fa');
+  const written = memFs.files.get(fasta.saved_to).toString('utf8');
+  assert.ok(written.startsWith('>a1\nACGTACGT\n') && written.includes('>a2\nACGTTCGT'));
+
+  const fastaCons = await run('molbio_conservation', { fasta_path: 'C:/tmp/msa.fa' });
+  assert.equal(fastaCons.source, 'msa');
+  assert.equal(fastaCons.consensus, 'ACGTACGT'); // position 5: A vs T → A at 50%
+  assert.equal(fastaCons.conserved_columns, 7);
+  assert.deepEqual(fastaCons.variable_positions, [{ column: 5, consensus: 'A', identity: 0.5 }]);
+
+  // error paths
+  await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGT'] }), /at least 2/);
+  await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGT', 'ACGT'], fasta_path: 'C:/tmp/msa.fa' }), /exactly one/);
+  await assert.rejects(() => run('molbio_msa_align', {}), /exactly one/);
+  await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGTX', 'ACGT'] }), /invalid character/);
+  await assert.rejects(() => run('molbio_msa_align', { sequences: ['A'.repeat(3001), 'A'.repeat(2)] }), /limit 3000/);
+  await assert.rejects(() => run('molbio_msa_align', { sequences: Array.from({ length: 51 }, (_, k) => 'A'.repeat(10)) }), /at most 50/);
+  memFs.files.set('C:/tmp/single.fa', '>only\nACGT\n');
+  await assert.rejects(() => run('molbio_msa_align', { fasta_path: 'C:/tmp/single.fa' }), /at least 2/);
+  await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT', 'ACGA', 'AC'] }), /same length/);
+  await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT'] }), /at least 2/);
+  await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT', 'ACGT'], sequences: ['ACGT', 'ACGT'] }), /exactly one/);
+  await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGTX', 'ACGT'] }), /invalid character/);
+  await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT', 'ACGT'], threshold: 0 }), /between 0 and 1/);
+  await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT', 'ACGT'], threshold: 1.5 }), /between 0 and 1/);
 }
 
 {

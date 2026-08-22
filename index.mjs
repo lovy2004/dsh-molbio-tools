@@ -55,6 +55,7 @@ import { addExperiment, addProtocol, loadRecords, recordPath, saveRecords, updat
 import { toBibtex } from './papers.mjs';
 import { parseXml } from './snapgene.mjs';
 import { smithWaterman } from './align.mjs';
+import { conservationAnalysis, normalizeAlignedRow, normalizeMsaSequence, pairwiseIdentities, progressiveAlign } from './msa.mjs';
 import {
   addPapers,
   libraryPath,
@@ -2908,6 +2909,204 @@ const alignTool = define({
   },
 });
 
+// ── v15: multiple sequence alignment and conservation analysis ──────────────
+
+/**
+ * Collect the sequence list for the MSA tools from either the inline
+ * `sequences` array or a workspace FASTA file — exactly one must be given.
+ */
+async function msaEntries(ctx, exec, args, toolName) {
+  const hasSequences = args.sequences !== undefined;
+  const hasPath = args.fasta_path !== undefined && args.fasta_path !== '';
+  if (hasSequences === hasPath) throw new MolbioInputError(`${toolName}: provide exactly one of "sequences" (array) or "fasta_path"`);
+  if (hasSequences) {
+    if (args.sequences.length < 2) throw new MolbioInputError(`${toolName} needs at least 2 sequences (got ${args.sequences.length})`);
+    return args.sequences.map((raw, k) => ({ id: `seq${k + 1}`, sequence: normalizeMsaSequence(raw, `sequences[${k}]`) }));
+  }
+  const bytes = await readFileBytes(ctx, exec, args.fasta_path);
+  const text = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '');
+  const parsed = parseFasta(text);
+  if (parsed.length < 2) throw new MolbioInputError(`${toolName}: the FASTA file must contain at least 2 sequences (got ${parsed.length})`);
+  return parsed.map((entry) => ({ id: entry.id, sequence: normalizeMsaSequence(entry.sequence, `FASTA entry ${JSON.stringify(entry.id)}`) }));
+}
+
+function showMsaSlice(sequence) {
+  return sequence.length > 120 ? sequence.slice(0, 60) + ` …[${sequence.length - 120} bp]… ` + sequence.slice(-60) : sequence;
+}
+
+const msaAlignTool = (ctx) => define({
+  safe: (args) => args.save_path === undefined || args.save_path === '',
+  name: 'molbio_msa_align',
+  description: 'Progressive multiple sequence alignment of 2-50 IUPAC DNA sequences (up to 3000 bases each, 30000 bases total). Pairwise/profile global alignment uses affine gaps with free terminal gaps (match +4 / mismatch -4 / gap open -6 / extend -2); the merge order comes from a UPGMA tree over 5-mer distances and profiles are aligned with sum-of-pairs scoring ("once a gap, always a gap"). Returns the aligned sequences in input order plus pairwise identity statistics. Provide either `sequences` (array of strings) or `fasta_path` (workspace FASTA); pass `save_path` to also write the aligned FASTA into the workspace. Deterministic heuristic — a working alignment for comparison, not phylogenetic ground truth.',
+  parameters: {
+    type: 'object',
+    properties: {
+      sequences: { type: 'array', items: { type: 'string' }, description: 'IUPAC DNA sequences to align (2-50; U treated as T).' },
+      fasta_path: { type: 'string', description: 'Path to a workspace FASTA file with the sequences (alternative to sequences).' },
+      save_path: { type: 'string', description: 'Optional FASTA output path for the aligned sequences.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['method', 'sequence_count', 'aligned_columns', 'ids', 'alignment', 'pairwise_identity_percent', 'score', 'saved_to'],
+    properties: {
+      method: { type: 'string' },
+      sequence_count: { type: 'integer' },
+      aligned_columns: { type: 'integer' },
+      ids: { type: 'array', items: { type: 'string' } },
+      alignment: { type: 'array', items: { type: 'string' } },
+      pairwise_identity_percent: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['mean', 'min', 'max'],
+        properties: {
+          mean: { type: 'number' },
+          min: { type: 'number' },
+          max: { type: 'number' },
+        },
+      },
+      score: { type: 'integer' },
+      saved_to: { type: 'string' },
+    },
+  },
+  render(value) {
+    const lines = [
+      `progressive multiple sequence alignment: ${value.sequence_count} sequences, ${value.aligned_columns} columns; pairwise identity mean ${value.pairwise_identity_percent.mean}% (min ${value.pairwise_identity_percent.min}%, max ${value.pairwise_identity_percent.max}%); score ${value.score}`,
+    ];
+    const count = Math.min(20, value.ids.length);
+    const width = Math.max(...value.ids.slice(0, count).map((id) => id.length));
+    for (let k = 0; k < count; k++) lines.push(`  ${value.ids[k].padEnd(width)} ${showMsaSlice(value.alignment[k])}`);
+    if (value.ids.length > count) lines.push(`  … ${value.ids.length - count} more sequence(s) …`);
+    if (value.saved_to !== '') lines.push(`aligned FASTA saved to ${value.saved_to}`);
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const entries = await msaEntries(ctx, exec, args, 'molbio_msa_align');
+    const result = progressiveAlign(entries);
+    const alignment = result.alignment.map((row) => row.sequence);
+    let savedTo = '';
+    if (args.save_path !== undefined && args.save_path !== '') {
+      const fs = fsService(ctx);
+      const sandboxPolicyService = ctx.get('sandboxPolicy');
+      const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+      const file = workspaceFilePath(args.save_path, exec, policy?.workspaceRoot);
+      await writeWorkspaceFile(fs, file, toFasta(result.alignment.map((row) => ({ id: row.id, description: '', sequence: row.sequence }))), policy);
+      savedTo = file;
+    }
+    return {
+      method: 'progressive MSA: UPGMA guide tree over 5-mer distances, affine-gap Needleman-Wunsch profile alignment (match +4/mismatch -4/gap open -6/extend -2, free terminal gaps)',
+      sequence_count: alignment.length,
+      aligned_columns: result.columns,
+      ids: result.alignment.map((row) => row.id),
+      alignment,
+      pairwise_identity_percent: pairwiseIdentities(alignment),
+      score: result.score,
+      saved_to: savedTo,
+    };
+  },
+});
+
+const conservationTool = (ctx) => define({
+  safe: true,
+  name: 'molbio_conservation',
+  description: 'Conservation analysis of a set of IUPAC DNA sequences: consensus sequence, per-column identity (fraction of residues matching the top residue), entropy-based conservation score, conserved/variable columns, and pairwise identity statistics. Provide exactly one of `alignment` (pre-aligned equal-length sequences, "-" for gaps — e.g. the output of molbio_msa_align), `sequences` (unaligned; aligned first with the molbio_msa_align method), or `fasta_path`. `threshold` (default 0.8) is the column identity at or above which a column counts as conserved; columns below it are listed in variable_positions (capped at 200, see variable_positions_truncated). All-gap columns count as conserved; per_column details are returned for alignments up to 300 columns. Deterministic; all scores are heuristic estimates.',
+  parameters: {
+    type: 'object',
+    properties: {
+      alignment: { type: 'array', items: { type: 'string' }, description: 'Pre-aligned sequences of equal length ("-" for gaps).' },
+      sequences: { type: 'array', items: { type: 'string' }, description: 'Unaligned IUPAC DNA sequences (2-50; U treated as T).' },
+      fasta_path: { type: 'string', description: 'Workspace FASTA file with unaligned sequences.' },
+      threshold: { type: 'number', description: 'Conserved-column identity threshold in (0, 1]; default 0.8.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['source', 'sequence_count', 'aligned_columns', 'consensus', 'identity_percent', 'conserved_columns', 'conserved_percent', 'variable_positions', 'variable_positions_truncated', 'pairwise_identity_percent'],
+    properties: {
+      source: { type: 'string', enum: ['msa', 'alignment'] },
+      sequence_count: { type: 'integer' },
+      aligned_columns: { type: 'integer' },
+      consensus: { type: 'string' },
+      identity_percent: { type: 'number' },
+      conserved_columns: { type: 'integer' },
+      conserved_percent: { type: 'number' },
+      variable_positions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['column', 'consensus', 'identity'],
+          properties: {
+            column: { type: 'integer' },
+            consensus: { type: 'string' },
+            identity: { type: 'number' },
+          },
+        },
+      },
+      variable_positions_truncated: { type: 'boolean' },
+      per_column: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['column', 'consensus', 'identity', 'conservation'],
+          properties: {
+            column: { type: 'integer' },
+            consensus: { type: 'string' },
+            identity: { type: 'number' },
+            conservation: { type: 'number' },
+          },
+        },
+      },
+      pairwise_identity_percent: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['mean', 'min', 'max'],
+        properties: {
+          mean: { type: 'number' },
+          min: { type: 'number' },
+          max: { type: 'number' },
+        },
+      },
+    },
+  },
+  render(value) {
+    const lines = [
+      `conservation over ${value.sequence_count} sequences × ${value.aligned_columns} columns (source: ${value.source}): column identity ${value.identity_percent}%, ${value.conserved_columns} conserved column(s) (${value.conserved_percent}%), pairwise identity mean ${value.pairwise_identity_percent.mean}%`,
+      `consensus ${showMsaSlice(value.consensus)}`,
+    ];
+    if (value.variable_positions.length > 0) {
+      lines.push(`${value.variable_positions.length} variable position(s)${value.variable_positions_truncated ? ' (list truncated at 200)' : ''}:`);
+      for (const v of value.variable_positions.slice(0, 20)) lines.push(`  column ${v.column}: consensus ${v.consensus}, identity ${v.identity}`);
+    } else {
+      lines.push('no variable positions at this threshold');
+    }
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const hasAlignment = args.alignment !== undefined;
+    const hasSequences = args.sequences !== undefined;
+    const hasPath = args.fasta_path !== undefined && args.fasta_path !== '';
+    if ((hasAlignment ? 1 : 0) + (hasSequences ? 1 : 0) + (hasPath ? 1 : 0) !== 1) {
+      throw new MolbioInputError('molbio_conservation: provide exactly one of "alignment", "sequences", or "fasta_path"');
+    }
+    const threshold = args.threshold ?? 0.8;
+    let rows;
+    let source;
+    if (hasAlignment) {
+      rows = args.alignment.map((raw, k) => normalizeAlignedRow(raw, `alignment[${k}]`));
+      source = 'alignment';
+    } else {
+      const entries = await msaEntries(ctx, exec, args, 'molbio_conservation');
+      rows = progressiveAlign(entries).alignment.map((row) => row.sequence);
+      source = 'msa';
+    }
+    return { source, ...conservationAnalysis(rows, threshold) };
+  },
+});
+
 const fastaFastqTool = (ctx) => define({
   safe: (args) => args.action !== 'convert' && args.action !== 'extract',
   name: 'molbio_fasta_fastq',
@@ -3766,7 +3965,7 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Verification: molbio_verify_sanger (read .ab1/.seq traces, align to the reference plasmid — circular-aware — and report mismatches/indels/amino-acid changes).
 - Proteins: molbio_protein_props (MW/pI/A280/GRAVY — estimates), molbio_peptide_digest (trypsin etc. for MS), molbio_codon_optimize (E. coli/yeast/human, can avoid restriction sites).
 - Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (bar/scatter SVG charts written to files), molbio_virtual_gel (expected band pattern as an SVG gel image with a size ladder).
-- Sequences & files: molbio_align (local alignment with a readable match line), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
+- Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
 - Map extras: pass gc_skew: true for the GC skew ring, show_unique_cutters: true to mark single-cutting enzymes on the map.
 - Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — works only when the deployment provides web fetch), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
 - Literature: molbio_pubmed_search (web search), and the reading library molbio_paper_add / molbio_paper_list / molbio_paper_update / molbio_paper_remove (papers.json in the workspace).
@@ -3813,6 +4012,8 @@ export function apply(ctx) {
     plotTool(ctx),
     virtualGelTool(ctx),
     alignTool,
+    msaAlignTool(ctx),
+    conservationTool(ctx),
     fastaFastqTool(ctx),
     extractRegionTool(ctx),
     pubmedAbstractTool(ctx),
