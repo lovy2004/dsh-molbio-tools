@@ -91,3 +91,30 @@ Typert manifest 与客户端无关：它是宿主侧 RPC/API 反射（`validateT
 3. 第三方包注册 Typert Remote 端点的最小姿势（`bindTypertRemote`/`@Remote`），确认 `dsh plugin add` 安装的包能正常声明 Remote。
 4. `tool.call.toolview` 与 `conversation.view` 的注册 props（owner props / session 数据从哪拿），以及替换风险。
 5. 版本目录规则不受影响（preset 渠道照旧）；bundle 的 host/client 半随 npm 版本同源发布即可。
+
+## 7. 0.1.2-alpha.2 更新后的重新验证（2026-08-31）
+
+DSH 升级到 0.1.2-alpha.2（全量包替换）后，按上文章节逐项复查：
+
+**结论：总体结论不变——preset 渠道仍不能挂客户端 UI，bundle 渠道 `dsh.client` 双面包仍是正路；但传输层细节变化较大，路径 B（上游改造）的缺口收窄了。**
+
+### 不变的部分（原结论继续生效）
+
+1. **`dsh.client` 声明格式不变**：`{ platform, inject?, external?, immediately? }` + `exports["./client"]` 预构建 lazy-CJS 产物（新版 `dsh-client-modules/lib/index.js` L140-166 与旧版逐字段一致）；缺失 bundle 仍报 `MissingClientBundleError`。
+2. **preset 渠道三层排除仍然成立，且更显式**：新版 `dsh-agent-presets/lib/index.js` L617-642 `PresetTree` 构造函数**主动 `delete owner.subtree`**（注释原文保留："A subtree plugged directly (rather than created as a loader entry) never links itself to an Entry"）；`dsh-agent-presets` 全库无任何 client 相关代码（仅两处无关 "client" 字样）；客户端扫描仍只迭代 `ctx.loader.entries()`（`dsh-client-modules` L756-762）。
+3. **运行时推送层不变**：动态插件通道 `getClientCode` @Remote 仍在（`dsh-cordis-host-runner` L1436/L1818-1826）；`ClientModuleRegistry` 仍无 `register(id, code)` 运行时 API（新版只新增了 `processOne`/`resolveSource`/`reconcilePackage` 的扫描内部重构）。
+4. **动态插件原型通道不变**（Slot `tool.view.cordis` key `self` 仍在）。
+5. **实践缺口仍在**：lazy-CJS factory 产物格式与纯净度门禁要求不变；官方 `clientBundle` 打包预设仍未随 npm 发布（npm 侧无新增构建工具包）。
+
+### 变化的部分
+
+1. **扫描解析升级为按条目树多源**：旧版是单一 `createRequire(全局 baseUrl).resolve(包名/package.json)`；新版 `locatePkgJson`（L660-690）按 `entry.parent.tree.ctx.baseUrl` 逐条解析，支持**相对/`file:` 说明符**（经 `internal.resolveSync` 走 Loader 真实解析 + `nearestPackage` 向上找最近的 package.json）。同名包若从多个活动树解析到会**响亮报错**（"resolves from multiple active Loader sources ... remove one entry"，L797-799）。
+2. **传输协议改为分阶段批次**：`/plugins/??<id1>/client.js,<id2>/client.js&rev=…` 批量 URL；boot 注入分 `bootstrap`（parser 阻塞）与 `application`（preload）两个批次（L373-431）；`serveBundle` 改为从预构建的响应表按资源 URL 应答 + immutable 缓存（L838-858）。包侧契约不受影响。
+3. **Slot 面微调**：目标落点 `tool.call.toolview`（key=工具名，taken 列表无 molbio_*，无冲突）与 `conversation.view` **均保留且注册协议不变**；新增 `settings.models.provider-card`/`settings.models.footer`、`conversation.approval.detail`、`conversation.trajectory.images`；`conversation.chat.node` 的 keyDomain 增加 `system-prompt`/`turn-process`。
+4. `dsh-client-modules` 自身现在声明 `immediately: true` + 空 `inject`。
+
+### 对路径选择的影响
+
+- **路径 A（bundle 双面包）**：实现方式不变；新约束是"同一包名不能从多个 Loader 源同时解析"（多 profile 同装同包时注意去重）。
+- **路径 B（上游改造）**：缺口收窄——发现层的解析机制已能处理相对/file 说明符，缺的只剩"让 preset 直接子树参与扫描"（或暴露 preset 行为扫描源）这一环，向上游提需求时可以引用这个具体点。
+- **路径 C/D**：不受影响。
