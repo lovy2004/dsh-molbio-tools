@@ -88,6 +88,6 @@ preset 渠道（受 ESM 模块缓存约束）：
 ## 路线图
 
 - **v16（已定方向）**：Sequence logo SVG（由 `molbio_conservation` 的逐列碱基比例直接渲染）+ CRISPR gRNA 设计（SpCas9 `NGG` PAM 扫描、GC%/Tm/自互补/连续 T 筛选与排序打分，复用 v12 mispriming 的 k-mer 索引思路做参考序列上的错配容差脱靶搜索）
-- 质粒图谱的浏览器内实时面板（**可行性已调研**，见 `docs/client-pipeline-exploration.md`：preset 渠道被三层机制挡住，需走 bundle 渠道 `dsh.client` 双面包 + 自建 lazy-CJS client bundle；落点首选 `tool.call.toolview` 自定义工具卡）
-- 文献库的浏览器端面板（同上；落点首选 `conversation.view` 的 "Papers" 页）
+- 质粒图谱的浏览器内实时面板（**可行性已调研**，见 `docs/client-pipeline-exploration.md`：preset 渠道被三层机制挡住，需走 bundle 渠道 `dsh.client` 双面包 + 自建 lazy-CJS client bundle；0.1.5 起最优落点是右栏 tab `sidebar.right.pane.tab`，辅以 `tool.call.toolview` 自定义工具卡）
+- 文献库的浏览器端面板（同上；0.1.5 起落点为右栏 tab 的 "Papers" 页或 `conversation.view`）
 - 备选池（v17+ 按需挑选）：TaqMan 水解探针设计；多重 PCR 互扰检查；蛋白螺旋轮投影图（helical wheel）；疏水性窗口图（hydropathy plot，Kyte-Doolittle）；甲基化敏感位点（dam/dcm/EcoKI）与双酶切 buffer 兼容提示；向上游提议"preset 渠道挂 client"（探索文档路径 B）

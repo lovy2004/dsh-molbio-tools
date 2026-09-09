@@ -118,3 +118,43 @@ DSH 升级到 0.1.2-alpha.2（全量包替换）后，按上文章节逐项复�
 - **路径 A（bundle 双面包）**：实现方式不变；新约束是"同一包名不能从多个 Loader 源同时解析"（多 profile 同装同包时注意去重）。
 - **路径 B（上游改造）**：缺口收窄——发现层的解析机制已能处理相对/file 说明符，缺的只剩"让 preset 直接子树参与扫描"（或暴露 preset 行为扫描源）这一环，向上游提需求时可以引用这个具体点。
 - **路径 C/D**：不受影响。
+
+## 8. 0.1.5-alpha.1 更新后的重新验证（2026-09-09，新增 right sidebar）
+
+DSH 升级到 0.1.5-alpha.1（9/9 全量替换），新增右侧栏（right sidebar / dockkit）体系。逐项复查：
+
+**结论：核心结论仍然成立——preset 渠道仍不能挂客户端 UI，bundle 渠道 `dsh.client` 仍是正路；新增的右栏 tab 体系是更好的面板落点（仍是 client 半能力，走路径 A 实现）。**
+
+### 不变的部分（原结论继续生效）
+
+1. **`dsh.client` 声明与扫描机制不变**：`dsh-client-modules` 0.1.5 与 0.1.2 逐点一致——`parseDshClient`（L140）、`exports["./client"]` 预构建 lazy-CJS、`/plugins/??` 批量 URL、`__DSH_BOOT__`、扫描只迭代 `ctx.loader.entries()`（L475/L777）、按 `entry.parent.tree.ctx.baseUrl` 逐条目树解析 + `locatePkgJson`/`nearestPackage`（L679-710）。
+2. **preset 渠道排除不变**：`dsh-agent-presets` L618 注释（"plugged directly ... never links itself to an Entry"）+ L638 `delete owner.subtree` 原样保留；全库无 client 代码。
+3. **动态插件通道不变**：`getClientCode` @Remote 仍在（L1436/L1818）。
+4. **实践缺口不变**：lazy-CJS 产物格式、纯净度门禁、官方打包预设未发布。
+
+### 新增：right sidebar 扩展体系（0.1.5 新能力）
+
+新包：`dsh-client-ui-sidebar-right`（dockkit 上的产品层）、`dsh-client-ui-sidebar-files`、`dsh-client-ui-sidebar-textpreview`。实测 Slot 面新增 `rightbar` 列（scope: session）：
+
+- `sidebar.right.pane.tab`（keyed，key = tab 类型 id，无 taken）——tab 正文
+- `sidebar.right.pane.tab.title`（keyed）——tab 标题 chip
+- `sidebar.right.tab.menu.item`（list）——tab 菜单追加项
+- `sidebar.right.tab.guide`（chain）——guide tab 正文
+- `conversation.session.header.corner`（single）——面板展开按钮座
+
+**tab 类型对第三方开放**（`dsh-client-ui-sidebar-right/README.md`"Extension seats"）：`ctx.sidebarRightTabs.register({ id, kind, patterns?, priority?, canOpen?, title, guide? })`——README 明确 "the shipped guide type goes through exactly the same public path a type from another package does（`ui-sidebar-textpreview` 是活证）"；`extension` 带是资源认领的最高优先级（未指明时默认）。正文经 `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: definition.id }, Body)`，经 `useTabInfo()` 读 `{ sidebar, panel, tab }`。类型注册活在注册它的 client 插件生命周期内（`ctx.effect`）。
+
+**对本插件的意义**：
+- 两个面板的最优落点从"conversation.view 页/浮层"升级为**右栏 tab**：可注册 `Plasmids`（`patterns: ["**/*.dna", "**/*.gb"]` 资源类型，或按 kind 打开的页类型，正文画质粒图/特征列表）与 `Papers`（页类型，读 papers.json 列表）。
+- 仍是 **client 半能力**：第三方 client 插件需在 `dsh.client.inject`/external 声明 `@deepseek-ai/dsh-client-ui-sidebar-right`（依赖其 `ctx.sidebarRightTabs`/`ctx.sidebarRight`）并作为 peerDependency 安装——给第 6 节待验证项 1 追加一条。
+- preset 渠道依旧无法使用该体系。
+
+### 其它小变化（与本插件无关）
+
+- `tool.call.toolview` taken 列表新增 `read_image`（新工具）；`conversation.input.overlay` 移到 composer.bar 下。
+- 目标落点 `tool.call.toolview` / `conversation.view` / `shell.overlay` 均保留、注册协议不变。
+
+### 对路径选择的影响
+
+- **路径 A（bundle 双面包）**：方式不变；落点优先级更新——右栏 tab（`sidebar.right.pane.tab`）最适合图谱/文献面板，`tool.call.toolview` 仍适合工具调用卡的即时图谱，二者可组合。
+- **路径 B/C/D**：不受影响。
