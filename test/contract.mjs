@@ -219,6 +219,28 @@ check('the package manifest keeps the client declaration the scan keys on', () =
   }
 });
 
+check('the published tarball would carry the client half and the panel package', () => {
+  const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+  const files = manifest.files ?? [];
+  assert.ok(Array.isArray(files) && files.length > 0, 'the manifest declares a files allowlist (npm would otherwise ship everything)');
+
+  // npm ships exactly the allowlist, so a missing entry is a package that
+  // installs WITHOUT the thing it declares. `dsh plugin add` resolves the client
+  // bundle from the installed package, so a missing lib/ or packages/ makes the
+  // panel silently absent for every npm user — and no other test would notice.
+  for (const entry of ['index.mjs', 'lib', 'build', 'packages', 'preset', 'cordis.patch.yml']) {
+    assert.ok(files.includes(entry), `the files allowlist carries ${entry}`);
+    assert.ok(existsSync(join(packageRoot, entry)), `and ${entry} exists on disk`);
+  }
+  assert.ok(existsSync(join(packageRoot, 'lib', 'client.js')), 'the client artifact is inside an allowlisted directory');
+  const panelRoot = join(packageRoot, 'packages', 'molbio-panel');
+  if (existsSync(panelRoot)) {
+    for (const entry of ['package.json', 'index.mjs', 'cordis.patch.yml', 'lib/client.js']) {
+      assert.ok(existsSync(join(panelRoot, entry)), `packages/molbio-panel/${entry} exists`);
+    }
+  }
+});
+
 // ── run ─────────────────────────────────────────────────────────────────────
 
 let failed = 0;

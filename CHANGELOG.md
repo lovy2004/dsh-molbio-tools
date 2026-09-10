@@ -9,12 +9,13 @@
 
 版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
 
-## [未发布] — 浏览器内面板（bundle 渠道 / 路径 A 第一段）
+## [0.7.0] — 2026-09-10（浏览器内面板：bundle 渠道 dsh.client 双面包）
 
 **新增两个右栏面板**：**Molbio**（列出会话工作区的序列文件，选中即画图：`.dna`/`.gb`/
 `.gbk` → 质粒图谱 + 特征表，`.fa`/`.fasta` → 序列标识图）与 **Papers**（把
 `molbio_paper_*` 维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板）。解析与渲染在
-浏览器里跑的是本仓库自己的模块，与 Node 工具**同一份源码**。
+浏览器里跑的是本仓库自己的模块，与 Node 工具**同一份源码**——不落盘 SVG、不弹系统查看器、
+不经过工具调用。
 
 - `build/client-bundle.mjs`：零依赖打包器，产出 DSH 客户端加载器要求的 **lazy-CJS**
   产物（`window.__ModuleLoader__.load({id, factory})`）。官方 `tsdown.client.ts` 预设未随
@@ -25,12 +26,22 @@
 - `packages/molbio-panel`：**面板专用包**（宿主半边空实现）——装它只加面板，不会把 46 个
   工具注入该 profile 的每个会话；`dsh-molbio-tools` 则是"工具 + 面板"通道。
 - `package.json`：`exports["./client"]` + `dsh.client {platform: web, inject}` +
-  两个客户端包的 optional peer；`build`/`lib` 进入发布白名单；新增 `build:client` 脚本。
-- 测试：`test/client.mjs`（按加载器方式执行产物 + 两条数据通路，含真实 pUC118 夹具与文献库
-  投影/搜索/错误路径）、`test/client-mount.mjs`（复刻宿主侧图扫描，验证两个包的挂载与依赖解析）。
-- 文档：新增 `docs/client-panel.md`（实现记录：产物格式、服务契约、上限、验证边界）。
+  两个客户端包的 optional peer；`build`/`lib`/`packages` 进入发布白名单；新增
+  `build:client` 脚本。**工具侧无变化（仍 46 个）**，预设渠道与 bundle 渠道可共存。
+- 测试（6 个套件）：
+  - `test/client.mjs`：按加载器方式执行产物（注册形状、**注册期零全局写入**）+ 两条数据
+    通路（真实 pUC118 夹具、文献库投影/搜索/错误路径）；
+  - `test/panel-render.mjs`：**真实组件**在最小钩子宿主里跑完整状态机（无 React、无 DOM），
+    断言列表/图谱/特征表/logo/搜索/标签/空库/坏库/卸载中止；
+  - `test/client-mount.mjs`：复刻宿主侧图扫描，验证两个包能挂上、依赖可解析；
+  - `test/contract.mjs`：把面板与宿主的**运行时契约**钉在已安装的 DSH 上（钩子 prop 命名
+    规则、root hook 提供方、`workspaceFiles` 的方法与 wire 形状、本包自己的注册与实参顺序、
+    以及发布白名单是否真的带上客户端产物）。
+- 文档：新增 `docs/client-panel.md`（实现记录：产物格式、三条硬约束、服务契约、上限、
+  验证边界与未验证项）。
 
-工具侧无变化（仍 46 个）。预设渠道与 bundle 渠道可共存。
+> 说明：本版本的面板已在本地 web profile 安装并通过全部静态/契约验证，**页面内的实际观感
+> 需重启一次 `dsh web` 后在右栏确认**（新插件行在启动时组合）。
 
 ## [0.6.0] — 2026-09-10（preset 目录 v16）
 

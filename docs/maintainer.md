@@ -121,16 +121,22 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 ### 客户端产物（browser half）
 
 浏览器半由 `build/client-bundle.mjs` 从**包根的同一份 `.mjs` 源文件**生成到
-`lib/client.js`。改完源码后：
+`lib/client.js`，并同时为面板专用包产出
+`packages/molbio-panel/lib/client.js`。改完源码后：
 
 ```bash
 node build/client-bundle.mjs     # 或 npm run build:client
-node test/client.mjs && node test/client-mount.mjs
+node test/client.mjs && node test/panel-render.mjs && node test/client-mount.mjs && node test/contract.mjs
 ```
 
-两条纪律：**产物必须与源一起提交**（`dsh plugin add` 装的是产物，用户机器上没有构建
-步骤）；**产物不能进 preset 的版本目录**——客户端模块靠 `rev` 哈希失效，与"版本目录
-规则"无关（那条规则只约束被 `import()` 的宿主侧 `.mjs`）。
+三条纪律：**产物必须与源一起提交**（`dsh plugin add` 装的是产物，用户机器上没有构建
+步骤）；**发布白名单必须覆盖产物所在目录**（`lib/`、`packages/`——`npm publish` 只带
+`files` 列出的东西，漏了就会出现"装完却没有面板"的静默失败，`test/contract.mjs` 的
+打包检查专门盯着这一条）；**产物不能进 preset 的版本目录**——客户端模块靠 `rev` 哈希
+失效，与"版本目录规则"无关（那条规则只约束被 `import()` 的宿主侧 `.mjs`）。
+
+客户端通道的发布面：根包（工具 + 面板）与 `packages/molbio-panel`（只面板）是两个独立
+条目，后者从它自己的目录发布（`npm publish packages/molbio-panel`）。
 
 preset 渠道（受 ESM 模块缓存约束）：
 
