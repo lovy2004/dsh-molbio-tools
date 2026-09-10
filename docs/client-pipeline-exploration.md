@@ -158,3 +158,19 @@ DSH 升级到 0.1.5-alpha.1（9/9 全量替换），新增右侧栏（right side
 
 - **路径 A（bundle 双面包）**：方式不变；落点优先级更新——右栏 tab（`sidebar.right.pane.tab`）最适合图谱/文献面板，`tool.call.toolview` 仍适合工具调用卡的即时图谱，二者可组合。
 - **路径 B/C/D**：不受影响。
+
+## 9. 0.1.5-alpha.2 期间的定点复查（2026-09-10）
+
+本次不是整章重写，只复查决定路径选择的几个**关键机制**（其余结论沿用第 8 节）：
+
+| 复查点 | 结果 |
+| --- | --- |
+| preset 子树排除 | **不变**：`dsh-agent-presets/lib/index.js` L638 仍是 `if (owner?.subtree === this) delete owner.subtree;`（L617 注释原文保留） |
+| 客户端扫描锚点 | **不变**：`dsh-client-modules` 仍只迭代 `ctx.loader.entries()` |
+| `ClientModuleRegistry` 运行时注册 API | **仍无** `register(id, code)`（全库仅一处无关的 `register(`） |
+| 右栏 tab 体系 | **在位**：`dsh-client-ui-sidebar-right` 仍在包内（第 8 节的落点结论继续有效） |
+| 本插件 preset 的挂载健康 | **本次实测发现问题并修复**：`dsh-persona` 的 `text` 契约已换成 `prefix`/`suffix`，组合里的旧写法导致硬挂载失败（见 `CHANGELOG.md` 0.5.1） |
+
+同时新增 `test/preset-health.mjs`：preset 组合的每一行 config 都交给对应包自己的
+`Config` schema 校验。客户端面板的探索（本文件）与 preset 组合的**可挂载性**是两件事
+——后者不需要任何 client 能力，却同样会因为 DSH 升级而腐坏，现在有测试看守。

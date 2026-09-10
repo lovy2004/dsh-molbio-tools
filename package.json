@@ -1,11 +1,16 @@
 {
   "name": "dsh-molbio-tools",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Zero-dependency molecular-biology plugin bundle for the DeepSeek Harness: sequence analysis, primer design (incl. cross-intron qPCR primers), cloning simulation, SnapGene .dna parsing and plasmid maps, Sanger verification, protein tools, qPCR analysis and plotting, multiple sequence alignment and conservation analysis, and a literature/protocol/experiment record system.",
   "type": "module",
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/preset-health.mjs",
+    "test:smoke": "node test/smoke.mjs",
+    "test:preset": "node test/preset-health.mjs"
   },
   "files": [
     "index.mjs",
@@ -25,6 +30,10 @@
     "records.mjs",
     "view.mjs",
     "cordis.patch.yml",
+    "preset",
+    "test",
+    "docs",
+    "CHANGELOG.md",
     "README.md"
   ],
   "dsh": {

@@ -43,10 +43,14 @@ seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关�
 ## 开发与测试
 
 ```bash
-node test/smoke.mjs
+node test/smoke.mjs         # 插件：mock 注册表跑全部 44 个工具 + 输出 schema 校验
+node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
+node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness 根目录>
 ```
 
-冒烟测试通过 mock 注册表运行全部 39 个工具，并用 harness 自身的
+两个检查回答的是**不同**的问题，发布前都要跑：
+
+- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 44 个工具，并用 harness 自身的
 `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
 覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
 SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
@@ -74,16 +78,51 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 可变位点列表、两两同一性统计、简并碱基 union 共识（A/C/G → V）、FASTA 输入与
 比对后 FASTA 写出、五条错误路径与四条参数边界）。
 
+- `preset-health.mjs` 证明**组合**可挂载：它刻意与冒烟测试正交——preset 是 DSH
+  **自己那些包**的组合，DSH 升级后如果某个包的 `Config` 契约变了（0.1.5-alpha.2 就
+  把 `dsh-persona` 的 `text` 换成了 `prefix`/`suffix`），插件代码一行没错，preset 却会
+  在挂载时抛 `$.prefix missing required value`，整个模式从选择器里消失。该脚本把组合的
+  **每一行** config 交给那一行指向的包自己的 `Config` schema 校验（与 Loader 同一套
+  判定，但不启动 harness），另加两项检查：行指向的模块是否存在（相对说明符按组合所在
+  目录解析，与 Loader 改写 `baseUrl` 的行为一致）、行集合与官方 `standard` 预设的差异
+  （缺行 = 悄悄丢能力，多行 = 本插件的 tool-molbio）。`disabled:` 行与 `!!js` 条件行按
+  Loader 的规则跳过。退出码非 0 即发布阻断。
+
 ## 发布与更新流程
 
 preset 渠道（受 ESM 模块缓存约束）：
 
-1. 修改包根代码并跑 `node test/smoke.mjs`；
-2. 把 `.mjs` 文件复制进**新的版本目录** `preset/molbio-lab/plugins/dsh-molbio-tools-vN/`
-   （绝不在已发布目录里原地改文件），并同步修改
-   `preset/molbio-lab/agent.cordis.yml` 的插件行目录名；
-3. bump `package.json` 的 `version`，commit + push（bundle 渠道天然免疫模块缓存：
-   每个发布版本在 node_modules 中都是独立目录）。
+1. 修改包根代码并跑 `node test/smoke.mjs`（插件）与 `node test/preset-health.mjs`（组合）；
+2. **只在插件 `.mjs` 有改动时**才新建版本目录：把 `.mjs` 文件复制进
+   `preset/molbio-lab/plugins/dsh-molbio-tools-vN/`（绝不在已发布目录里原地改文件），
+   并同步修改 `preset/molbio-lab/agent.cordis.yml` 的插件行目录名。
+   只改 `agent.cordis.yml` / `preset.yml` / 文档时**不需要**新目录——组合文件每次挂载
+   都重新读取，模块缓存规则只约束被 `import()` 的 `.mjs`；
+3. 更新 `CHANGELOG.md`（包版本 ↔ 版本目录对照）并把 `package.json` 的 `version` bump；
+4. commit + push，然后打**带日期的注释 tag**（仓库用 `v<包版本>`，如 `v0.5.1`）：
+
+   ```bash
+   git tag -a v0.5.1 -m "v15 (preset dir dsh-molbio-tools-v15): ..." && git push origin v0.5.1
+   ```
+
+   bundle 渠道天然免疫模块缓存（每个发布版本在 node_modules 中都是独立目录）。
+
+### preset 组合的维护（DSH 升级后必做）
+
+`preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的副本 + 末尾一行
+`tool-molbio`。它不会自动跟随 DSH 升级，因此每次升级 DSH 后：
+
+1. 取新版的 shipped `standard`：
+   `<harness>/node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml`；
+2. 与 `preset/molbio-lab/agent.cordis.yml` 做 `git diff --no-index`，**逐行吸收上游改动**
+   （新增/删除的行、配置契约变化），只保留 `tool-molbio` 这一处有意差异与头部注释；
+3. 跑 `node test/preset-health.mjs` 直到全部 `ok`（drift 里只应剩
+   `extra row "tool-molbio"`）；
+4. 把新组合复制到用户的 `~/.dsh/.agent-presets/molbio-lab/`（组合文件可直接覆盖）。
+
+偏差的历史教训：0.1.2 → 0.1.5 期间遗漏了 `persona` 的 `text → prefix/suffix` 契约变更，
+组合在 0.1.5-alpha.2 上直接挂载失败；`present` 行也在同一时期丢失。两处都已修复，
+并由 `preset-health.mjs` 看守。
 
 ## 路线图
 

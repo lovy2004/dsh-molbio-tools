@@ -128,9 +128,12 @@ dsh-molbio-tools/
 ├── preset/
 │   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v15/）
 ├── test/
-│   └── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
+│   ├── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
+│   └── preset-health.mjs # preset 组合健康检查（逐行按该包自己的 Config schema 校验，对照官方 standard 预设）
 ├── docs/
-│   └── maintainer.md # 维护者文档（合规对照/开发测试/路线图）
+│   ├── maintainer.md # 维护者文档（合规对照/开发测试/路线图）
+│   └── client-pipeline-exploration.md # 浏览器内面板的可行性与实现路径调研
+├── CHANGELOG.md     # 变更日志（包版本 + preset 版本目录对照）
 ├── package.json
 └── README.md
 ```
@@ -151,6 +154,12 @@ molbio 工具只在该模式出现，不会把 44 个工具和提示段注入到
 ```
 
 对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
+
+> **兼容性**：当前 preset 组合已对齐 **DSH 0.1.5-alpha.2**（`persona` 行的
+> `prefix`/`suffix` 契约、`present` 行）。DSH 侧插件包改名或改配置契约时，preset 会
+> **硬挂载失败**（该模式直接从选择器里消失），而插件代码本身仍然是好的——用
+> `node test/preset-health.mjs` 可以把每一行的 config 交给对应包自己的 schema 复核，
+> 一眼看出是哪一行、哪个字段坏了。
 
 ### 插件更新（版本目录规则）
 
@@ -183,7 +192,7 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 ```
 
 本仓库已验证：`--dump-config` 输出以 `# == dsh-molbio-tools` + `- id: tool-molbio / name: dsh-molbio-tools` 开头（层序在 dsh-base 之上），且从 profile 目录按包名
-`import('dsh-molbio-tools')` 成功注册全部 39 个工具。两种安装方式可以共存（同名工具
+`import('dsh-molbio-tools')` 成功注册全部 44 个工具。两种安装方式可以共存（同名工具
 由 preset 层 shadow 全局层，无冲突），但通常**二选一**即可。
 
 > **版本目录规则的原理**（维护者必读）：DSH 的 standing preset 挂载在整个进程生命周期

@@ -21,11 +21,18 @@
 
 # The preset's own persona, shadowing the deployment default for this agent.
 # `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+#
+# `prefix`/`suffix` is the current `dsh-persona` contract (0.1.5-alpha.2): the
+# row's Config requires `prefix`, and a leftover `text:` key fails the mount
+# with `$.prefix missing required value` — the preset then never appears in the
+# picker. `test/preset-health.mjs` checks every row's config against the
+# installed package's own schema, which is what catches this class of drift.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: >-
-      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+    prefix: >-
+      You are a coding agent powered by the {{model}} model.
+    suffix: Your working directory is {{cwd}}.
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
@@ -255,6 +262,14 @@
   config:
     fetch: true
     searchTimeoutMs: 60000
+
+# Explicit workspace file delivery. Carried by every shipped preset that is not
+# the fixed two-tool `minimal` training configuration, so this preset keeps the
+# row: without it the agent cannot declare its generated maps/plots/gels as
+# deliverables, which is most of what this toolset produces. It consumes only
+# host-plane services (fs/session/tools) and publishes none.
+- id: present
+  name: '@deepseek-ai/dsh-tool-present'
 
 # dsh-molbio-tools: molecular-biology toolset (44 tools across sequence
 # analysis, primers, cloning (incl. Golden Gate), enzyme catalog, plasmids,
