@@ -5,11 +5,16 @@
   "type": "module",
   "main": "index.mjs",
   "exports": {
-    ".": "./index.mjs"
+    ".": "./index.mjs",
+    "./client": {
+      "default": "./lib/client.js"
+    }
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node test/preset-health.mjs",
+    "build:client": "node build/client-bundle.mjs",
+    "test": "node test/smoke.mjs && node test/client.mjs && node test/client-mount.mjs && node test/preset-health.mjs",
     "test:smoke": "node test/smoke.mjs",
+    "test:client": "node test/client.mjs && node test/client-mount.mjs",
     "test:preset": "node test/preset-health.mjs"
   },
   "files": [
@@ -31,6 +36,8 @@
     "seqio.mjs",
     "records.mjs",
     "view.mjs",
+    "build",
+    "lib",
     "cordis.patch.yml",
     "preset",
     "test",
@@ -41,6 +48,25 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "*",
+    "@deepseek-ai/dsh-client-connection": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-ui-sidebar-right": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-connection": {
+      "optional": true
     }
   },
   "license": "MIT",
