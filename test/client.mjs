@@ -110,26 +110,46 @@ const ctx = {
 };
 module.apply(ctx);
 
-assert.deepEqual(effects, ['molbio panel: tab type', 'molbio panel: tab body', 'molbio panel: tab title']);
-assert.equal(tabTypes.length, 1);
-assert.equal(tabTypes[0].id, 'dsh-molbio-tools');
-assert.equal(tabTypes[0].kind, 'molbio-panel');
-assert.equal(tabTypes[0].title(), 'Molbio');
-assert.equal(tabTypes[0].patterns, undefined, 'a page type declares no resource patterns');
-assert.equal(tabTypes[0].priority, undefined, 'the default priority band is extension (third-party)');
-assert.equal(tabTypes[0].guide.length, 1);
+assert.deepEqual(effects, [
+  'molbio panel: tab type',
+  'molbio panel: tab body',
+  'molbio panel: tab title',
+  'molbio panel: papers tab type',
+  'molbio panel: papers tab body',
+  'molbio panel: papers tab title',
+]);
+assert.equal(tabTypes.length, 2, 'the package contributes two page tab types');
+assert.deepEqual(
+  tabTypes.map((type) => [type.id, type.kind, type.title()]),
+  [['dsh-molbio-tools', 'molbio-panel', 'Molbio'], ['dsh-molbio-tools/papers', 'molbio-papers', 'Papers']],
+);
+for (const type of tabTypes) {
+  assert.equal(type.patterns, undefined, 'a page type declares no resource patterns');
+  assert.equal(type.priority, undefined, 'the default priority band is extension (third-party)');
+  assert.equal(type.guide.length, 1, 'each type offers one guide capsule');
+}
 assert.equal(tabTypes[0].guide[0].title(), 'Molbio');
-// Body + title register in the keyed seats under the type's id.
+assert.equal(tabTypes[1].guide[0].title(), 'Papers');
+assert.deepEqual(tabTypes.map((type) => type.guide[0].order), [40, 41], 'the guide entries have a stable order');
+// Body + title register in the keyed seats under each type's id.
 assert.deepEqual(
   slotRegistrations.map((entry) => [entry.registration.name, entry.registration.key]),
-  [['sidebar.right.pane.tab', 'dsh-molbio-tools'], ['sidebar.right.pane.tab.title', 'dsh-molbio-tools']],
+  [
+    ['sidebar.right.pane.tab', 'dsh-molbio-tools'],
+    ['sidebar.right.pane.tab.title', 'dsh-molbio-tools'],
+    ['sidebar.right.pane.tab', 'dsh-molbio-tools/papers'],
+    ['sidebar.right.pane.tab.title', 'dsh-molbio-tools/papers'],
+  ],
 );
-assert.equal(typeof slotRegistrations[0].component, 'function', 'the body is a component');
-const face = slotRegistrations[0].registration.inject('session-1', {});
-assert.equal(typeof face.remote.workspaceFiles.list, 'function', 'the inject factory hands the body the workspace Remote');
-// `sessionId` and `useSessions` come from the slot runtime, not from this
-// factory: the framework turns every root hook source into a `use<Name>` prop.
-assert.equal(Object.keys(face).join(','), 'remote', 'the body injects nothing the framework already provides');
+assert.equal(typeof slotRegistrations[0].component, 'function', 'the plasmid body is a component');
+assert.equal(typeof slotRegistrations[2].component, 'function', 'the papers body is a component');
+for (const index of [0, 2]) {
+  const face = slotRegistrations[index].registration.inject('session-1', {});
+  assert.equal(typeof face.remote.workspaceFiles.list, 'function', 'the inject factory hands the body the workspace Remote');
+  // `sessionId` and `useSessions` come from the slot runtime, not from this
+  // factory: the framework turns every root hook source into a `use<Name>` prop.
+  assert.equal(Object.keys(face).join(','), 'remote', 'the body injects nothing the framework already provides');
+}
 
 // ── 3. the panel's data path, against the real fixture ──────────────────────
 
@@ -216,6 +236,111 @@ assert.ok(logoSvg.startsWith('<svg'));
 assert.ok(logoSvg.includes('information content (bits)'));
 assert.throws(() => panelCore.parseAlignmentFile(new TextEncoder().encode('>a\nACGT\n')), /at least 2 sequences/);
 assert.throws(() => panelCore.parseAlignmentFile(new TextEncoder().encode('ACGT\n')), /must start with a ">" header/);
+
+// ── 4. the literature panel's data path ─────────────────────────────────────
+
+// readWorkspaceText: ok / missing / error are three distinct answers — an
+// absent papers.json is an EMPTY LIBRARY, a broken one is an ERROR, and the
+// panel must not show "0 papers" for either of the latter two.
+const library = {
+  papers: [
+    {
+      id: 'pmid:12345',
+      title: 'KRAS G12D inhibition in pancreatic models',
+      authors: 'Smith J, Doe A, Roe B',
+      journal: 'Nature',
+      year: '2024',
+      pmid: '12345',
+      tags: ['kras', 'inhibitor'],
+      note: 'Read the in vivo arm.',
+      added_at: '2026-09-01',
+    },
+    {
+      id: 'title:CRISPR screening review:2023',
+      title: 'CRISPR screening review',
+      authors: 'Lee K',
+      year: '2023',
+      url: 'https://example.org/review',
+      tags: ['crispr'],
+      added_at: '2026-09-05',
+    },
+    { id: 'title:No metadata', title: 'No metadata' },
+  ],
+};
+const remoteStub = (answer) => ({
+  workspaceFiles: {
+    async read() { return answer; },
+  },
+});
+const okRead = await panelCore.readWorkspaceText(remoteStub({ ok: true, value: { text: JSON.stringify(library) } }), 's1', 'papers.json');
+assert.equal(okRead.kind, 'text');
+const missingRead = await panelCore.readWorkspaceText(
+  remoteStub({ ok: false, error: { code: 'workspace-file/not-found', message: '"papers.json" does not exist' } }),
+  's1',
+  'papers.json',
+);
+assert.equal(missingRead.kind, 'missing');
+const failedRead = await panelCore.readWorkspaceText(
+  remoteStub({ ok: false, error: { code: 'workspace-file/too-large', message: 'too big' } }),
+  's1',
+  'papers.json',
+);
+assert.equal(failedRead.kind, 'error');
+assert.match(failedRead.message, /too big/);
+const threwRead = await panelCore.readWorkspaceText({
+  workspaceFiles: { async read() { throw new Error('socket closed'); } },
+}, 's1', 'papers.json');
+assert.equal(threwRead.kind, 'error');
+assert.match(threwRead.message, /socket closed/);
+
+const parsedLibrary = panelCore.parseLibrary(JSON.stringify(library));
+assert.equal(parsedLibrary.papers.length, 3);
+// The same document the tool would load (papers.mjs contract: {papers: [...]}).
+const nodeLibrary = JSON.parse(JSON.stringify(library));
+assert.deepEqual(parsedLibrary.papers.map((paper) => paper.id), nodeLibrary.papers.map((paper) => paper.id));
+assert.throws(() => panelCore.parseLibrary('{'), /not valid JSON/);
+assert.throws(() => panelCore.parseLibrary('{"items":[]}'), /must be an object with a "papers" array/);
+assert.deepEqual(panelCore.parseLibrary('{"papers":[null,1,{"title":"x"}]}').papers, [{ title: 'x' }]);
+
+const tags = panelCore.libraryTags(parsedLibrary.papers);
+assert.deepEqual(tags.map((entry) => entry.tag), ['crispr', 'inhibitor', 'kras'], 'tags sort by count then name');
+assert.deepEqual(tags.map((entry) => entry.count), [1, 1, 1]);
+
+// Filtering: newest added_at first; query matches every text field.
+assert.deepEqual(
+  panelCore.filterPapers(parsedLibrary.papers).map((paper) => paper.title),
+  ['CRISPR screening review', 'KRAS G12D inhibition in pancreatic models', 'No metadata'],
+  'default order is newest-added first',
+);
+assert.deepEqual(panelCore.filterPapers(parsedLibrary.papers, { tag: 'kras' }).map((paper) => paper.pmid), ['12345']);
+assert.deepEqual(panelCore.filterPapers(parsedLibrary.papers, { query: 'doe' }).map((paper) => paper.pmid), ['12345'], 'query matches authors');
+assert.deepEqual(panelCore.filterPapers(parsedLibrary.papers, { query: 'example.org' }).map((paper) => paper.title), ['CRISPR screening review']);
+assert.deepEqual(panelCore.filterPapers(parsedLibrary.papers, { query: 'KRAS', tag: 'crispr' }), [], 'tag and query compose as AND');
+assert.equal(panelCore.filterPapers(parsedLibrary.papers, { query: '   ' }).length, 3, 'a blank query keeps everything');
+
+// Detail fields: fixed order, empty values skipped.
+assert.deepEqual(
+  panelCore.paperFields(parsedLibrary.papers[0]),
+  [
+    { key: 'authors', label: 'Authors', value: 'Smith J, Doe A, Roe B' },
+    { key: 'journal', label: 'Journal', value: 'Nature' },
+    { key: 'year', label: 'Year', value: '2024' },
+    { key: 'pmid', label: 'PMID', value: '12345' },
+    { key: 'added_at', label: 'Added', value: '2026-09-01' },
+  ],
+);
+assert.deepEqual(panelCore.paperFields(parsedLibrary.papers[2]), [], 'a bare paper has no detail rows');
+assert.equal(panelCore.paperSummary(parsedLibrary.papers[0]), 'Smith J et al. · Nature · 2024');
+assert.equal(panelCore.paperSummary(parsedLibrary.papers[1]), 'Lee K · 2023');
+assert.equal(panelCore.paperSummary(parsedLibrary.papers[2]), '');
+// Links: an explicit url wins, else the PubMed page for the PMID, else none.
+assert.equal(panelCore.paperLink(parsedLibrary.papers[0]), 'https://pubmed.ncbi.nlm.nih.gov/12345/');
+assert.equal(panelCore.paperLink(parsedLibrary.papers[1]), 'https://example.org/review');
+assert.equal(panelCore.paperLink(parsedLibrary.papers[2]), undefined);
+assert.equal(panelCore.LIBRARY_FILE, 'papers.json');
+// The panel's file path matches the tool's default (papers.mjs DEFAULT_LIBRARY_FILE).
+const { DEFAULT_LIBRARY_FILE } = await import('../papers.mjs');
+assert.equal(panelCore.LIBRARY_FILE, DEFAULT_LIBRARY_FILE);
 
 console.log('client bundle format checks passed');
 console.log('panel data path checks passed');

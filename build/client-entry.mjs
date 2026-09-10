@@ -25,13 +25,21 @@
  */
 import { createElement as h, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  LIBRARY_FILE,
   childPath,
   classifyEntry,
   decodeBase64Bytes,
+  filterPapers,
+  libraryTags,
   logoSvg,
+  paperFields,
+  paperLink,
+  paperSummary,
   parseAlignmentFile,
+  parseLibrary,
   parsePlasmidFile,
   plasmidSvg,
+  readWorkspaceText,
   sortEntries,
 } from './panel-core.mjs';
 
@@ -39,6 +47,9 @@ import {
 const PANEL_ID = 'dsh-molbio-tools';
 /** Type discriminator the tab is opened by. */
 const PANEL_KIND = 'molbio-panel';
+/** The literature tab is a second page type of the same package. */
+const PAPERS_ID = 'dsh-molbio-tools/papers';
+const PAPERS_KIND = 'molbio-papers';
 
 /** Read one file's raw bytes through the workspace Remote. */
 async function readBytes(remote, sessionId, path, signal) {
@@ -67,18 +78,33 @@ async function listDirectory(remote, sessionId, path, signal) {
 
 const styles = {
   root: { display: 'flex', height: '100%', minHeight: '320px', font: '13px/1.5 system-ui, sans-serif', color: 'var(--dsh-text, #1a1a1a)' },
-  list: { width: '210px', flex: '0 0 210px', overflowY: 'auto', borderRight: '1px solid var(--dsh-border, #e3e6ea)', padding: '8px 0' },
-  listItem: (active) => ({
-    padding: '5px 12px',
+  side: { display: 'flex', flexDirection: 'column', width: '230px', flex: '0 0 230px', borderRight: '1px solid var(--dsh-border, #e3e6ea)', minHeight: 0 },
+  search: { margin: '8px 10px 4px', padding: '4px 6px', font: 'inherit', border: '1px solid var(--dsh-border, #e3e6ea)', borderRadius: '4px', background: 'transparent', color: 'inherit' },
+  list: { flex: '1 1 auto', overflowY: 'auto', padding: '4px 0 8px' },
+  tagRow: { display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '4px 10px 6px' },
+  tagChip: (active) => ({
+    fontSize: '11px',
+    padding: '1px 7px',
+    borderRadius: '9px',
     cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
+    border: '1px solid var(--dsh-border, #e3e6ea)',
     background: active ? 'var(--dsh-selected, #eaf2ff)' : 'transparent',
     fontWeight: active ? 600 : 400,
   }),
+  listItem: (active) => ({
+    padding: '5px 12px',
+    cursor: 'pointer',
+    background: active ? 'var(--dsh-selected, #eaf2ff)' : 'transparent',
+  }),
+  listTitle: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  listSub: { fontSize: '11px', opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   listHead: { padding: '4px 12px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', opacity: 0.55 },
   main: { flex: '1 1 auto', overflow: 'auto', padding: '12px 16px' },
+  detailTitle: { fontSize: '15px', fontWeight: 600, marginBottom: '10px', lineHeight: 1.35 },
+  link: { color: 'var(--dsh-link, #2f6fd0)', textDecoration: 'none' },
+  fieldKey: { textAlign: 'left', padding: '3px 10px 3px 0', opacity: 0.6, fontWeight: 500, verticalAlign: 'top', whiteSpace: 'nowrap' },
+  note: { marginTop: '12px', padding: '8px 10px', background: 'var(--dsh-soft, #f6f7f9)', borderRadius: '4px', whiteSpace: 'pre-wrap' },
+  idLine: { marginTop: '12px', fontSize: '11px', opacity: 0.45, fontFamily: 'ui-monospace, monospace' },
   meta: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginBottom: '10px', fontSize: '12px', opacity: 0.8 },
   error: { color: 'var(--dsh-danger, #c0392b)', padding: '10px 12px', whiteSpace: 'pre-wrap' },
   muted: { opacity: 0.6, padding: '10px 12px' },
@@ -227,6 +253,134 @@ function panelTitle() {
   return 'Molbio';
 }
 
+/** The literature tab's chip text. */
+function papersTitle() {
+  return 'Papers';
+}
+
+/**
+ * The literature panel: the workspace `papers.json` the molbio_paper_* tools
+ * maintain, rendered as a searchable reading list with a detail pane.
+ *
+ * Read-only by design: writing would need the dedupe/merge semantics of
+ * molbio_paper_add|update, which are multi-call tools whose concurrency
+ * contract is "not safe" — a panel writing the same file behind them would have
+ * to reimplement that contract to avoid lost updates. The panel points at the
+ * tools instead (see EMPTY_HINT).
+ */
+function PapersPanel({ sessionId, remote, useSessions }) {
+  const cwd = useSessions((sessions) => sessions.byId[sessionId]?.cwd);
+  const [papers, setPapers] = useState([]);
+  const [status, setStatus] = useState({ kind: 'waiting' });
+  const [query, setQuery] = useState('');
+  const [tag, setTag] = useState('');
+  const [selectedId, setSelectedId] = useState(null);
+
+  useEffect(() => {
+    if (cwd === undefined) {
+      setStatus({ kind: 'waiting' });
+      return undefined;
+    }
+    const controller = new AbortController();
+    setStatus({ kind: 'loading' });
+    readWorkspaceText(remote, sessionId, childPath(cwd, LIBRARY_FILE), controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.kind === 'missing') {
+          setPapers([]);
+          setStatus({ kind: 'empty' });
+          return;
+        }
+        if (result.kind === 'error') {
+          setStatus({ kind: 'error', message: result.message });
+          return;
+        }
+        try {
+          setPapers(parseLibrary(result.text).papers);
+          setStatus({ kind: 'ready' });
+        } catch (error) {
+          setStatus({ kind: 'error', message: String(error?.message ?? error) });
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setStatus({ kind: 'error', message: String(error?.message ?? error) });
+      });
+    return () => controller.abort();
+  }, [cwd, remote, sessionId]);
+
+  const tags = useMemo(() => libraryTags(papers), [papers]);
+  const visible = useMemo(() => filterPapers(papers, { query, tag }), [papers, query, tag]);
+  const selected = visible.find((paper) => paper.id === selectedId) ?? visible[0];
+
+  const search = h('input', {
+    type: 'search',
+    value: query,
+    placeholder: 'Search title, author, journal, note…',
+    onChange: (event) => setQuery(event.target.value),
+    style: styles.search,
+  });
+
+  const tagRow = tags.length === 0 ? null : h('div', { style: styles.tagRow },
+    h('span', {
+      style: styles.tagChip(tag === ''),
+      onClick: () => setTag(''),
+    }, 'all'),
+    ...tags.map((entry) => h('span', {
+      key: entry.tag,
+      style: styles.tagChip(tag === entry.tag),
+      title: `${entry.count} paper(s)`,
+      onClick: () => setTag(tag === entry.tag ? '' : entry.tag),
+    }, `${entry.tag} (${entry.count})`)));
+
+  const list = h('div', { style: styles.list },
+    h('div', { style: styles.listHead }, `Papers (${visible.length}${visible.length === papers.length ? '' : ` / ${papers.length}`})`),
+    ...(visible.length === 0
+      ? [h('div', { key: 'none', style: styles.muted }, papers.length === 0 ? 'No papers in the library yet' : 'No paper matches this filter')]
+      : visible.map((paper) => h('div', {
+        key: paper.id ?? paper.title,
+        style: styles.listItem(selected?.id === paper.id),
+        title: paper.title,
+        onClick: () => setSelectedId(paper.id),
+      },
+      h('div', { style: styles.listTitle }, String(paper.title ?? '(untitled)')),
+      h('div', { style: styles.listSub }, paperSummary(paper))))));
+
+  const detail = [];
+  if (status.kind === 'waiting') detail.push(h('div', { key: 'wait', style: styles.muted }, 'Waiting for the session workspace…'));
+  if (status.kind === 'loading') detail.push(h('div', { key: 'load', style: styles.muted }, 'Reading papers.json…'));
+  if (status.kind === 'error') detail.push(h('div', { key: 'err', style: styles.error }, status.message));
+  if (status.kind === 'empty') {
+    detail.push(h('div', { key: 'hint', style: styles.muted },
+      `No ${LIBRARY_FILE} in this workspace. Add papers with molbio_paper_add (or molbio_pubmed_search first); the file appears here once it exists.`));
+  }
+  if (status.kind === 'ready' && selected !== undefined) {
+    const link = paperLink(selected);
+    detail.push(h('div', { key: 'title', style: styles.detailTitle },
+      link === undefined ? String(selected.title) : h('a', { href: link, target: '_blank', rel: 'noreferrer', style: styles.link }, String(selected.title))));
+    detail.push(h('table', { key: 'fields', style: styles.table },
+      h('tbody', null, ...paperFields(selected).map((field) => h('tr', { key: field.key },
+        h('th', { style: styles.fieldKey }, field.label),
+        h('td', { style: styles.td }, field.value))))));
+    if (Array.isArray(selected.tags) && selected.tags.length > 0) {
+      detail.push(h('div', { key: 'tags', style: styles.tagRow }, ...selected.tags.map((entry) => h('span', { key: entry, style: styles.tagChip(false) }, entry))));
+    }
+    if (typeof selected.note === 'string' && selected.note !== '') {
+      detail.push(h('div', { key: 'note', style: styles.note }, selected.note));
+    }
+    detail.push(h('div', { key: 'id', style: styles.idLine }, `id: ${selected.id ?? '(none)'}`));
+  }
+  if (status.kind === 'ready' && selected === undefined) {
+    detail.push(h('div', { key: 'pick', style: styles.muted }, 'Pick a paper to read its details.'));
+  }
+
+  return h('div', { style: styles.root },
+    h('div', { style: styles.side },
+      search,
+      tagRow,
+      list),
+    h('div', { style: styles.main }, ...detail));
+}
+
 /** Required browser services. */
 const inject = ['slots', 'sidebarRightTabs', 'remote'];
 
@@ -258,6 +412,27 @@ function apply(ctx) {
     name: 'sidebar.right.pane.tab.title',
     key: PANEL_ID,
   }, panelTitle), 'molbio panel: tab title');
+  // The literature tab: a second page type from the same package. Each guide
+  // entry opens its own tab, so the two panels coexist in one session.
+  ctx.effect(() => ctx.sidebarRightTabs.register({
+    id: PAPERS_ID,
+    kind: PAPERS_KIND,
+    title: papersTitle,
+    guide: [{
+      order: 41,
+      title: () => 'Papers',
+      description: () => 'Read the workspace papers.json library',
+    }],
+  }), 'molbio panel: papers tab type');
+  ctx.effect(() => ctx.slots.register({
+    name: 'sidebar.right.pane.tab',
+    key: PAPERS_ID,
+    inject: () => ({ remote }),
+  }, PapersPanel), 'molbio panel: papers tab body');
+  ctx.effect(() => ctx.slots.register({
+    name: 'sidebar.right.pane.tab.title',
+    key: PAPERS_ID,
+  }, papersTitle), 'molbio panel: papers tab title');
 }
 
 export { apply, inject };

@@ -66,7 +66,10 @@ const ENTRY = join(here, 'client-entry.mjs');
 const EXTERNALS = new Set(['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client']);
 
 const IMPORT_RE = /^import\s*\{([^}]*)\}\s*from\s*'([^']+)';\s*$/gm;
-const EXPORT_DECL_RE = /^export\s+(function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm;
+// The `async` modifier is part of the captured prefix, so lowering
+// `export async function f` keeps `async` (dropping it would produce a factory
+// body that calls `await` outside an async function).
+const EXPORT_DECL_RE = /^export\s+(async\s+function\*?|function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm;
 const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}\s*;\s*$/gm;
 /** `export { a, b as c } from './mod.mjs';` — a re-export, not a local list. */
 const REEXPORT_RE = /^export\s*\{([^}]*)\}\s*from\s*'([^']+)';\s*$/gm;

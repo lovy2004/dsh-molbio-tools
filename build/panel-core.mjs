@@ -170,3 +170,126 @@ export function logoSvg(alignment) {
     smallSample: true,
   });
 }
+
+// ── literature library (papers.json) ────────────────────────────────────────
+
+/** The library file the molbio_paper_* tools write, relative to the workspace. */
+export const LIBRARY_FILE = 'papers.json';
+
+/** This panel's field order in the detail pane; unknown keys are ignored. */
+const PAPER_FIELDS = [
+  ['authors', 'Authors'],
+  ['journal', 'Journal'],
+  ['year', 'Year'],
+  ['pmid', 'PMID'],
+  ['url', 'URL'],
+  ['added_at', 'Added'],
+];
+
+/**
+ * Read one workspace file as text.
+ * @returns {{kind: 'text', text: string} | {kind: 'missing'} | {kind: 'error', message: string}}
+ *   A missing file is not an error: an absent `papers.json` is simply an empty
+ *   library, which is what the molbio_paper_list tool reports too.
+ */
+export async function readWorkspaceText(remote, sessionId, path, signal) {
+  let result;
+  try {
+    result = await remote.workspaceFiles.read({ sessionId }, path, undefined, signal);
+  } catch (error) {
+    return { kind: 'error', message: String(error?.message ?? error) };
+  }
+  if (result === null || typeof result !== 'object') return { kind: 'error', message: 'the workspace read returned nothing' };
+  if (result.ok) return { kind: 'text', text: result.value?.text ?? '' };
+  const failure = result.error;
+  // The wire carries typed codes; not-found is the one that means "empty".
+  if (failure?.code === 'workspace-file/not-found' || /not-found|does not exist/i.test(String(failure?.message ?? ''))) {
+    return { kind: 'missing' };
+  }
+  return { kind: 'error', message: String(failure?.message ?? 'the workspace read failed') };
+}
+
+/**
+ * Parse a paper library document.
+ *
+ * Mirrors `molbio_paper_list`'s contract (papers.mjs): an object with a
+ * `papers` array. A corrupt file is reported, never silently treated as empty —
+ * the panel exists to show the researcher their library, so "0 papers" and "the
+ * file is broken" must not look the same.
+ * @param {string} text the file's content.
+ * @returns {{papers: Array}} parsed library.
+ */
+export function parseLibrary(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new MolbioInputError(`papers.json is not valid JSON: ${String(error?.message ?? error)}`);
+  }
+  if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.papers)) {
+    throw new MolbioInputError('papers.json must be an object with a "papers" array');
+  }
+  return { papers: parsed.papers.filter((entry) => entry !== null && typeof entry === 'object') };
+}
+
+/** Every tag in the library, deduped and sorted, with occurrence counts. */
+export function libraryTags(papers) {
+  const counts = new Map();
+  for (const paper of papers) {
+    for (const tag of Array.isArray(paper.tags) ? paper.tags : []) {
+      if (typeof tag !== 'string' || tag.trim() === '') continue;
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag));
+}
+
+/**
+ * Filter papers for the panel's search box.
+ * @param {Array} papers library entries.
+ * @param {{query?: string, tag?: string}} [filter]
+ * @returns {Array} matching papers, newest `added_at` first.
+ */
+export function filterPapers(papers, filter = {}) {
+  const query = String(filter.query ?? '').trim().toLowerCase();
+  const tag = filter.tag;
+  return papers
+    .filter((paper) => {
+      if (tag !== undefined && tag !== '' && !(Array.isArray(paper.tags) && paper.tags.includes(tag))) return false;
+      if (query === '') return true;
+      const haystack = [paper.title, paper.authors, paper.journal, paper.year, paper.pmid, paper.url, paper.note, ...(Array.isArray(paper.tags) ? paper.tags : [])]
+        .filter((value) => value !== undefined && value !== null)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    })
+    .sort((left, right) => String(right.added_at ?? '').localeCompare(String(left.added_at ?? '')) || String(left.title ?? '').localeCompare(String(right.title ?? '')));
+}
+
+/** The fields the detail pane lists, in a fixed order, skipping empty ones. */
+export function paperFields(paper) {
+  const fields = [];
+  for (const [key, label] of PAPER_FIELDS) {
+    const value = paper[key];
+    if (typeof value === 'string' && value.trim() !== '') fields.push({ key, label, value: value.trim() });
+  }
+  return fields;
+}
+
+/** A one-line summary for the list row. */
+export function paperSummary(paper) {
+  const parts = [];
+  if (typeof paper.authors === 'string' && paper.authors !== '') parts.push(paper.authors.split(',')[0].trim() + (paper.authors.includes(',') ? ' et al.' : ''));
+  if (paper.journal !== undefined) parts.push(String(paper.journal));
+  if (paper.year !== undefined) parts.push(String(paper.year));
+  return parts.join(' · ');
+}
+
+/** The URL a paper's title links to, when it has one. */
+export function paperLink(paper) {
+  if (typeof paper.url === 'string' && paper.url !== '') return paper.url;
+  if (typeof paper.pmid === 'string' && paper.pmid !== '') return `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/`;
+  return undefined;
+}

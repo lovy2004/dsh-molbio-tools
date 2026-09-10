@@ -94,20 +94,28 @@
 
 ## 浏览器内面板（bundle 渠道，可选）
 
-除了工具与"写 SVG 文件 + 系统查看器"这条链路，本包还有一个**浏览器内的 Molbio 右栏
-面板**：在右侧栏列出当前会话工作区的序列文件，选中**当场在面板里画出来**——`.dna`/`.gb`/
-`.gbk` 出质粒图谱，`.fa`/`.fasta` 出序列标识图。解析与渲染在浏览器里跑的就是本仓库
-自己的模块（`lib/genbank/snapgene/plasmid/msa/logo` 的同一份源码），不落盘、不弹外部窗口。
+除了工具与"写 SVG 文件 + 系统查看器"这条链路，本包还有**浏览器内的右栏面板**：
+
+| tab | 内容 |
+| --- | --- |
+| **Molbio** | 列出当前会话工作区的序列文件，选中**当场在面板里画出来**——`.dna`/`.gb`/`.gbk` 出质粒图谱 + 特征表，`.fa`/`.fasta` 出序列标识图 |
+| **Papers** | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） |
+
+解析与渲染在浏览器里跑的就是本仓库自己的模块（`lib/genbank/snapgene/plasmid/msa/logo`
+的同一份源码），不落盘、不弹外部窗口。
 
 它走的是 **bundle 渠道**（`dsh.client` 双面包），因为 preset 渠道挂不了客户端 UI：
 
 ```powershell
-dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools   # 本地目录
-dsh plugin --profile <profile> add dsh-molbio-tools              # 或 npm 包
+# 只要面板（不把 46 个工具带进该 profile 的每个会话）——推荐给共享的 web profile
+dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-panel
+# 或：工具 + 面板一起（分子生物学专用的 profile）
+dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools
 ```
 
-装上后**刷新页面**（无需重建 Web 应用），右栏的引导页里会出现 "Molbio" 胶囊。
-与 preset 渠道可以共存：preset 给 46 个工具，bundle 给面板。
+装上后**重启一次服务并刷新页面**（新插件行需要在启动时组合；之后改客户端代码才只靠刷新），
+右栏引导页里会出现 **Molbio** 与 **Papers** 两个胶囊。与 preset 渠道可以共存：preset 给
+46 个工具，bundle 给面板。
 
 细节（产物格式、服务契约、上限、验证方式、已知限制）见
 [docs/client-panel.md](docs/client-panel.md)。

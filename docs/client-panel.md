@@ -6,20 +6,26 @@
 
 ## 1. 已交付的东西
 
-一个浏览器内的 **Molbio** 右栏 tab（`sidebar.right.pane.tab`）：列出当前会话工作区里的
-序列文件，选中即在面板里画出——`.dna`/`.gb`/`.gbk` 走质粒图谱，`.fa`/`.fasta` 走
-序列标识图。**解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/
-plasmid/msa/logo`），不经过任何工具调用、不落盘 SVG、不弹系统查看器。
+两个浏览器内的右栏 tab：
+
+| tab | 内容 | 数据来源 |
+| --- | --- | --- |
+| **Molbio** | 列出会话工作区里的序列文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图 | `workspaceFiles.readAll`（二进制，含 SnapGene） |
+| **Papers** | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
+
+**解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`），
+不经过任何工具调用、不落盘 SVG、不弹系统查看器。
 
 | 文件 | 作用 |
 | --- | --- |
-| `build/client-bundle.mjs` | 零依赖打包器：把浏览器半打成 DSH 客户端加载器要求的 lazy-CJS 产物 |
+| `build/client-bundle.mjs` | 零依赖打包器：把浏览器半打成 DSH 客户端加载器要求的 lazy-CJS 产物，**一趟构建产出两个交付包** |
 | `build/browser-api.mjs` | 浏览器安全面：从**包根的 `.mjs` 源文件**再导出面板可用的一切（单一事实来源） |
-| `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染），不含 React，可在 Node 里单测 |
-| `build/client-entry.mjs` | 浏览器半本体：注册 tab 类型、正文、标题 chip |
+| `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
+| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip |
 | `lib/client.js` | **构建产物**（`exports["./client"]` 指向它；由 `npm run build:client` 生成） |
-| `test/client.mjs` | 按加载器的方式执行产物 + 驱动数据通路（含真实 pUC118 夹具） |
-| `test/client-mount.mjs` | 复刻宿主侧图扫描，证明本包与线上 web profile 能挂上、依赖可解析 |
+| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 46 个工具解耦的交付通道 |
+| `test/client.mjs` | 按加载器的方式执行产物 + 驱动两条数据通路（含真实 pUC118 夹具） |
+| `test/client-mount.mjs` | 复刻宿主侧图扫描，证明两个包都能挂上、依赖可解析 |
 
 命令：`npm run build:client`（构建）、`npm test`（全部测试）、
 `node test/client-mount.mjs --profile web`（针对某个 profile 复核）。
@@ -64,23 +70,28 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 | 需要 | 从哪来 | 为什么不选替代 |
 | --- | --- | --- |
 | 文件字节 | `ctx.remote.workspaceFiles.readAll(path)`（base64 → `Uint8Array`） | 面板只读；`readAll` 给完整字节，SnapGene 的 `.dna` 是二进制，`read()` 的行窗口拿不到 |
+| 文件文本 | `ctx.remote.workspaceFiles.read(path)`（行窗口） | `papers.json` 是文本；行窗口足够且省带宽。**"文件不存在"被单独识别**（wire 码 `workspace-file/not-found`）——不存在的库是"空库"，坏掉的库是"错误"，面板不让这两者看起来一样 |
 | 目录列表 | `ctx.remote.workspaceFiles.list(path)` | 返回 `{name, type, size?}`，路径用 `/` 拼接 |
 | 工作区根目录 | `useSessions((s) => s.byId[sessionId]?.cwd)` | **框架自动注入**：`slots.provideRoot({hooks:{sessions}})` 把每个 root hook 合成为 `use<Name>` prop，所以正文**不需要**自己声明它 |
 | 会话 id / actions | 插槽框架注入的 `sessionId` | 面板自己的 `inject` 工厂只需交出 `remote` |
-| tab 类型注册 | `ctx.sidebarRightTabs.register({id, kind, title, guide})` | `patterns` 省略即"页类型"（按 kind 打开），第三方默认优先级带 `extension` |
+| tab 类型注册 | `ctx.sidebarRightTabs.register({id, kind, title, guide})` | `patterns` 省略即"页类型"（按 kind 打开），第三方默认优先级带 `extension`；同一包注册两个页类型即两个 tab（各自一个 guide 胶囊，`order` 决定排布） |
 | 正文 / 标题 | keyed 座位 `sidebar.right.pane.tab` / `…tab.title`，key = 类型的 `id` | —— |
 
-**没有做宿主侧 RPC**：面板需要的一切（序列解析、图谱/logo 渲染）都是纯计算，直接在浏览器
-里跑同一份源码即可，省掉 Typert Remote 注册这一整块不确定性与版本耦合。将来若要做
-**文献库面板**（读 `papers.json`、写笔记），`workspaceFiles` 的 `readAll`/`write` 仍不够
-表达"按 PMID 去重/更新"这类语义，那时再评估要么走宿主 RPC、要么把库文件也当普通文件读写。
+**没有做宿主侧 RPC**：两个面板需要的一切（序列解析、图谱/logo 渲染、文献库投影）都是纯
+计算，直接在浏览器里跑同一份源码即可，省掉 Typert Remote 注册这一整块不确定性与版本耦合。
+
+**文献库面板是只读的**（刻意）：写回需要 `molbio_paper_add`/`update` 的去重与合并语义，
+而那几个工具的并发契约是"不安全"（`isConcurrencySafe: false`）——面板在背后写同一个文件，
+就必须把这套契约重新实现一遍才能避免丢更新。所以面板只读并指向工具；要改库就用工具。
 
 ## 4. 上限与已知限制（都是设计取舍，不是未修的 bug）
 
 - **文件大小**：`readAll` 的上限是部署配置 `maxFileBytes`（默认 **32 MiB**），
-  `list` 的条目上限 `maxEntries`（默认 **2000**）。超限是明确的 wire 错误，面板原样显示。
-- **面板只读**：只列目录第一层，不递归、不写文件。
-- **表格截断**：特征表最多渲染 200 行（图谱本身画全部特征，`renderPlasmidMap` 自身上限 200）。
+  `list` 的条目上限 `maxEntries`（默认 **2000**）；`read` 一次最多 `maxLines`（默认 5000）行。
+  超限是明确的 wire 错误，面板原样显示。
+- **面板只读**：都只列目录第一层、不递归、不写文件（文献库面板写回的理由见上一节）。
+- **表格截断**：质粒特征表最多渲染 200 行（图谱本身画全部特征，`renderPlasmidMap` 自身上限 200）。
+- **文献库无分页**：整库渲染成一个列表；上千条时靠搜索/标签过滤，没有虚拟滚动。
 - **图片式交互**：SVG 里注入的是真实 DOM（可缩放、可选中文本），但没有点特征跳转之类的联动。
 - **CSS 内联**：产物刻意不注入样式表——`factory` 里的样式副作用要自己管拆除；
   内联样式让产物保持单文件、零生命周期负担。
@@ -95,20 +106,26 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 1. **产物格式**：`test/client.mjs` 在 `vm` 里执行产物，断言"注册一个工厂、id 正确、
    注册期无全局写入"，再用桩 `require` 物化它，断言 `apply`/`inject` 与
    `require` 只用到 `react`。
-2. **服务契约**：对桩服务 `apply()`，断言 tab 类型（`id`/`kind`/`title`/`guide`、
-   无 `patterns`）、两个 keyed 座位的注册、正文 `inject` 工厂只交出 `remote`。
-3. **数据通路**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，AmpR 2102-2962 反链）
-   → SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；FASTA → 比对 → logo；
+2. **服务契约**：对桩服务 `apply()`，断言**两个** tab 类型（`id`/`kind`/`title`/`guide`、
+   无 `patterns`、guide `order` 40/41）、四个 keyed 座位的注册、两个正文的 `inject`
+   工厂都只交出 `remote`。
+3. **数据通路（质粒）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，AmpR 2102-2962
+   反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；FASTA → 比对 → logo；
    扩展名分类、排序、base64 解码、非法输入的错误路径。
-4. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
+4. **数据通路（文献库）**：`readWorkspaceText` 的三种结果（有文本 / 文件不存在 / 读取失败）
+   分别对应"有库 / 空库 / 报错"；`parseLibrary` 与工具侧契约一致（`{papers: [...]}`）且
+   坏 JSON 明确报错；标签统计与排序、搜索（标题/作者/期刊/年份/PMID/URL/笔记/标签 + 标签
+   组合成 AND）、详情字段的固定顺序与空值跳过、摘要行、链接回退（url → PubMed → 无）；
+   并断言面板的库文件名与 `papers.mjs` 的 `DEFAULT_LIBRARY_FILE` **同源**。
+5. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
    `insert:` 行，用 harness 自己的 YAML 方言解析），对每一行复刻宿主扫描（最近的
    `package.json` + `dsh.client` + `exports["./client"]` 文件存在性），断言：
-   本包走的是与所有线上客户端包相同的分支；`dsh.client.inject` 里声明的两个包
+   **两个包**走的分支与所有线上客户端包相同；`dsh.client.inject` 里声明的两个包
    （sidebar-right / connection）**本身就是 graph 行**；产物的 `require` 全部有答案。
-   实测：152 行挂载行中 53 个是 client 行。
+   实测：153 行挂载行中 54 个是 client 行（含本包自己的那一行）。
 
 **尚未验证（需要真实浏览器）**：React 组件在真实 DOM 里的渲染、插槽框架注入的
-`useSessions` 是否在运行时按预期出现、右栏 guide 页里胶囊的排布。这些只能在运行中的
+`useSessions` 是否在运行时按预期出现、两个 tab 的 guide 胶囊排布。这些只能在运行中的
 GUI 里点一下才能确认——自动测试到不了那里（本机没有可用的无头浏览器，且页面本身有
 trust 网关 401）。
 
@@ -130,10 +147,12 @@ shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 
 ## 7. 下一步
 
-- **真机确认**：装上后在右栏 guide 页应出现 "Molbio" 胶囊；打开工作区里任意 `.dna`
-  或 `.gb` 应直接出图。
-- **第二个面板**：文献库（`papers.json`）——需要先决定数据面（宿主 RPC 还是文件读写）。
-- **`tool.call.toolview`**：同一个渲染器还能挂成 `molbio_plasmid_map` 的自定义调用卡，
-  让工具调用本身显示图而不是只给路径；属于同一份 `panel-core.mjs` 的复用。
+- **真机确认**：装上并重启后，右栏引导页应出现 **Molbio** 与 **Papers** 两个胶囊；
+  Molbio 打开工作区里任意 `.dna`/`.gb` 应直接出图，Papers 在有 `papers.json` 的会话里
+  应列出条目。
+- **`tool.call.toolview`**：同一套渲染器还能挂成 `molbio_plasmid_map` 的自定义调用卡，
+  让工具调用本身显示图而不是只给路径；`panel-core.mjs` 可直接复用。
+- **文献库写回**（可选）：若要面板内编辑笔记/标签，需要先定义与 `molbio_paper_*` 工具
+  一致的并发契约（乐观版本号或串行化队列），或让工具走同一条 RPC。
 - **上游提案（路径 B）**：preset 渠道挂 client 仍是真实生态需求，可以在社区反馈时
   引用本文第 2 节的扫描规则（相对 specifier 已可解析，缺的只是"preset 子树参与扫描"）。
