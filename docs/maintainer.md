@@ -138,6 +138,19 @@ node test/client.mjs && node test/panel-render.mjs && node test/client-mount.mjs
 客户端通道的发布面：根包（工具 + 面板）与 `packages/molbio-panel`（只面板）是两个独立
 条目，后者从它自己的目录发布（`npm publish packages/molbio-panel`）。
 
+**安装与修复**：把面板装进某个 profile 只有一条正路——
+
+```bash
+dsh plugin --profile <profile> add <仓库路径>/packages/molbio-panel
+```
+
+profile 用的是 pnpm 的 **hoisted** linker，而 `link:` 依赖的软链**只由 `add` 物化**：
+如果 `node_modules/<包>` 丢了（被清理、被误删、或 profile 目录被其它操作动过），
+`dsh plugin --profile <profile> install` 与 `pnpm install --force` 都只会回答
+"Already up to date" 而**不会重建链接**。修复办法就是重新 `add` 一次同一个路径（无需网络，
+package.json 与 lockfile 里的声明不变）。装完核对三件事：链接存在、`package.json` 里
+`dsh.client.platform === "web"`、`lib/client.js` 存在且与仓库产物同哈希。
+
 preset 渠道（受 ESM 模块缓存约束）：
 
 1. 修改包根代码并跑 `node test/smoke.mjs`（插件）与 `node test/preset-health.mjs`（组合）；
