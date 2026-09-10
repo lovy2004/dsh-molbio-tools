@@ -7,7 +7,44 @@
   每次插件代码变更**必须新建目录**（见 [README 的版本目录规则](README.md#插件更新版本目录规则)）。
   它只增不减，且与 semver 不同步。
 
-版本目录当前指向 v15（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+
+## [0.6.0] — 2026-09-10（preset 目录 v16）
+
+**序列标识图与 CRISPR gRNA 设计（路线图 v16 方向）。** 工具总数 44 → 46。
+
+### 新增
+
+- **`logo.mjs` + `molbio_sequence_logo`**：把保守性分析背后的逐列碱基组成画成 SVG
+  序列标识图。字母高度 = 信息量 Rᵢ = log₂4 − (Hᵢ + e_n)，纵轴 bits（0-2）；堆叠高度
+  按频率分配，经典配色。频率只按残基统计（缺口排除并逐列上报），简并碱基按碱基集合
+  摊分权重。`small_sample`（默认开）扣小样本熵校正 e_n = (K−1)/(2·ln2·n)；
+  `score_type: "frequency"` 切成纯频率图。输入 `alignment` / `sequences` /
+  `fasta_path`，写 SVG 后自动打开。
+- **`crispr.mjs` + `molbio_grna_design`**：SpCas9 约定的 PAM 锚定 gRNA 设计。双链扫描
+  20 nt protospacer，逐条报告 1-based 顶链坐标、链向、GC%、NN Tm、Primer3 式
+  self-any/self-end、种子自互补、发夹 Tm、poly-T，以及逐项公开的启发式评分
+  （GC/Tm/poly-T/同聚/自互补/种子/发夹/**每个脱靶 8 分**/PAM 前一位 G +4）。
+  硬过滤（GC 上下限、poly-T、3' 自互补、G/C 同聚）可调且报告被过滤条数；
+  `check_off_target`（默认开）复用 v12 mispriming 的 k-mer 索引思路做**错配容差脱靶
+  搜索**（仅替换、PAM 必须完好、种子末端 2 位不错配），默认只搜得分最高的 200 条候选。
+  可选 `save_path`（订购 CSV）与 `map_path`（带 gRNA 标记的质粒图谱）。
+
+### 修复（实现过程中发现并修掉的真实缺陷）
+
+- **反向链 protospacer 长度错误**：初版把 `PAM + guideLength` 整段反向互补，产出的是
+  23 nt 而不是 20 nt 的"guide"。已改为 PAM 下游的 20 nt，并在 smoke 里加了
+  `sequence.length === 20` 与「顶链切片反向互补 = guide」两条不变式。
+- **logo 字形溢出列宽**：初版用 `font-size = 高度/0.72`，2 bits 的列会算出 200+ px 的
+  字号、横向压到邻列。改为「字号同时受列宽与图高约束 + `textLength` 压缩宽字形」，
+  smoke 里逐字形断言 `font-size`/`textLength` 不超列宽。
+- **脱靶计数把自己的靶点算成脱靶**：同一位置可能有多条变体拼写命中（guide 是其自身
+  反向互补时更多），已改为按「位置 + 链向」在截断前排除并计数。
+
+### 其它
+
+- `logo.mjs` / `crispr.mjs` 进入 `files` 白名单；preset 组合的 `tool-molbio` 行与
+  `preset.yml` 描述同步到 v16 / 46 个工具。
 
 ## [0.5.1] — 2026-09-10
 

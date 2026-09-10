@@ -21,6 +21,7 @@ const { assertSupportedJsonSchema, validateJsonSchemaValue } = dshTools;
 const plugin = await import('../index.mjs');
 const lib = await import('../lib.mjs');
 const view = await import('../view.mjs');
+const { reverseComplement: reverseComplementOf } = lib;
 
 // The auto-view opener would spawn real viewer processes on the machine
 // running the tests — disable it globally; the view module gets its own
@@ -1597,6 +1598,238 @@ function splicedToGenomic(splicedPos, exons) {
   await assert.rejects(() => run('molbio_virtual_gel', { lanes: [{ label: 'x', fragments: [999999] }] }), /fragment sizes/);
   await assert.rejects(() => run('molbio_virtual_gel', { lanes: [] }), /1-12/);
   await assert.rejects(() => run('molbio_virtual_gel', { lanes: [{ label: 'x', fragments: [] }], ladder: 'nope' }), /must be one of 1kb, 100bp/);
+}
+
+// ── v16: sequence logo ──────────────────────────────────────────────────────
+
+{
+  // Hand-checked composition: 4 rows, 3 columns.
+  //   col 1 all A          -> fractions A=1,    H=0,      R=2 bits
+  //   col 2 A,A,C,C        -> A=0.5  C=0.5,    H=1,      R=1
+  //   col 3 A,A,A,C        -> A=0.75 C=0.25,   H=0.8113, R=1.1887
+  // (small-sample correction off; with it on, col 1 is 2 - 1.082 = 0.918.)
+  const rows = ['AAA', 'AAA', 'ACA', 'ACC'];
+  const logo = await run('molbio_sequence_logo', { alignment: rows, title: 'splice site' });
+  assert.equal(logo.source, 'alignment');
+  assert.equal(logo.sequence_count, 4);
+  assert.equal(logo.columns, 3);
+  assert.equal(logo.score_type, 'bits');
+  assert.equal(logo.small_sample, true);
+  assert.equal(logo.most_conserved, 1);
+  assert.equal(logo.gap_columns, 0);
+  // corrected column bits: 1.459 + 0.459 + 0.648 = 2.566 -> 2.57; mean 0.855 -> 0.86
+  assert.equal(logo.total_bits, 2.57);
+  assert.equal(logo.mean_bits, 0.86);
+  const logoSvg = memFs.files.get(logo.svg_path).toString('utf8');
+  assert.ok(logoSvg.startsWith('<svg'), 'the logo is a standalone SVG document');
+  assert.ok(logoSvg.endsWith('</svg>'));
+  assert.ok(logoSvg.includes('splice site'));
+  assert.ok(logoSvg.includes('information content (bits)'));
+  // Tallest letter in the fully conserved column: an A glyph of ~1.46 bits.
+  assert.ok(/>A<\/text>/.test(logoSvg), 'letters are drawn as text glyphs');
+  assert.ok(logoSvg.includes('column 1: 1.46 bits'), 'each column carries a <title> tooltip');
+  assert.ok(logoSvg.includes('A 1, C 0, G 0, T 0'), 'the tooltip lists the base fractions');
+  // Glyphs must never be wider than the column they belong to, and their
+  // baseline must stay at or above the axis (the plot spans y = 82 .. 302).
+  for (const match of logoSvg.matchAll(/<text x="[\d.]+" y="([\d.]+)" font-size="([\d.]+)"[^>]*textLength="([\d.]+)"[^>]*>([ACGT])<\/text>/g)) {
+    const [, y, size, length, base] = match;
+    assert.ok(Number(size) <= 26 * 0.95 + 1e-9, `font-size ${size} fits the 26px column (${base})`);
+    assert.ok(Number(length) <= 26, `textLength ${length} fits the 26px column (${base})`);
+    assert.ok(Number(y) <= 302.51, `${base} baseline ${y} sits at or above the axis`);
+    assert.ok(Number(y) - 0.72 * Number(size) >= 82 - 0.51, `${base} cap top stays inside the plot`);
+  }
+
+  // small_sample=false must reproduce the uncorrected bits exactly.
+  const exact = await run('molbio_sequence_logo', { alignment: rows, small_sample: false, output_path: 'C:/tmp/exact.svg' });
+  assert.equal(exact.small_sample, false);
+  assert.equal(exact.total_bits, 4.19, 'uncorrected: 2 + 1 + 1.1887');
+  assert.equal(exact.mean_bits, 1.4);
+  // 2 sequences that disagree are 0 bits after correction, 1 bit without it.
+  const corrected = await run('molbio_sequence_logo', { alignment: ['A', 'C'] });
+  assert.equal(corrected.total_bits, 0);
+  const uncorrected = await run('molbio_sequence_logo', { alignment: ['A', 'C'], small_sample: false, score_type: 'frequency', output_path: 'C:/tmp/freq.svg' });
+  assert.equal(uncorrected.score_type, 'frequency');
+  assert.ok(memFs.files.get('C:/tmp/freq.svg').toString('utf8').includes('frequency'));
+
+  // Gaps: frequencies use residues only, and the gap column is reported.
+  const gapped = await run('molbio_sequence_logo', { alignment: ['AC-G', 'AC-G', 'ACGG', 'ACTG'] });
+  assert.equal(gapped.gap_columns, 1);
+  assert.equal(gapped.most_conserved, 1);
+  const gapSvg = memFs.files.get(gapped.svg_path).toString('utf8');
+  assert.ok(gapSvg.includes('gap(s) excluded'), 'the header states that gaps are excluded');
+
+  // Raw sequences are aligned first (source = msa).
+  const fromSeq = await run('molbio_sequence_logo', { sequences: ['ACGTACGT', 'ACGTACGT'] });
+  assert.equal(fromSeq.source, 'msa');
+  assert.equal(fromSeq.columns, 8);
+  // Two identical sequences carry almost no evidence: each column is
+  // 2 - 3/(4·ln2·2) = 0.918 bits instead of a nominal 2.
+  assert.equal(fromSeq.total_bits, 7.34);
+  const fromSeqExact = await run('molbio_sequence_logo', { sequences: ['ACGTACGT', 'ACGTACGT'], small_sample: false, output_path: 'C:/tmp/uncorrected.svg' });
+  assert.equal(fromSeqExact.total_bits, 16, 'without the correction two identical sequences give 2 bits x 8 columns');
+
+  // Ambiguity codes spread over their base set, so an ambiguity code is not a
+  // fifth symbol: 'RR' is a 50/50 A/G column (1 bit) and 'RA' is 75/25 A/G
+  // (1.189 bits) — a two-symbol consensus, not a fully conserved column.
+  const ambig = await run('molbio_sequence_logo', { alignment: ['RR', 'RA'], small_sample: false, output_path: 'C:/tmp/ambig.svg' });
+  assert.equal(ambig.total_bits, 2.19);
+  const plain = await run('molbio_sequence_logo', { alignment: ['RR', 'RR'], small_sample: false, output_path: 'C:/tmp/plain.svg' });
+  assert.equal(plain.total_bits, 2, 'two identical ambiguity codes are fully conserved');
+
+  await assert.rejects(() => run('molbio_sequence_logo', {}), /exactly one of/);
+  await assert.rejects(() => run('molbio_sequence_logo', { alignment: ['ACGT', 'ACG'] }), /same length/);
+  await assert.rejects(() => run('molbio_sequence_logo', { alignment: ['ACGT'], }), /at least 2/);
+  await assert.rejects(() => run('molbio_sequence_logo', { alignment: ['ACGT', 'ACX*'] }), /invalid character/);
+}
+
+// ── v16: CRISPR gRNA design ─────────────────────────────────────────────────
+
+{
+  // Purpose-built 53 bp target, hand-verified to contain exactly four NGG PAM
+  // sites. `guide` is a real SpCas9-style protospacer; `offSite` differs from
+  // it at guide positions 4 and 7 (both in the distal, non-seed region).
+  //   forward  6-25   PAM TGG   = the guide
+  //   reverse 13-32   PAM CGG   (CC on the top strand at 28-29)
+  //   forward 31-50   PAM TGG   = the 2-mismatch off-target
+  //   reverse 32-51   PAM CGG   (CC at 29-30)
+  // The two reverse sites share the engineered CC stretch, so the fixture has
+  // four sites rather than two; their protospacers do not resemble the guide,
+  // which keeps the off-target counts unambiguous.
+  const guide = 'GAGTCCGAGCAGAAGAAGAA';
+  const offSite = 'GAGACCTAGCAGAAGAAGAA';
+  const target = `TTTTT${guide}TGGCC${offSite}TGG`;
+  assert.equal(target.length, 53);
+  assert.equal(target.slice(5, 25), guide);
+  assert.equal(target.slice(30, 50), offSite);
+  assert.equal(target.slice(25, 28), 'TGG');
+  assert.equal(target.slice(50, 53), 'TGG');
+
+  const design = await run('molbio_grna_design', { sequence: target, check_off_target: true, max_mismatches: 2 });
+  assert.equal(design.pam, 'NGG');
+  assert.equal(design.guide_length, 20);
+  assert.equal(design.target_length, 53);
+  assert.equal(design.candidate_count, 4, 'exactly four PAM sites');
+  assert.equal(design.rejected_count, 0);
+  assert.equal(design.off_target_checked, true);
+  assert.equal(design.off_target_scanned, 4);
+  assert.equal(design.guides_truncated, false);
+  assert.equal(design.guides.length, 4);
+
+  const first = design.guides.find((g) => g.start === 6 && g.strand === 'forward');
+  assert.equal(first.sequence, guide);
+  assert.equal(first.pam, 'TGG');
+  assert.equal(first.end, 25);
+  assert.equal(first.gc_percent, 50);
+  assert.equal(first.tm_celsius, 58.43, 'NN Tm at the default 50 mM Na+/1.5 mM Mg2+/200 nM');
+  assert.equal(first.self_any, 5.5);
+  assert.equal(first.self_end, 0);
+  assert.equal(first.seed_self_any, 2);
+  assert.equal(first.longest_t_run, 1);
+  assert.equal(first.off_target_count, 1, 'the intended site is not counted as its own off-target');
+  assert.equal(first.off_target_sites.length, 1);
+  assert.deepEqual(first.off_target_sites[0], {
+    strand: 'forward', start: 31, end: 50, pam: 'TGG', pam_intact: true,
+    mismatches: 2, mismatch_positions: [4, 7],
+  });
+  // This guide's only penalty is the off-target (8): 100 - 8 = 92. It gets no
+  // PAM-proximal bonus because guide position 20 is A, not G (see below).
+  assert.equal(first.score, 92);
+
+  // The reciprocal call: designing on the off-target site sees the guide.
+  const reciprocal = await run('molbio_grna_design', { sequence: target, region_start: 31, region_end: 50, max_mismatches: 2 });
+  assert.equal(reciprocal.candidate_count, 1);
+  assert.equal(reciprocal.guides[0].off_target_count, 1);
+  assert.deepEqual(reciprocal.guides[0].off_target_sites[0].mismatch_positions, [4, 7]);
+  assert.equal(reciprocal.guides[0].off_target_sites[0].start, 6);
+
+  // Reverse-strand geometry: the protospacer is the reverse complement of the
+  // top-strand slice at 31-50 and the PAM is the reverse complement of the
+  // top-strand CCN at 26-28 (so the reported PAM always reads 5'->3' on the
+  // strand the guide targets).
+  const reverseGuide = design.guides.find((g) => g.strand === 'reverse' && g.start === 13);
+  assert.equal(reverseGuide.end, 32);
+  assert.equal(reverseGuide.sequence.length, 20, 'a reverse protospacer is 20 nt, never PAM + 20');
+  assert.equal(target.slice(12, 32), reverseComplementOf(reverseGuide.sequence), 'the top-strand 13-32 slice is the reverse complement of the guide');
+  assert.equal(reverseGuide.pam, reverseComplementOf(target.slice(28, 31)), 'the reported PAM is the reverse complement of the top-strand CCN it sits on');
+  assert.equal(target.slice(28, 31), 'CCG');
+  assert.equal(reverseGuide.pam, 'CGG');
+  assert.equal(reverseGuide.off_target_count, 0);
+
+  // The 3' clamp note fires exactly when the last two bases are both G/C.
+  const clampGuide = `${guide.slice(0, 17)}GGG`;
+  const clampDesign = await run('molbio_grna_design', { sequence: `TTTTT${clampGuide}TGG${'A'.repeat(10)}`, check_off_target: false });
+  const clamped = clampDesign.guides.find((g) => g.sequence === clampGuide);
+  assert.ok(clamped, 'the clamp guide survives the filters');
+  assert.ok(clamped.notes.some((note) => note.includes('clamp')), 'the 3\' clamp note is reported');
+  assert.ok(!design.guides.some((g) => g.notes.some((note) => note.includes('clamp'))), 'guides ending in AA get no clamp note');
+
+  // An off-target-free guide with no other penalties sits at the 100 ceiling.
+  assert.ok(design.guides.some((g) => g.score === 100), 'a clean guide scores 100');
+
+  // Filters: a GC-rich guide with a C-run is rejected for BOTH reasons, and the
+  // reasons are the ones reported (the forward guide + five incidental reverse
+  // sites on the same C-stretch are all filtered here).
+  const gcRichSequence = `${'A'.repeat(5)}GACCCCCTCCACCCCGCCTCTGG${'A'.repeat(10)}`;
+  const gcRich = await run('molbio_grna_design', { sequence: gcRichSequence, check_off_target: false });
+  assert.equal(gcRich.candidate_count, 6, 'the forward guide plus five incidental reverse sites');
+  assert.equal(gcRich.rejected_count, 6, 'every candidate here violates a filter');
+  assert.equal(gcRich.guides.length, 0);
+  // Widening only the GC bound still leaves the C-run rule in force ...
+  const stillRun = await run('molbio_grna_design', { sequence: gcRichSequence, gc_max: 90, check_off_target: false, max_guides: 10 });
+  assert.ok(!stillRun.guides.some((g) => g.sequence === 'GACCCCCTCCACCCCGCCTC'), 'the C-run filter is independent of gc_max');
+  // ... while a GC-rich guide with NO homopolymer run is genuinely rescued by
+  // widening gc_max, which is what proves the bound itself is what filtered it.
+  const gcOnlyGuide = 'GCGCGCGCGCGCGCGCACAT'; // 85% GC, no 4+ run, T-run 1
+  const gcOnlySequence = `${'A'.repeat(5)}${gcOnlyGuide}TGG${'A'.repeat(10)}`;
+  const blocked = await run('molbio_grna_design', { sequence: gcOnlySequence, check_off_target: false });
+  assert.equal(blocked.rejected_count, 1);
+  assert.equal(blocked.guides.length, 0);
+  const widened = await run('molbio_grna_design', { sequence: gcOnlySequence, gc_max: 90, check_off_target: false, max_guides: 10 });
+  const rescued = widened.guides.find((g) => g.sequence === gcOnlyGuide);
+  assert.ok(rescued, 'widening gc_max rescues the GC-rich guide');
+  assert.equal(rescued.gc_percent, 85);
+  assert.equal(rescued.score, 67.5);
+
+  // max_guides truncates the returned list without losing the count.
+  const limited = await run('molbio_grna_design', { sequence: target, max_guides: 2, check_off_target: false });
+  assert.equal(limited.guides.length, 2);
+  assert.equal(limited.guides_truncated, true);
+  assert.equal(limited.candidate_count, 4);
+  assert.equal(limited.off_target_scanned, 0, 'no off-target search when it is switched off');
+  // Without the search the off-target penalty is absent, so the same guide
+  // scores higher than in the searched run (96) — the difference is the point.
+  assert.equal(limited.guides.find((g) => g.start === 6).score, 100);
+
+  // CSV + map outputs.
+  const files = await run('molbio_grna_design', { sequence: target, save_path: 'C:/tmp/guides.csv', map_path: 'C:/tmp/grna-map.svg' });
+  assert.equal(files.saved_to, 'C:/tmp/guides.csv');
+  assert.equal(files.map_path, 'C:/tmp/grna-map.svg');
+  const csv = memFs.files.get('C:/tmp/guides.csv').toString('utf8');
+  const csvLines = csv.trim().split('\n');
+  assert.equal(csvLines[0], 'rank,sequence,pam,strand,start,end,gc_percent,tm_celsius,self_any,self_end,longest_t_run,off_target_count,score');
+  assert.equal(csvLines.length, 5, 'header + four guides');
+  assert.ok(csv.includes(guide));
+  const mapSvg = memFs.files.get('C:/tmp/grna-map.svg').toString('utf8');
+  assert.ok(mapSvg.includes('gRNA 1'), 'the map labels every guide');
+
+  // A .dna/.gb path is accepted as the target, same as a raw sequence.
+  const fromFile = await run('molbio_grna_design', { sequence_path: 'C:/tmp/pUC118.dna', max_guides: 3, check_off_target: false });
+  assert.equal(fromFile.target_name, 'pUC118');
+  assert.equal(fromFile.target_length, 3162);
+  assert.ok(fromFile.guides.length > 0, 'pUC118 has NGG sites');
+  assert.ok(fromFile.guides.every((g, index) => g.rank === index + 1), 'ranks are 1..n in score order');
+  assert.ok(fromFile.guides.every((g, index, list) => index === 0 || list[index - 1].score >= g.score), 'guides are sorted by score');
+
+  // Error paths.
+  await assert.rejects(() => run('molbio_grna_design', {}), /exactly one of/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, sequence_path: 'C:/tmp/pUC118.dna' }), /exactly one of/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: 'ACGT' }), /at least 23 bp/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target.replace('TTTTT', 'NNNNN') }), /ambiguous base N at position 1/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, pam: 'GG' }), /must start with the degenerate position N/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, pam: 'NGGGGGGG' }), /must be 2-6 nt/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, max_mismatches: 9 }), /max_mismatches must be an integer between 0 and 4/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, gc_min: 80, gc_max: 20 }), /must not exceed gc_max/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, guide_length: 12 }), /guide_length must be an integer between 15 and 30/);
 }
 
 // ── plugin surface ──────────────────────────────────────────────────────────

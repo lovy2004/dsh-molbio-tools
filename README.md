@@ -2,7 +2,7 @@
 
 面向 DeepSeek Harness 的**零依赖分子生物学研究插件**：序列分析、引物自动设计与检查、限制性酶切模拟、GenBank 解析与质粒图谱、qPCR 分析、文献助手与实验台计算。除文献检索与存储外全部为确定性纯计算；插件由纯 `.mjs` 文件构成，可随 agent preset 目录整体复制分发。
 
-## 提供的工具（44 个，模型可调用）
+## 提供的工具（46 个，模型可调用）
 
 ### 序列分析
 
@@ -81,6 +81,13 @@
 | `molbio_msa_align` | **多序列比对**（v15）：2-50 条 IUPAC DNA 序列的渐进式比对——两两/谱-谱全局比对用带**自由末端缺口**的仿射罚分（match +4 / mismatch −4 / 缺口开 −6 / 延伸 −2），合并顺序来自 **5-mer 距离 + UPGMA** 引导树，"一旦有缺口、永远有缺口"；返回输入顺序的比对序列（`sequences` 数组或 `fasta_path` 工作区 FASTA）与两两同一性统计，`save_path` 直接写出比对后的 FASTA |
 | `molbio_conservation` | **保守性分析**（v15）：共识序列（最高频碱基 ≥50% 直接给出，否则给出覆盖碱基的 IUPAC 简并码）、逐列 identity（最高频残基占比，缺口不计）、熵基保守性打分（1 − H/2）、保守/可变列统计（`threshold` 默认 0.8，可变位点列出至多 200 个；全缺口列计为保守）、两两同一性；输入可给 `alignment`（已比对等长序列，`-` 为缺口——如 molbio_msa_align 的输出）、`sequences` 或 `fasta_path`（后两者自动先比对） |
 
+### 序列标识图与 CRISPR 设计（v16）
+
+| 工具 | 功能 |
+| --- | --- |
+| `molbio_sequence_logo` | **序列标识图（sequence logo）**：把保守性分析背后的逐列碱基组成画成 SVG——字母高度 = 信息量 Rᵢ = log₂4 − (Hᵢ + e_n)（bits，纵轴 0-2），堆叠高度按碱基频率分配，字母按经典配色（A 绿 / C 蓝 / G 黄 / T 红）。频率只按**残基**统计（缺口排除并在每列上报），简并碱基按其碱基集合摊分权重（R = A/G 各半）。`small_sample`（默认开）扣掉小样本熵校正 e_n =(K−1)/(2·ln2·n)——序列数少时这一项很关键（2 条完全相同的序列每列只有 0.918 bits 而不是名义上的 2）；`score_type: "frequency"` 切换成纯频率图（字母和 = 1，纵轴 0-1）。输入可给 `alignment` / `sequences` / `fasta_path`，写得 SVG 后自动打开；返回 `svg_path`、总/平均 bits、最保守列、含缺口列数 |
+| `molbio_grna_design` | **CRISPR gRNA 设计**（默认 SpCas9 `NGG` PAM）：双链扫描 PAM 锚定的 20 nt protospacer，逐条报告 1-based 顶链坐标、链向、GC%、NN Tm、Primer3 式自互补（self-any/self-end）、种子区自互补、发夹 Tm、最长 poly-T，以及一个**逐项公开**的启发式评分。硬过滤（GC 上下限、poly-T、3' 自互补、G/C 同聚）可用 `gc_min`/`gc_max`/`max_t_run`/`max_self_end` 调节，被过滤的条数照常报告。`check_off_target`（默认开）在同一条序列（双链）上建 k-mer 索引，对得分最高的若干候选做**错配容差脱靶搜索**（仅替换、无 bulge/indel，PAM 必须完好；种子末端 2 位不允许错配），每个脱靶扣 8 分——想在基因组尺度搜索就把基因组当作 target 传入。`save_path` 出订购用 CSV，`map_path` 出带 gRNA 标记的质粒图谱 |
+
 ### 图谱增强
 
 - `molbio_plasmid_map` / `molbio_plasmid_map_file` 新增 `gc_skew: true`（GC skew 环）与 `show_unique_cutters: true`（绿色标记所有单切酶）
@@ -108,7 +115,7 @@
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 44 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 46 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表（含双链向切点查找）、NN 热力学、qPCR、lab math
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── genbank.mjs      # GenBank flatfile 解析器
@@ -116,6 +123,8 @@ dsh-molbio-tools/
 ├── plasmid.mjs      # SVG 质粒图谱渲染器（环形/线形，GC skew/标记）
 ├── align.mjs        # Smith-Waterman 局部比对 + 锚点窗口（Sanger 验证用）
 ├── msa.mjs          # 多序列渐进式比对（仿射缺口 NW + UPGMA）与保守性分析
+├── logo.mjs         # 序列标识图：逐列碱基组成/信息量 + SVG 渲染
+├── crispr.mjs       # CRISPR gRNA 设计：PAM 扫描、质量指标与评分、脱靶搜索
 ├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
 ├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证报告
 ├── protein.mjs      # 蛋白性质/肽段酶切/密码子优化
@@ -126,7 +135,7 @@ dsh-molbio-tools/
 ├── view.mjs         # 自动查看：把生成的 SVG 交给系统默认应用打开（镜像 host.openPath 语义）
 ├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
-│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v15/）
+│   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v16/）
 ├── test/
 │   ├── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
 │   └── preset-health.mjs # preset 组合健康检查（逐行按该包自己的 Config schema 校验，对照官方 standard 预设）
@@ -141,7 +150,7 @@ dsh-molbio-tools/
 ## 安装（推荐：专属模式 preset）
 
 **推荐给最终用户的方式**：安装后预设选择器出现 **Molecular Biology Lab** 专属模式，
-molbio 工具只在该模式出现，不会把 44 个工具和提示段注入到其它会话（避免污染无关场景）。
+molbio 工具只在该模式出现，不会把 46 个工具和提示段注入到其它会话（避免污染无关场景）。
 
 仓库的 `preset/molbio-lab/` 即完整预设目录，把它复制到对方的 harness 用户目录即可：
 
@@ -150,7 +159,7 @@ molbio 工具只在该模式出现，不会把 44 个工具和提示段注入到
 ├── agent.cordis.yml                 # 标准编码 Agent + 末尾的 tool-molbio 行
 ├── preset.yml                       # 显示名称与描述
 └── plugins/
-    └── dsh-molbio-tools-v15/        # 插件文件（版本目录，见下文）
+    └── dsh-molbio-tools-v16/        # 插件文件（版本目录，见下文）
 ```
 
 对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
@@ -164,12 +173,12 @@ molbio 工具只在该模式出现，不会把 44 个工具和提示段注入到
 ### 插件更新（版本目录规则）
 
 DSH 的 standing 挂载按 ESM 模块 URL 缓存模块。**每次更新必须新建版本目录**
-（如 `dsh-molbio-tools-v15/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
+（如 `dsh-molbio-tools-v16/`）并同步修改 `agent.cordis.yml` 中的插件行；绝不在已发布
 目录里原地改文件。分发者从包根目录把 `.mjs` 文件复制进新版本目录即可：
 
 ```
-cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v15/
-# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v15/index.mjs'
+cp *.mjs preset/molbio-lab/plugins/dsh-molbio-tools-v16/
+# 并把 agent.cordis.yml 的行改为 './plugins/dsh-molbio-tools-v16/index.mjs'
 ```
 
 ## 安装（可选：官方组合包 bundle，全局可见）
@@ -192,7 +201,7 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 ```
 
 本仓库已验证：`--dump-config` 输出以 `# == dsh-molbio-tools` + `- id: tool-molbio / name: dsh-molbio-tools` 开头（层序在 dsh-base 之上），且从 profile 目录按包名
-`import('dsh-molbio-tools')` 成功注册全部 44 个工具。两种安装方式可以共存（同名工具
+`import('dsh-molbio-tools')` 成功注册全部 46 个工具。两种安装方式可以共存（同名工具
 由 preset 层 shadow 全局层，无冲突），但通常**二选一**即可。
 
 > **版本目录规则的原理**（维护者必读）：DSH 的 standing preset 挂载在整个进程生命周期
@@ -225,6 +234,8 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 - **虚拟凝胶（v13）**：`molbio_virtual_gel` 用 log₁₀ 迁移率模型绘制预期条带（`2 + 2·log₁₀(bp)` 条带粗细），是"预期图"而非真实胶的模拟。
 - **多序列比对（v15）**：`molbio_msa_align` 是启发式渐进比对——两两/谱比对用仿射缺口（开 −6/延伸 −2，match +4/mismatch −4）且**末端缺口免费**（半全局），合并顺序由 5-mer 距离的 UPGMA 树决定，谱-谱打分用和-对（sum-of-pairs，按列碱基计数，残基对缺口计 0 分）；合并时新缺口按"一旦有缺口、永远有缺口"整列延伸，末端悬挂则允许部分缺口列。输入限制 2-50 条、单条 ≤ 3000 bp、总长 ≤ 30000 bp；`U` 按 `T` 处理，简并碱基相同才计匹配（R vs A 不计）。输出顺序与输入一致。
 - **保守性分析（v15）**：列 identity = 最高频残基数/该列残基数（缺口不计入残基）；熵基保守性 = 1 − H/2（H 为 4 碱基分布（简并碱基按集合展开）的香农熵）；共识字符 = 最高频碱基（占比 ≥50%）否则为出现碱基集合的 IUPAC 简并码；全缺口列共识为 `-` 且计为保守。`threshold`（默认 0.8）以下列为可变位点（至多报告 200 个）；两两同一性 = 相同非缺口列/总列数（两个缺口不算匹配）。≤300 列时逐列详情附于 `per_column`。所有比对与打分均为用于比较的估算值，不是系统发育真值。
+- **序列标识图（v16）**：字母高度用信息量 Rᵢ = log₂4 − (Hᵢ + e_n)，**纵轴是 bits（0-2），不是"归一化到最保守列"**；小样本校正 e_n = (K−1)/(2·ln2·n)（K = 4，n = 该列残基数）默认开启——这正是"2 条完全相同序列"的图看起来不高的原因：每列 0.918 bits 而不是名义上的 2 bits。字母堆叠高度 = 频率 × Rᵢ（该列字母和 = Rᵢ）；`score_type: "frequency"` 改成纯频率图（纵轴 0-1）。频率只按残基统计，简并碱基按碱基集合摊分（R = A/G 各 0.5），缺口数逐列上报但不参与频率。字形用绝对 font-size + `textLength` 定位（不做 transform 缩放：缩放的是 em 盒，各字体基线偏移不同，高字母会溢出），因此字母永不超出列宽；列数上限 2000。
+- **CRISPR gRNA 设计（v16）**：几何按 SpCas9 约定——protospacer 是紧邻 PAM **5' 侧**的 20 nt；报告的 `start`/`end` 是**顶链 1-based 闭区间**，`sequence` 始终是按 5'→3' 下单的序列，`pam` 始终读在 **guide 靶向的那条链**上（反向链命中报 `CGG`，而不是顶链上的 `CCN`）。评分逐项公开（GC 偏差 1/点、Tm 偏差 0.5/°C、poly-T 与同聚 4/碱基、自互补 2·(self_any−8) + 4·self_end、种子自互补、发夹 Tm、**每个脱靶 8 分**，PAM 前一位为 G 时 +4），起点 100，各项有上限而脱靶无上限。脱靶搜索只建模**替换**（无 bulge/indel），要求 PAM 完好、种子末端 2 位不错配；`check_off_target` 默认只搜得分最高的 200 条候选（`max_off_target_guides`）。所有分数都是**排序用启发式**，不是切割效率或特异性的预测值，报告时必须这样说明。
 
 ## 典型用法示例
 
@@ -239,6 +250,8 @@ dsh --profile demo --dump-config        # 组合树中应出现 "# == dsh-molbio
 "帮我验证这个测序结果和质粒是否一致"      → molbio_verify_sanger(trace_path, reference_path)
 "帮我在外显子 3 上设计一对 qPCR 引物，产物 80-150 bp" → molbio_design_primers (amplicon_min/max) → molbio_primer_check 复核
 "把这几条同源序列对齐，找出保守区和可变位点" → molbio_msa_align(sequences:[…]) → molbio_conservation(alignment: 比对结果) 或直接 molbio_conservation(sequences:[…])
+"把这段启动子的保守性画成图"              → molbio_sequence_logo(alignment: 比对结果) 或直接 molbio_sequence_logo(sequences:[…])
+"在这个基因里找 SpCas9 的 gRNA，脱靶越少越好" → molbio_grna_design(sequence_path 或 sequence, max_guides:10) → 看 off_target_sites 挑 → save_path 出订购 CSV / map_path 出图谱
 "搜一下 KRAS G12D 抑制剂的最新文献并存进阅读库" → molbio_pubmed_search → molbio_paper_add
 ```
 

@@ -76,7 +76,17 @@ cassette 模式三片段组装、片段内部位点/非 IIS 酶/缺少盒子/裸
 替换 + 末端自由缺口的列数与末端悬挂确定性、同一输入两次输出完全一致；保守性
 source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺口列计保守、
 可变位点列表、两两同一性统计、简并碱基 union 共识（A/C/G → V）、FASTA 输入与
-比对后 FASTA 写出、五条错误路径与四条参数边界）。
+比对后 FASTA 写出、五条错误路径与四条参数边界）、v16 序列标识图（手算列值：全保守列
+2 bits／50-50 列 1 bit／75-25 列 1.1887 bits 与总 bits、小样本校正开/关的差异、
+简并碱基按集合摊分（RR 对 RR = 2 bits，RR 对 RA = 2.19 bits 而非 3）、缺口列计数与
+「频率只按残基」、SVG 的 `<title>` 逐列提示与**逐字形断言 font-size/textLength 不超列宽**、
+四条错误路径）、v16 CRISPR gRNA（自建 53 bp 夹具上四个 PAM 位点的手算几何：正链
+6-25/31-50、反链 13-32/32-51 的坐标与链向、反向链 protospacer 必须是 20 nt 且等于顶链
+切片的反向互补、PAM 报在靶向链上、NN Tm 58.43 °C 与 self-any 5.5 已知值、
+**2 错配脱靶的互查**（正向两次调用互相指认，mismatch_positions [4, 7]）、脱靶扣分
+（92 vs 无搜索时的 100）、种子末端不错配约束、GC/poly-T/C-run 过滤与「放宽 gc_max 才能
+救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
+排序不变式、九条参数/输入错误路径）。
 
 - `preset-health.mjs` 证明**组合**可挂载：它刻意与冒烟测试正交——preset 是 DSH
   **自己那些包**的组合，DSH 升级后如果某个包的 `Config` 契约变了（0.1.5-alpha.2 就
@@ -126,7 +136,13 @@ preset 渠道（受 ESM 模块缓存约束）：
 
 ## 路线图
 
-- **v16（已定方向）**：Sequence logo SVG（由 `molbio_conservation` 的逐列碱基比例直接渲染）+ CRISPR gRNA 设计（SpCas9 `NGG` PAM 扫描、GC%/Tm/自互补/连续 T 筛选与排序打分，复用 v12 mispriming 的 k-mer 索引思路做参考序列上的错配容差脱靶搜索）
+- **v17（候选池，按需挑选）**：TaqMan 水解探针设计；多重 PCR 互扰检查；蛋白螺旋轮投影图（helical wheel）；疏水性窗口图（hydropathy plot，Kyte-Doolittle）；甲基化敏感位点（dam/dcm/EcoKI）与双酶切 buffer 兼容提示；Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNGRRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）
 - 质粒图谱的浏览器内实时面板（**可行性已调研**，见 `docs/client-pipeline-exploration.md`：preset 渠道被三层机制挡住，需走 bundle 渠道 `dsh.client` 双面包 + 自建 lazy-CJS client bundle；0.1.5 起最优落点是右栏 tab `sidebar.right.pane.tab`，辅以 `tool.call.toolview` 自定义工具卡）
 - 文献库的浏览器端面板（同上；0.1.5 起落点为右栏 tab 的 "Papers" 页或 `conversation.view`）
-- 备选池（v17+ 按需挑选）：TaqMan 水解探针设计；多重 PCR 互扰检查；蛋白螺旋轮投影图（helical wheel）；疏水性窗口图（hydropathy plot，Kyte-Doolittle）；甲基化敏感位点（dam/dcm/EcoKI）与双酶切 buffer 兼容提示；向上游提议"preset 渠道挂 client"（探索文档路径 B）
+- 向上游提议"preset 渠道挂 client"（探索文档路径 B）
+
+## 已完成的方向（历史）
+
+- **v16（2026-09-10，包 0.6.0 / preset 目录 v16）**：Sequence logo SVG（`logo.mjs` + `molbio_sequence_logo`，信息量 scaling 含小样本校正）+ CRISPR gRNA 设计（`crispr.mjs` + `molbio_grna_design`，双链 PAM 扫描、逐项公开的排序启发式、复用 v12 mispriming 的 k-mer 索引做错配容差脱靶搜索）。工具 44 → 46。
+- **v15（2026-08-22，包 0.5.0 / preset 目录 v15）**：多序列比对（渐进仿射缺口 NW + UPGMA）与保守性分析。
+- **v12–v14**：引物设计的 Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view。
