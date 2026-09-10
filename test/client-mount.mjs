@@ -195,43 +195,63 @@ for (const row of rows) {
 assert.ok(graphEntries.has('@deepseek-ai/dsh-client-ui-sidebar-right'), 'the web profile mounts the right sidebar tab host');
 assert.ok(graphEntries.has('@deepseek-ai/dsh-client-connection'), 'the web profile mounts the client connection over the api gateway');
 
-// ── this package, through the very same scan ────────────────────────────────
+// ── the packages this repository ships, through the very same scan ──────────
 
-const manifestPath = join(packageRoot, 'package.json');
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-const declaration = manifest.dsh?.client;
-assert.ok(declaration !== undefined, 'this package declares dsh.client');
-assert.equal(declaration.platform, 'web', 'the browser half is a web platform bundle');
-const clientRel = clientExportOf(manifest.exports);
-assert.equal(clientRel, './lib/client.js', 'exports["./client"] points at the built artifact');
-const clientPath = join(packageRoot, clientRel);
-assert.ok(existsSync(clientPath), `the built artifact exists (run npm run build:client): ${clientPath}`);
+/** Run the scan for one package of this repository. */
+function checkOwnPackage({ root, expectedId, label }) {
+  const manifestPath = join(root, 'package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.name, expectedId, `${label}: the package name is the registration id`);
+  const declaration = manifest.dsh?.client;
+  assert.ok(declaration !== undefined, `${label}: declares dsh.client`);
+  assert.equal(declaration.platform, 'web', `${label}: the browser half is a web platform bundle`);
+  const clientRel = clientExportOf(manifest.exports);
+  assert.equal(clientRel, './lib/client.js', `${label}: exports["./client"] points at the built artifact`);
+  const clientPath = join(root, clientRel);
+  assert.ok(existsSync(clientPath), `${label}: the built artifact exists (run npm run build:client): ${clientPath}`);
 
-// Every injected package must itself be a graph row, or the orderByModuleGraph
-// pass silently drops the edge (and a later require would miss the table).
-for (const dependency of declaration.inject ?? []) {
-  assert.ok(graphEntries.has(dependency), `injected client package ${dependency} is a boot-graph row of profile ${profileName}`);
+  // Every injected package must itself be a graph row, or the orderByModuleGraph
+  // pass silently drops the edge (and a later require would miss the table).
+  const missing = (declaration.inject ?? []).filter((dependency) => !graphEntries.has(dependency));
+  assert.deepEqual(missing, [], `${label}: injected client packages are boot-graph rows of profile ${profileName}`);
+
+  const bundle = readFileSync(clientPath, 'utf8');
+  assert.ok(bundle.includes('window.__ModuleLoader__.load('), `${label}: the artifact registers through the module loader`);
+  const required = [...bundle.matchAll(/(?<![_\w])require\("([^"]+)"\)/g)].map((match) => match[1]);
+  for (const specifier of required) {
+    assert.ok(
+      SEED.has(specifier) || graphEntries.has(specifier.replace(/\/client$/, '')),
+      `${label}: require("${specifier}") resolves (platform seed or boot-graph row)`,
+    );
+  }
+  assert.deepEqual([...new Set(required)].sort(), ['react'], `${label}: requires react and nothing else`);
+  // The artifact's identity: the loader keys materialization on this exact id.
+  const idMatch = /id:\s*"([^"]+)"/.exec(bundle);
+  assert.equal(idMatch?.[1], manifest.name, `${label}: the registration id is the exact package name`);
+  console.log(`  ${label.padEnd(12)} ${manifest.name} -> ${clientRel} (${(bundle.length / 1024).toFixed(1)} KB) in ${clientPath.includes('packages') ? 'packages/molbio-panel' : 'package root'}`);
+  return { manifest, clientPath, bundle };
 }
 
-// The bundle's own `require` calls must all be answerable: the platform seed
-// provides react, and nothing else is required. Only the LOADER's require
-// counts — the bundle's internal `__molbio_require` table is its own business.
-const bundle = readFileSync(clientPath, 'utf8');
-assert.ok(bundle.includes('window.__ModuleLoader__.load('), 'the artifact registers through the module loader');
-const required = [...bundle.matchAll(/(?<![_\w])require\("([^"]+)"\)/g)].map((match) => match[1]);
 const SEED = new Set(['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-dockkit']);
-for (const specifier of required) {
-  assert.ok(
-    SEED.has(specifier) || graphEntries.has(specifier.replace(/\/client$/, '')),
-    `require("${specifier}") resolves (platform seed or boot-graph row)`,
-  );
-}
-assert.deepEqual([...new Set(required)].sort(), ['react'], 'the browser half requires react and nothing else');
 
-// The artifact's identity: the loader keys materialization on this exact id.
-const idMatch = /id:\s*"([^"]+)"/.exec(bundle);
-assert.equal(idMatch?.[1], manifest.name, 'the registration id is the exact package name');
+// Both delivery channels: the plugin package (tools + panel) and the
+// panel-only package (a shared Web profile wants the tab without the tools).
+const toolsPackage = checkOwnPackage({ root: packageRoot, expectedId: 'dsh-molbio-tools', label: 'tools+panel' });
+const panelRoot = join(packageRoot, 'packages', 'molbio-panel');
+if (existsSync(panelRoot)) {
+  checkOwnPackage({ root: panelRoot, expectedId: 'dsh-molbio-panel', label: 'panel only' });
+  // The panel-only package's host half must load and stay inert: it exists to
+  // make the browser half discoverable, not to add tools to every session.
+  const hostHalf = await import(pathToFileURL(join(panelRoot, 'index.mjs')).href);
+  assert.deepEqual([...hostHalf.inject], ['tools'], 'the panel host half injects the tool registry only for row ordering');
+  const before = 0;
+  hostHalf.apply({ tools: { register: () => { throw new Error('the panel host half must register no tool'); } } });
+  assert.equal(before, 0);
+  assert.equal(typeof hostHalf.apply, 'function', 'the host half exposes apply');
+} else {
+  console.warn('note: packages/molbio-panel is absent; only the combined bundle was checked');
+}
 
 console.log(`graph   : ${graphEntries.size} client row(s) among ${rows.length} scanned rows`);
-console.log(`bundle  : ${clientPath.replace(packageRoot, '.')} (${(bundle.length / 1024).toFixed(1)} KB), requires ${[...new Set(required)].join(', ')}`);
+console.log(`bundle  : ${toolsPackage.clientPath.replace(packageRoot, '.')} (${(toolsPackage.bundle.length / 1024).toFixed(1)} KB)`);
 console.log('client mount checks passed');

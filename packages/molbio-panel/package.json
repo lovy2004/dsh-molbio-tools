@@ -1,0 +1,57 @@
+{
+  "name": "dsh-molbio-panel",
+  "version": "0.1.0",
+  "description": "Browser panel for the DeepSeek Harness Web GUI: a Molbio tab in the right sidebar that draws plasmid maps and sequence logos from workspace sequence files, using the same computation modules as the dsh-molbio-tools plugin.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": {
+      "default": "./lib/client.js"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "*",
+    "@deepseek-ai/dsh-client-connection": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-ui-sidebar-right": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-connection": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovy2004/dsh-molbio-tools.git",
+    "directory": "packages/molbio-panel"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "cordis",
+    "dsh-client",
+    "molecular-biology",
+    "plasmid",
+    "panel"
+  ]
+}

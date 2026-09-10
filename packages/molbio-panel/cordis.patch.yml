@@ -1,0 +1,7 @@
+# The dsh-molbio-panel bundle patch: one plugin row, mounted by package name.
+#
+# The client scan keys on this Loader entry, so the row must load for the
+# browser half to be discovered even though the host half registers nothing.
+- insert:
+    - id: molbio-panel
+      name: dsh-molbio-panel
