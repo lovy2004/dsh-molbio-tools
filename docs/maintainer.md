@@ -126,8 +126,19 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 
 ```bash
 node build/client-bundle.mjs     # 或 npm run build:client
-node test/client.mjs && node test/panel-render.mjs && node test/client-mount.mjs && node test/contract.mjs
+node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && node test/client-mount.mjs && node test/contract.mjs
 ```
+
+### 工具调用卡（`tool.call.toolview`）
+
+卡片的数据只能走一条路：工具在 `output.presentationMeta(args, value)` 里声明投影，工具层
+**对 ROOT 调用**执行它并把结果记进会话事件，浏览器把它作为 tool-result 块的 `block.meta`。
+不要用 `presentResult`/`presentCall`——`dsh-tools` 的文档写明内置 Web 客户端不消费它们。
+两条实现纪律：投影**必须廉价且不抛**（它跑在调用成功之后，抛错会把这次调用标成失败；
+图谱标记因此走一份有界内存缓存而不是读文件），卡片**必须校验而非信任** meta（缺失/异种/
+异形/超限/失败一律降级为提示，绝不在对话里抛错）。新增卡片时：把工具名加进
+`build/client-entry.mjs` 的 `MAP_TOOL_KEYS`，并在 `test/map-card.mjs` 里补一条跨界断言。
+另注意 `define()` 包装器会转发 `presentationMeta`——若哪天再包一层，别忘了这条。
 
 三条纪律：**产物必须与源一起提交**（`dsh plugin add` 装的是产物，用户机器上没有构建
 步骤）；**发布白名单必须覆盖产物所在目录**（`lib/`、`packages/`——`npm publish` 只带

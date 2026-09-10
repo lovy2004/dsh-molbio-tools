@@ -132,8 +132,13 @@ function validateArgsAgainstSchema(schema, args, label = '') {
  * `safe` declares concurrency safety: true for pure/read-only tools, false for
  * tools that write files (the registry may run safe tools in parallel), or a
  * function of the arguments for tools that write only conditionally.
+ *
+ * `presentationMeta(args, value)` is optional and is forwarded verbatim onto
+ * `output`: the tool layer calls it for a ROOT call and records the value, which
+ * is how a tool hands the Web Client structured data for a custom
+ * `tool.call.toolview` card (`block.meta` in the browser).
  */
-function define({ name: toolName, description, parameters, outputSchema, render, execute, safe = true }) {
+function define({ name: toolName, description, parameters, outputSchema, render, presentationMeta, execute, safe = true }) {
   return {
     name: toolName,
     description,
@@ -143,6 +148,7 @@ function define({ name: toolName, description, parameters, outputSchema, render,
       render(_args, value) {
         return [{ type: 'text', text: render(value) }];
       },
+      ...presentationMeta === undefined ? {} : { presentationMeta },
     },
     async execute(args, exec) {
       validateArgsAgainstSchema(parameters, args);
@@ -1184,6 +1190,10 @@ const plasmidMapTool = (ctx) => define({
     const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
     return `SVG plasmid map saved to ${value.svg_path} (${value.name}, ${value.length} bp, ${value.circular ? 'circular' : 'linear'}, ${value.feature_count} feature(s)). ${enzymeNote} ${viewNote}`;
   },
+  // The map card in the transcript/panel reads this meta (see mapCardMeta).
+  presentationMeta(_args, value) {
+    return mapCardMeta(value, rememberedMapSvg(value.svg_path));
+  },
   async execute(args, exec) {
     const sequence = normalizeSequence(args.sequence, 'plasmid sequence');
     const features = (args.features ?? []).map((feature) => {
@@ -1224,6 +1234,7 @@ const plasmidMapTool = (ctx) => define({
       gc_skew: args.gc_skew === true,
     });
     const { file, viewed } = await writeSvgFile(ctx, exec, args, svg, name);
+    rememberMapSvg(file, svg);
     return {
       svg_path: file,
       name,
@@ -1364,6 +1375,10 @@ const plasmidMapFileTool = (ctx) => define({
     const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
     return `SVG plasmid map saved to ${value.svg_path} (${value.name}, ${value.length} bp, ${value.circular ? 'circular' : 'linear'}, ${value.feature_count} feature(s), ${value.enzyme_count} enzyme cut mark(s)). ${viewNote}`;
   },
+  // The map card in the transcript/panel reads this meta (see mapCardMeta).
+  presentationMeta(_args, value) {
+    return mapCardMeta(value, rememberedMapSvg(value.svg_path));
+  },
   async execute(args, exec) {
     const lower = args.path.toLowerCase();
     const isDna = lower.endsWith('.dna');
@@ -1402,6 +1417,7 @@ const plasmidMapFileTool = (ctx) => define({
       gc_skew: args.gc_skew === true,
     });
     const { file, viewed } = await writeSvgFile(ctx, exec, args, svg, name);
+    rememberMapSvg(file, svg);
     return {
       svg_path: file,
       name,
@@ -1413,6 +1429,60 @@ const plasmidMapFileTool = (ctx) => define({
     };
   },
 });
+
+/**
+ * Structured card data for a written plasmid map.
+ *
+ * `output.presentationMeta` is the documented path for a tool to hand the Web
+ * Client structured data: the tool layer calls it for a ROOT call and records
+ * the value, which reaches the browser as the tool-result block's `meta` — what
+ * `tool.call.toolview` cards read (the shipped read card in `dsh-tool-fs` does
+ * the same with `path`/`offset`/`lines`). It is a presentation projection, so it
+ * must stay cheap and total: it never throws for a value the tool just produced.
+ *
+ * The SVG travels in the meta only when it fits `CARD_SVG_MAX_BYTES`; a plasmid
+ * map of a real vector is 20-60 KB, but a huge construct could be megabytes and
+ * that would land in the session log. When it does not fit, the card falls back
+ * to reporting the written file path (one click away through `openFile`).
+ */
+const CARD_SVG_MAX_BYTES = 256 * 1024;
+
+/**
+ * Build the meta a map tool's card reads. `svg` is the markup the tool just
+ * wrote, kept only when it is small enough to be worth carrying.
+ */
+function mapCardMeta(value, svg) {
+  return {
+    kind: 'molbio-map',
+    name: value.name,
+    svg_path: value.svg_path,
+    length: value.length,
+    circular: value.circular,
+    feature_count: value.feature_count,
+    enzyme_count: value.enzyme_count,
+    svg_bytes: svg.length,
+    ...svg.length <= CARD_SVG_MAX_BYTES ? { svg } : { svg_omitted: true },
+  };
+}
+
+/**
+ * Markup of the most recent maps, keyed by written path, so the card's
+ * projection never has to read a file back. Bounded on both axes — a handful of
+ * maps, each at most `CARD_SVG_MAX_BYTES` — because this is a module-level
+ * cache in a long-lived host process, not a store.
+ */
+const recentMapSvg = new Map();
+
+function rememberMapSvg(svgPath, svg) {
+  if (recentMapSvg.has(svgPath)) recentMapSvg.delete(svgPath);
+  recentMapSvg.set(svgPath, svg.length <= CARD_SVG_MAX_BYTES ? svg : '');
+  while (recentMapSvg.size > 8) recentMapSvg.delete(recentMapSvg.keys().next().value);
+}
+
+/** The markup remembered for one written map ('' when it was too large or is gone). */
+function rememberedMapSvg(svgPath) {
+  return recentMapSvg.get(svgPath) ?? '';
+}
 
 // ── cross-intron primer design ──────────────────────────────────────────────
 

@@ -9,6 +9,27 @@
 
 版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
 
+## [0.7.1] — 2026-09-10（图谱调用卡：`tool.call.toolview`）
+
+**新增图谱调用卡**：`molbio_plasmid_map` 与 `molbio_plasmid_map_file` 的调用**直接在对话里
+画出这次产出的质粒图谱**（摘要行 + 写入路径），不再只给一个文件路径；调用失败时显示错误
+文本与 Inspect 入口。
+
+- 宿主侧：两个 map 工具新增 `output.presentationMeta(args, value)` 投影——这是官方文档
+  写明的结构化数据通道（`presentResult`/`presentCall` 内置 Web 客户端不消费），且只有
+  ROOT 调用会执行。SVG 随 meta 传输设 256 KB 上限：超限时改带 `svg_omitted` 与字节数，
+  卡片降级为提示 + 路径（图谱仍写在文件里）。投影是纯计算（图谱标记走一份有界内存缓存，
+  不读文件）且不抛——它跑在调用成功之后，抛错会把成功调用标成失败。
+- 客户端侧：新增 `tool.call.toolview` 卡片（按工具名取键）。它**校验而非信任** meta：
+  缺失/异种/异形/超限/失败一律降级为提示，绝不在对话里抛错；SVG 用 DOM 注入，保持可选中。
+- `define()` 包装器转发 `presentationMeta`（此前只转发 schema/render，投影会被静默丢弃——
+  由新测试当场抓到）。
+- 测试：新增 `test/map-card.mjs`（真实工具 → 投影 → 卡片读取 → 渲染出 SVG，含四条降级
+  路径）；`test/contract.mjs` 增第 9 项，钉住"工具层仍调用 `output.presentationMeta` 且只对
+  root 调用"与"卡片座位仍按工具名取键"。
+
+工具数量不变（46 个）。
+
 ## [0.7.0] — 2026-09-10（浏览器内面板：bundle 渠道 dsh.client 双面包）
 
 **新增两个右栏面板**：**Molbio**（列出会话工作区的序列文件，选中即画图：`.dna`/`.gb`/

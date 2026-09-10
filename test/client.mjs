@@ -117,6 +117,8 @@ assert.deepEqual(effects, [
   'molbio panel: papers tab type',
   'molbio panel: papers tab body',
   'molbio panel: papers tab title',
+  'molbio panel: molbio_plasmid_map card',
+  'molbio panel: molbio_plasmid_map_file card',
 ]);
 assert.equal(tabTypes.length, 2, 'the package contributes two page tab types');
 assert.deepEqual(
@@ -131,7 +133,9 @@ for (const type of tabTypes) {
 assert.equal(tabTypes[0].guide[0].title(), 'Molbio');
 assert.equal(tabTypes[1].guide[0].title(), 'Papers');
 assert.deepEqual(tabTypes.map((type) => type.guide[0].order), [40, 41], 'the guide entries have a stable order');
-// Body + title register in the keyed seats under each type's id.
+// Body + title register in the keyed seats under each type's id, and the two
+// map tools claim their own `tool.call.toolview` key (an unclaimed key falls
+// back to the generic tool row, so claiming ours is additive).
 assert.deepEqual(
   slotRegistrations.map((entry) => [entry.registration.name, entry.registration.key]),
   [
@@ -139,10 +143,13 @@ assert.deepEqual(
     ['sidebar.right.pane.tab.title', 'dsh-molbio-tools'],
     ['sidebar.right.pane.tab', 'dsh-molbio-tools/papers'],
     ['sidebar.right.pane.tab.title', 'dsh-molbio-tools/papers'],
+    ['tool.call.toolview', 'molbio_plasmid_map'],
+    ['tool.call.toolview', 'molbio_plasmid_map_file'],
   ],
 );
 assert.equal(typeof slotRegistrations[0].component, 'function', 'the plasmid body is a component');
 assert.equal(typeof slotRegistrations[2].component, 'function', 'the papers body is a component');
+assert.equal(typeof slotRegistrations[4].component, 'function', 'the map card is a component');
 for (const index of [0, 2]) {
   const face = slotRegistrations[index].registration.inject('session-1', {});
   assert.equal(typeof face.remote.workspaceFiles.list, 'function', 'the inject factory hands the body the workspace Remote');
@@ -150,6 +157,9 @@ for (const index of [0, 2]) {
   // factory: the framework turns every root hook source into a `use<Name>` prop.
   assert.equal(Object.keys(face).join(','), 'remote', 'the body injects nothing the framework already provides');
 }
+// The map card needs no inject factory at all: its block carries the meta the
+// tool declared, so it stays a pure function of the call.
+assert.equal(slotRegistrations[4].registration.inject, undefined, 'the map card declares no injection');
 
 // ── 3. the panel's data path, against the real fixture ──────────────────────
 

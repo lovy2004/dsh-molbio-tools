@@ -33,6 +33,8 @@ import {
   isOpenable,
   libraryTags,
   logoSvg,
+  mapCardSummary,
+  mapCardView,
   paperFields,
   paperLink,
   paperSummary,
@@ -104,6 +106,12 @@ const styles = {
   detailTitle: { fontSize: '15px', fontWeight: 600, marginBottom: '10px', lineHeight: 1.35 },
   link: { color: 'var(--dsh-link, #2f6fd0)', textDecoration: 'none' },
   fieldKey: { textAlign: 'left', padding: '3px 10px 3px 0', opacity: 0.6, fontWeight: 500, verticalAlign: 'top', whiteSpace: 'nowrap' },
+  card: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px 10px', border: '1px solid var(--dsh-border, #e3e6ea)', borderRadius: '6px', background: 'var(--dsh-surface, #ffffff)' },
+  cardHead: { fontSize: '12px', fontWeight: 600, opacity: 0.8 },
+  cardSvg: { maxWidth: '520px', lineHeight: 0 },
+  cardNote: { fontSize: '12px', opacity: 0.6 },
+  cardPath: { fontSize: '11px', opacity: 0.45, fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' },
+  cardButton: { alignSelf: 'flex-start', fontSize: '11px', padding: '2px 8px', cursor: 'pointer', border: '1px solid var(--dsh-border, #e3e6ea)', borderRadius: '4px', background: 'transparent', color: 'inherit' },
   note: { marginTop: '12px', padding: '8px 10px', background: 'var(--dsh-soft, #f6f7f9)', borderRadius: '4px', whiteSpace: 'pre-wrap' },
   idLine: { marginTop: '12px', fontSize: '11px', opacity: 0.45, fontFamily: 'ui-monospace, monospace' },
   meta: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginBottom: '10px', fontSize: '12px', opacity: 0.8 },
@@ -257,6 +265,64 @@ function panelTitle() {
 /** The literature tab's chip text. */
 function papersTitle() {
   return 'Papers';
+}
+
+/** The tool names whose transcript card this package draws. */
+const MAP_TOOL_KEYS = ['molbio_plasmid_map', 'molbio_plasmid_map_file'];
+
+/**
+ * The transcript card for the map tools (`tool.call.toolview`, keyed by tool
+ * name). It replaces the generic tool row for `molbio_plasmid_map` and
+ * `molbio_plasmid_map_file`, drawing the map the call produced in the
+ * conversation instead of asking the reader to open a file.
+ *
+ * The card is a pure function of the block its owner hands it: `block.meta` is
+ * the projection the tool declared (`mapCardMeta` in index.mjs) and
+ * `block.content` the text the model saw. Everything is read defensively, so a
+ * call from an older version, another tool, a running call, or a failed run
+ * degrades to a notice instead of breaking the transcript.
+ */
+function MolbioMapCard({ block, inspect }) {
+  const settled = block !== null && typeof block === 'object' && block.kind === 'tool-result';
+  const view = mapCardView(settled ? block.meta : undefined);
+  const host = useRef(null);
+  const svg = view.kind === 'map' ? view.svg : '';
+
+  // The markup is parsed and inserted as real DOM, exactly as in the panels:
+  // the SVG stays selectable and inherits the page's font stack.
+  useEffect(() => {
+    const node = host.current;
+    if (node === null) return;
+    node.replaceChildren();
+    if (svg === '') return;
+    const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    if (parsed.querySelector('parsererror') !== null) return;
+    const element = parsed.documentElement;
+    element.setAttribute('style', 'width:100%;height:auto;max-width:520px');
+    node.append(document.importNode(element, true));
+  }, [svg]);
+
+  const head = settled
+    ? mapCardSummary(view)
+    : 'Drawing the map…';
+  const content = [h('div', { key: 'head', style: styles.cardHead }, head)];
+  if (view.kind === 'map') {
+    content.push(h('div', { key: 'svg', ref: host, style: styles.cardSvg }));
+  } else {
+    content.push(h('div', { key: 'note', style: styles.cardNote }, view.message));
+  }
+  if (view.svgPath !== '') content.push(h('div', { key: 'path', style: styles.cardPath }, view.svgPath));
+  if (settled && block.isError === true) {
+    const text = (Array.isArray(block.content) ? block.content : [])
+      .map((item) => (item !== null && typeof item === 'object' && item.type === 'text' ? String(item.text ?? '') : ''))
+      .join('\n')
+      .trim();
+    content.push(h('div', { key: 'err', style: styles.error }, text === '' ? 'The call failed.' : text));
+    if (typeof inspect === 'function') {
+      content.push(h('button', { key: 'inspect', style: styles.cardButton, onClick: () => inspect() }, 'Inspect'));
+    }
+  }
+  return h('div', { style: styles.card }, ...content);
 }
 
 /**
@@ -440,6 +506,15 @@ function apply(ctx) {
     name: 'sidebar.right.pane.tab.title',
     key: PAPERS_ID,
   }, papersTitle), 'molbio panel: papers tab title');
+  // Transcript cards: the map tools draw their map in the conversation. The
+  // seat is keyed by tool name and an unclaimed key falls back to the generic
+  // tool row, so this is additive for our own tools only.
+  for (const toolName of MAP_TOOL_KEYS) {
+    ctx.effect(() => ctx.slots.register({
+      name: 'tool.call.toolview',
+      key: toolName,
+    }, MolbioMapCard), `molbio panel: ${toolName} card`);
+  }
 }
 
 export { apply, inject };

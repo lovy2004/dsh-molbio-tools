@@ -241,6 +241,42 @@ check('the published tarball would carry the client half and the panel package',
   }
 });
 
+check('the toolview card contract still holds (meta path + keyed seat)', () => {
+  // The card reads the tool-result block's `meta`, which the tool layer fills
+  // from a tool's `output.presentationMeta` — for a ROOT call only.
+  const tools = hostHalf('@deepseek-ai/dsh-tools');
+  assert.ok(tools !== undefined, 'dsh-tools is installed');
+  assert.ok(/output\.presentationMeta\s*!==\s*void 0/.test(tools.text), 'the tool layer still consults output.presentationMeta');
+  assert.ok(tools.text.includes('exec.parent === void 0'), 'and calls it for root calls');
+  assert.ok(tools.text.includes('snapshotProjection(tool.name, "presentationMeta"'), 'and records the projection on the result');
+  assert.ok(/output \{ schema, render, presentationMeta\? \}/.test(tools.text), 'register() accepts presentationMeta on a raw output');
+
+  // The browser side: the seat exists and is keyed by tool name.
+  const toolUi = clientBundle('@deepseek-ai/dsh-client-ui-tool');
+  assert.ok(toolUi !== undefined, 'ui-tool is installed');
+  assert.ok(toolUi.text.includes('tool.call.toolview'), 'the toolview seat is still declared');
+  const card = clientBundle('@deepseek-ai/dsh-client-ui-deliverables');
+  assert.ok(card !== undefined && card.text.includes('tool.call.toolview'), 'a shipped package still registers a toolview');
+  assert.ok(/key:\s*"present"/.test(card.text), 'keyed by the tool name');
+
+  // This package's own side: the projection exists on both map tools, and the
+  // bundle claims both keys (through the loop over MAP_TOOL_KEYS, so assert the
+  // key list and the seat, not a literal registration).
+  const source = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
+  assert.equal((source.match(/presentationMeta\(_args, value\)/g) ?? []).length, 2, 'both map tools declare the projection');
+  assert.ok(source.includes('mapCardMeta'), 'and build it through the shared projection');
+  const bundle = readFileSync(join(packageRoot, 'lib', 'client.js'), 'utf8');
+  const keys = /const MAP_TOOL_KEYS = \[([^\]]*)\]/.exec(bundle);
+  assert.ok(keys !== null, 'the bundle declares the tool keys whose cards it draws');
+  const claimed = keys[1].split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, '')).filter((entry) => entry !== '');
+  for (const key of ['molbio_plasmid_map', 'molbio_plasmid_map_file']) {
+    assert.ok(claimed.includes(key), `${key} is among the claimed card keys`);
+    // The host half registers a tool under that exact name.
+    assert.ok(source.includes(`name: '${key}'`), `and the host registers the tool ${key}`);
+  }
+  assert.ok(bundle.includes('tool.call.toolview'), 'through the toolview seat');
+});
+
 // ── run ─────────────────────────────────────────────────────────────────────
 
 let failed = 0;

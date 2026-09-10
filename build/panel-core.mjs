@@ -177,6 +177,66 @@ export function logoSvg(alignment) {
   });
 }
 
+// ── tool cards (the `tool.call.toolview` seat) ──────────────────────────────
+
+/** The meta kind this package's map tools attach to their results. */
+export const MAP_CARD_KIND = 'molbio-map';
+
+/** Accept only a string that looks like the renderer's own output. */
+function isSvgMarkup(value) {
+  return typeof value === 'string' && value.startsWith('<svg') && value.endsWith('</svg>');
+}
+
+/**
+ * Read a tool-result block's `meta` into what the map card draws.
+ *
+ * The tool layer records `output.presentationMeta(args, value)` for a root call
+ * and the browser surfaces it as the block's `meta` — a value this package
+ * produced itself (see `mapCardMeta` in index.mjs). It is still checked rather
+ * than trusted, because the card renders inside the conversation: a block whose
+ * meta is absent, of another kind, or shaped differently must degrade to a
+ * notice, never throw in the transcript.
+ *
+ * @param {unknown} meta the block's meta, as the client received it.
+ * @returns {{kind: 'notice', message: string} | {kind: 'map', name: string,
+ *   svg: string, svgPath: string, length: number, circular: boolean,
+ *   featureCount: number, enzymeCount: number, svgBytes: number}}
+ */
+export function mapCardView(meta) {
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    return { kind: 'notice', message: 'No map data was attached to this call.' };
+  }
+  if (meta.kind !== MAP_CARD_KIND) {
+    return { kind: 'notice', message: 'This call carries no plasmid map.' };
+  }
+  const base = {
+    name: typeof meta.name === 'string' && meta.name !== '' ? meta.name : 'plasmid',
+    svg: '',
+    svgPath: typeof meta.svg_path === 'string' ? meta.svg_path : '',
+    length: Number.isInteger(meta.length) ? meta.length : 0,
+    circular: meta.circular !== false,
+    featureCount: Number.isInteger(meta.feature_count) ? meta.feature_count : 0,
+    enzymeCount: Number.isInteger(meta.enzyme_count) ? meta.enzyme_count : 0,
+    svgBytes: Number.isInteger(meta.svg_bytes) ? meta.svg_bytes : 0,
+  };
+  if (!isSvgMarkup(meta.svg)) {
+    // The tool always writes the file; only the in-meta copy is optional (it is
+    // dropped when a map is too large to belong in the session log).
+    const reason = meta.svg_omitted === true
+      ? `The map is too large to draw inline (${Math.round(base.svgBytes / 1024)} KB); it was written to the file above.`
+      : 'The map markup did not travel with this call.';
+    return { kind: 'notice', message: reason, ...base };
+  }
+  return { kind: 'map', ...base, svg: meta.svg };
+}
+
+/** A one-line summary of a map card, for the card header and for tests. */
+export function mapCardSummary(view) {
+  const parts = [view.name, `${view.length} bp`, view.circular ? 'circular' : 'linear', `${view.featureCount} feature(s)`];
+  if (view.enzymeCount > 0) parts.push(`${view.enzymeCount} cut mark(s)`);
+  return parts.join(' · ');
+}
+
 // ── literature library (papers.json) ────────────────────────────────────────
 
 /** The library file the molbio_paper_* tools write, relative to the workspace. */

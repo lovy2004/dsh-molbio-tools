@@ -6,25 +6,50 @@
 
 ## 1. 已交付的东西
 
-两个浏览器内的右栏 tab：
+两个浏览器内的右栏 tab，外加一个对话内的工具卡：
 
-| tab | 内容 | 数据来源 |
+| 落点 | 内容 | 数据来源 |
 | --- | --- | --- |
-| **Molbio** | 列出会话工作区里的序列文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图 | `workspaceFiles.readAll`（二进制，含 SnapGene） |
-| **Papers** | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
+| **Molbio**（右栏 tab） | 列出会话工作区里的序列文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图 | `workspaceFiles.readAll`（二进制，含 SnapGene） |
+| **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
+| **图谱调用卡**（`tool.call.toolview`） | `molbio_plasmid_map` / `molbio_plasmid_map_file` 的调用卡：在对话里直接画出这次调用产出的图谱（摘要行 + 写入路径），失败时显示错误文本与 Inspect 入口 | 工具自己声明的 `output.presentationMeta`（见下） |
 
 **解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`），
 不经过任何工具调用、不落盘 SVG、不弹系统查看器。
+
+### 调用卡的数据通路（`presentationMeta`）
+
+这是本仓库第一个**跨越宿主/客户端边界**的能力，通道是官方文档写明的那条：
+
+```
+工具 execute() 产出 value
+   ↓  工具层对 ROOT 调用执行 output.presentationMeta(args, value)
+会话事件携带 meta
+   ↓  浏览器把它作为 tool-result 块的 block.meta
+tool.call.toolview 卡片读取 block.meta 并绘制
+```
+
+三个要点：**`presentResult`/`presentCall` 不算数**——`dsh-tools` 的文档明确写着内置 Web
+客户端不消费它们；结构化数据的唯一通道是 `presentationMeta`（官方 read 卡片就这么做）。
+**只在 root 调用上执行**（`exec.parent === void 0`），子调用没有 meta。**投影必须廉价且不抛**：
+它跑在工具调用已经成功之后，抛错会把这次调用标成失败，所以实现里只做纯计算（图谱标记
+用一份有界的内存缓存，按写入路径取回，不去读文件）。
+
+SVG 随 meta 传输有上限（256 KB）：真实载体的图谱 20-60 KB，但超大构建可能是 MB 级、会进
+会话日志——超限时投影改带 `svg_omitted` 与字节数，卡片降级为提示 + 写入路径（图谱仍在
+文件里，`openFile` 一点即开）。卡片对 meta 的态度是**校验而非信任**：缺失/异种/异形一律
+降级为提示，绝不在对话里抛错。
 
 | 文件 | 作用 |
 | --- | --- |
 | `build/client-bundle.mjs` | 零依赖打包器：把浏览器半打成 DSH 客户端加载器要求的 lazy-CJS 产物，**一趟构建产出两个交付包** |
 | `build/browser-api.mjs` | 浏览器安全面：从**包根的 `.mjs` 源文件**再导出面板可用的一切（单一事实来源） |
 | `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
-| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip |
+| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，以及两个 map 工具的调用卡 |
 | `lib/client.js` | **构建产物**（`exports["./client"]` 指向它；由 `npm run build:client` 生成） |
 | `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 46 个工具解耦的交付通道 |
 | `test/client.mjs` | 按加载器的方式执行产物 + 驱动两条数据通路（含真实 pUC118 夹具） |
+| `test/map-card.mjs` | 调用卡的**跨界**检查：真实工具的投影 → 卡片读取 → 渲染出 SVG（含四种降级路径） |
 | `test/client-mount.mjs` | 复刻宿主侧图扫描，证明两个包都能挂上、依赖可解析 |
 
 命令：`npm run build:client`（构建）、`npm test`（全部测试）、
@@ -145,7 +170,13 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    （插件契约变了、测试全绿、组合却挂不上），所以这里断言的是**契约**（规则、调用、服务名），
    不是排版细节。
 
-7. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
+7. **调用卡（跨界）**：`test/map-card.mjs` 是唯一同时驱动宿主与客户端的一层——它把真实
+   插件注册进 mock registry、**真的调用** `molbio_plasmid_map`、像工具层那样调用
+   `output.presentationMeta(args, value)`，再把投影喂给卡片的读取函数与组件，断言 SVG
+   真的进了卡片的宿主节点。它同时钉住四条降级路径：异种 meta、缺失 meta、超限（带
+   `svg_omitted`）、调用失败——任何一条都不允许在对话里抛错。
+
+8. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
    `insert:` 行，用 harness 自己的 YAML 方言解析），对每一行复刻宿主扫描（最近的
    `package.json` + `dsh.client` + `exports["./client"]` 文件存在性），断言：
    **两个包**走的分支与所有线上客户端包相同；`dsh.client.inject` 里声明的两个包
@@ -175,11 +206,9 @@ shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 
 ## 7. 下一步
 
-- **真机确认**：装上并重启后，右栏引导页应出现 **Molbio** 与 **Papers** 两个胶囊；
-  Molbio 打开工作区里任意 `.dna`/`.gb` 应直接出图，Papers 在有 `papers.json` 的会话里
-  应列出条目。
-- **`tool.call.toolview`**：同一套渲染器还能挂成 `molbio_plasmid_map` 的自定义调用卡，
-  让工具调用本身显示图而不是只给路径；`panel-core.mjs` 可直接复用。
+- **`tool.call.toolview`**：✅ 已落地（见第 1 与第 3 节），覆盖两个 map 工具。可继续做的
+  是给 `molbio_sequence_logo` / `molbio_grna_design` 之类的工具也加上卡片（同一套
+  `presentationMeta` + 卡片模式）。
 - **文献库写回**（可选）：若要面板内编辑笔记/标签，需要先定义与 `molbio_paper_*` 工具
   一致的并发契约（乐观版本号或串行化队列），或让工具走同一条 RPC。
 - **上游提案（路径 B）**：preset 渠道挂 client 仍是真实生态需求，可以在社区反馈时
