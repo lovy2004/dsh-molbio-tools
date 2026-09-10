@@ -128,18 +128,34 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    坏 JSON 明确报错；标签统计与排序、搜索（标题/作者/期刊/年份/PMID/URL/笔记/标签 + 标签
    组合成 AND）、详情字段的固定顺序与空值跳过、摘要行、链接回退（url → PubMed → 无）；
    并断言面板的库文件名与 `papers.mjs` 的 `DEFAULT_LIBRARY_FILE` **同源**。
-6. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
+6. **宿主契约**：`test/contract.mjs` 把面板依赖的**运行时契约**钉在已安装的 DSH 上——它读的是
+   宿主与官方客户端包的**实际代码**，而不是本仓库的假设：
+   - shell 里钩子 prop 的命名规则（`standardHookPropName`：`use` + 首字母大写 + 其余），
+     也就是把 root hook `sessions` 变成 prop `useSessions` 的那条规则；
+   - 官方同类包（`ui-sidebar-files`）的正文 props 与注入服务，证明 `sessionId` / `useSessions` /
+     `ctx.remote.workspaceFiles` 就是我用的那套；
+   - `sessions` 这个 root hook **由谁提供**（`ui-session` 的 `slots.provideRoot`）以及它安装的
+     session scope；
+   - `workspaceFiles` 的 `list`/`readAll`/`read` 在**宿主 Remote** 上的实现、`not-found` wire 码
+     与 base64 载荷，以及官方客户端包对同一命名空间的调用方式；
+   - 本包产物**自己那一侧**：inject 列表、两个 keyed 座位的注册、三个 Remote 调用的实参顺序、
+     正文解构的 props 名，以及"inject 工厂只交出 `remote`"（保证不会遮蔽框架注入的
+     `sessionId`/钩子）。
+   任何一条失败都意味着"DSH 动了面板依赖的东西"——这正是 0.1.5-alpha.2 弄坏 preset 的方式
+   （插件契约变了、测试全绿、组合却挂不上），所以这里断言的是**契约**（规则、调用、服务名），
+   不是排版细节。
+
+7. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
    `insert:` 行，用 harness 自己的 YAML 方言解析），对每一行复刻宿主扫描（最近的
    `package.json` + `dsh.client` + `exports["./client"]` 文件存在性），断言：
    **两个包**走的分支与所有线上客户端包相同；`dsh.client.inject` 里声明的两个包
    （sidebar-right / connection）**本身就是 graph 行**；产物的 `require` 全部有答案。
    实测：153 行挂载行中 54 个是 client 行（含本包自己的那一行）。
 
-**尚未验证（需要真实浏览器）**：三个只能由运行时回答的问题——插槽框架是否真的把
-`sessionId`/`useSessions` 注入了正文、两个 tab 是否出现在右栏引导页、以及
-`workspaceFiles` 的 wire 形状（`{ok, value:{data}}`）是否与桩一致。前两个由框架契约与
-官方同类包（`ui-sidebar-files`）的用法支撑，第三个由 `dsh-api-workspace-files` 的源码
-支撑；三者都要在运行中的 GUI 里点一下才算数。
+**尚未验证（需要真实浏览器）**：只剩"页面里的实际观感"——两个 tab 是否出现在右栏引导页、
+点击后 SVG 是否如预期呈现。上一版列出的三件"只有运行时能回答的事"现在已被 `contract.mjs`
+用**已安装的框架代码**钉住（钩子 prop 规则、root hook 提供方、Remote 的 wire 形状与方法
+签名），失败会直接以测试形式暴露，而不是等页面白屏。
 
 ## 6. 挂载与分发
 
