@@ -12,9 +12,9 @@
   },
   "scripts": {
     "build:client": "node build/client-bundle.mjs",
-    "test": "node test/smoke.mjs && node test/client.mjs && node test/client-mount.mjs && node test/preset-health.mjs",
+    "test": "node test/smoke.mjs && node test/client.mjs && node test/panel-render.mjs && node test/client-mount.mjs && node test/preset-health.mjs",
     "test:smoke": "node test/smoke.mjs",
-    "test:client": "node test/client.mjs && node test/client-mount.mjs",
+    "test:client": "node test/client.mjs && node test/panel-render.mjs && node test/client-mount.mjs",
     "test:preset": "node test/preset-health.mjs"
   },
   "files": [

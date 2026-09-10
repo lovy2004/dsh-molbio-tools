@@ -30,6 +30,7 @@ import {
   classifyEntry,
   decodeBase64Bytes,
   filterPapers,
+  isOpenable,
   libraryTags,
   logoSvg,
   paperFields,
@@ -184,7 +185,7 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     host.append(document.importNode(svg, true));
   }, [record, status.kind]);
 
-  const openable = useMemo(() => entries.filter((entry) => classifyEntry(entry) !== 'directory'), [entries]);
+  const openable = useMemo(() => entries.filter(isOpenable), [entries]);
 
   const head = h('div', { style: styles.listHead }, 'Sequence files');
   const list = h(
@@ -332,18 +333,24 @@ function PapersPanel({ sessionId, remote, useSessions }) {
       onClick: () => setTag(tag === entry.tag ? '' : entry.tag),
     }, `${entry.tag} (${entry.count})`)));
 
+  // The list only speaks once the library actually resolved: while loading, or
+  // after a failed read/parse, claiming "no papers" would state something the
+  // panel does not know.
+  const listReady = status.kind === 'ready' || status.kind === 'empty';
   const list = h('div', { style: styles.list },
-    h('div', { style: styles.listHead }, `Papers (${visible.length}${visible.length === papers.length ? '' : ` / ${papers.length}`})`),
-    ...(visible.length === 0
-      ? [h('div', { key: 'none', style: styles.muted }, papers.length === 0 ? 'No papers in the library yet' : 'No paper matches this filter')]
-      : visible.map((paper) => h('div', {
-        key: paper.id ?? paper.title,
-        style: styles.listItem(selected?.id === paper.id),
-        title: paper.title,
-        onClick: () => setSelectedId(paper.id),
-      },
-      h('div', { style: styles.listTitle }, String(paper.title ?? '(untitled)')),
-      h('div', { style: styles.listSub }, paperSummary(paper))))));
+    h('div', { style: styles.listHead }, listReady ? `Papers (${visible.length}${visible.length === papers.length ? '' : ` / ${papers.length}`})` : 'Papers'),
+    ...(!listReady
+      ? []
+      : visible.length === 0
+        ? [h('div', { key: 'none', style: styles.muted }, papers.length === 0 ? 'No papers in the library yet' : 'No paper matches this filter')]
+        : visible.map((paper) => h('div', {
+          key: paper.id ?? paper.title,
+          style: styles.listItem(selected?.id === paper.id),
+          title: paper.title,
+          onClick: () => setSelectedId(paper.id),
+        },
+        h('div', { style: styles.listTitle }, String(paper.title ?? '(untitled)')),
+        h('div', { style: styles.listSub }, paperSummary(paper))))));
 
   const detail = [];
   if (status.kind === 'waiting') detail.push(h('div', { key: 'wait', style: styles.muted }, 'Waiting for the session workspace…'));

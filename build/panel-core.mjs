@@ -57,6 +57,12 @@ export function classifyEntry(entry) {
   return 'other';
 }
 
+/** Whether the panel can open this entry at all. */
+export function isOpenable(entry) {
+  const kind = classifyEntry(entry);
+  return kind === 'plasmid' || kind === 'alignment';
+}
+
 /** Sort entries: plasmid files first, then alignments, then the rest, by name. */
 export function sortEntries(entries) {
   const rank = { plasmid: 0, alignment: 1, other: 2, directory: 3 };

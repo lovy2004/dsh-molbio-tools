@@ -109,25 +109,37 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 2. **服务契约**：对桩服务 `apply()`，断言**两个** tab 类型（`id`/`kind`/`title`/`guide`、
    无 `patterns`、guide `order` 40/41）、四个 keyed 座位的注册、两个正文的 `inject`
    工厂都只交出 `remote`。
-3. **数据通路（质粒）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，AmpR 2102-2962
+3. **组件行为**：`test/panel-render.mjs` 把**真实的面板组件**放进 Node 跑——没有 React
+   （harness 里有，浏览器里的 React 由 shell 播种）也没有 DOM，所以这个文件自带一套最小
+   钩子宿主（`createElement`/`useState`/`useEffect`/`useMemo`/`useRef`，语义与 React 一致：
+   状态跨渲染保留、副作用在渲染后执行、setter 触发重渲染、依赖比较用 `Object.is`）、
+   桩服务（`sessionId`/`useSessions`/`remote`）与 DOM/DOMParser 桩。然后断言用户能看到的东西：
+   文件列表（目录与不可打开的文件不出现）、点选 `.dna` → 元信息 + 特征表 + **SVG 真的被
+   append 进宿主**（`svg` 元素、`viewBox` 属性）、点选 `.fasta` → logo 表头、读取失败与
+   列目录失败的错误态、文献库的列表/搜索/标签过滤/详情/PubMed 链接回退、空库提示、坏库
+   报错（**不显示成"空库"**）、以及卸载时中止在途读取。
+   这一层抓到过三个真 bug：列表把不可打开的文件也列出来、`sortEntries` 的 `other` 档从不
+   生效、以及坏库时列表仍宣称"还没有文献"。
+4. **数据通路（质粒）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，AmpR 2102-2962
    反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；FASTA → 比对 → logo；
    扩展名分类、排序、base64 解码、非法输入的错误路径。
-4. **数据通路（文献库）**：`readWorkspaceText` 的三种结果（有文本 / 文件不存在 / 读取失败）
+5. **数据通路（文献库）**：`readWorkspaceText` 的三种结果（有文本 / 文件不存在 / 读取失败）
    分别对应"有库 / 空库 / 报错"；`parseLibrary` 与工具侧契约一致（`{papers: [...]}`）且
    坏 JSON 明确报错；标签统计与排序、搜索（标题/作者/期刊/年份/PMID/URL/笔记/标签 + 标签
    组合成 AND）、详情字段的固定顺序与空值跳过、摘要行、链接回退（url → PubMed → 无）；
    并断言面板的库文件名与 `papers.mjs` 的 `DEFAULT_LIBRARY_FILE` **同源**。
-5. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
+6. **能否真的挂上**：`test/client-mount.mjs` 读**真实 web profile 的组合**（bundle 的
    `insert:` 行，用 harness 自己的 YAML 方言解析），对每一行复刻宿主扫描（最近的
    `package.json` + `dsh.client` + `exports["./client"]` 文件存在性），断言：
    **两个包**走的分支与所有线上客户端包相同；`dsh.client.inject` 里声明的两个包
    （sidebar-right / connection）**本身就是 graph 行**；产物的 `require` 全部有答案。
    实测：153 行挂载行中 54 个是 client 行（含本包自己的那一行）。
 
-**尚未验证（需要真实浏览器）**：React 组件在真实 DOM 里的渲染、插槽框架注入的
-`useSessions` 是否在运行时按预期出现、两个 tab 的 guide 胶囊排布。这些只能在运行中的
-GUI 里点一下才能确认——自动测试到不了那里（本机没有可用的无头浏览器，且页面本身有
-trust 网关 401）。
+**尚未验证（需要真实浏览器）**：三个只能由运行时回答的问题——插槽框架是否真的把
+`sessionId`/`useSessions` 注入了正文、两个 tab 是否出现在右栏引导页、以及
+`workspaceFiles` 的 wire 形状（`{ok, value:{data}}`）是否与桩一致。前两个由框架契约与
+官方同类包（`ui-sidebar-files`）的用法支撑，第三个由 `dsh-api-workspace-files` 的源码
+支撑；三者都要在运行中的 GUI 里点一下才算数。
 
 ## 6. 挂载与分发
 

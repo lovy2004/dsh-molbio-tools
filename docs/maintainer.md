@@ -45,6 +45,7 @@ seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关�
 ```bash
 node test/smoke.mjs         # 插件：mock 注册表跑全部 46 个工具 + 输出 schema 校验
 node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
+node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
 node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
 node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
 node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness 根目录>
@@ -91,15 +92,19 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
 排序不变式、九条参数/输入错误路径）。
 
-- `client.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面两者正交的第三个
-  问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在 `vm` 里按加载器
-  的方式执行产物（注册形状、id、**注册期零全局写入**），用桩 `require` 物化它，对桩服务
-  `apply()`，再把面板数据通路跑在真实 pUC118 夹具上（记录字段与 Node 工具逐字段一致）。
+- `client.mjs` / `panel-render.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面
+  两者正交的第三个问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在
+  `vm` 里按加载器的方式执行产物（注册形状、id、**注册期零全局写入**），用桩 `require`
+  物化它，对桩服务 `apply()`，再把面板数据通路跑在真实 pUC118 夹具上（记录字段与 Node
+  工具逐字段一致）。`panel-render.mjs` 更进一步：**真实组件**在一个最小钩子宿主里跑完整
+  状态机（无 React、无 DOM——harness 不带 React，浏览器里的 React 由 shell 播种），断言
+  列表/图谱/特征表/logo/搜索/标签/空库/坏库/卸载中止这些用户可见结果；它抓到过三个真 bug。
   `client-mount.mjs` 读**真实 profile 的组合**（bundle 的 `insert:` 行，用 harness 自己的
   YAML 方言），对每行复刻宿主扫描（最近 `package.json` + `dsh.client` + `exports["./client"]`
   存在性），断言本包走的分支与线上客户端包相同、`dsh.client.inject` 声明的包都是 graph 行、
-  产物的 `require` 全部有答案。**没验证到的**：浏览器里的实际渲染——那需要真机点一下，
-  见 `docs/client-panel.md` 第 5 节。
+  产物的 `require` 全部有答案。**没验证到的**：运行时才回答的三件事（插槽注入的
+  `sessionId`/`useSessions`、guide 胶囊、`workspaceFiles` 的 wire 形状），见
+  `docs/client-panel.md` 第 5 节。
 
 - `preset-health.mjs` 证明**组合**可挂载：它刻意与冒烟测试正交——preset 是 DSH
   **自己那些包**的组合，DSH 升级后如果某个包的 `Config` 契约变了（0.1.5-alpha.2 就
