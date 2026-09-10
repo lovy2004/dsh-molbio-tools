@@ -43,14 +43,17 @@ seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关�
 ## 开发与测试
 
 ```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 44 个工具 + 输出 schema 校验
+node test/smoke.mjs         # 插件：mock 注册表跑全部 46 个工具 + 输出 schema 校验
+node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
+node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
 node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
 node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness 根目录>
+node test/client-mount.mjs --profile web --dsh <harness 根目录>
 ```
 
-两个检查回答的是**不同**的问题，发布前都要跑：
+三个检查回答的是**不同**的问题，发布前都要跑：
 
-- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 44 个工具，并用 harness 自身的
+- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 46 个工具，并用 harness 自身的
 `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
 覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
 SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
@@ -88,6 +91,16 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
 排序不变式、九条参数/输入错误路径）。
 
+- `client.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面两者正交的第三个
+  问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在 `vm` 里按加载器
+  的方式执行产物（注册形状、id、**注册期零全局写入**），用桩 `require` 物化它，对桩服务
+  `apply()`，再把面板数据通路跑在真实 pUC118 夹具上（记录字段与 Node 工具逐字段一致）。
+  `client-mount.mjs` 读**真实 profile 的组合**（bundle 的 `insert:` 行，用 harness 自己的
+  YAML 方言），对每行复刻宿主扫描（最近 `package.json` + `dsh.client` + `exports["./client"]`
+  存在性），断言本包走的分支与线上客户端包相同、`dsh.client.inject` 声明的包都是 graph 行、
+  产物的 `require` 全部有答案。**没验证到的**：浏览器里的实际渲染——那需要真机点一下，
+  见 `docs/client-panel.md` 第 5 节。
+
 - `preset-health.mjs` 证明**组合**可挂载：它刻意与冒烟测试正交——preset 是 DSH
   **自己那些包**的组合，DSH 升级后如果某个包的 `Config` 契约变了（0.1.5-alpha.2 就
   把 `dsh-persona` 的 `text` 换成了 `prefix`/`suffix`），插件代码一行没错，preset 却会
@@ -99,6 +112,20 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
   Loader 的规则跳过。退出码非 0 即发布阻断。
 
 ## 发布与更新流程
+
+### 客户端产物（browser half）
+
+浏览器半由 `build/client-bundle.mjs` 从**包根的同一份 `.mjs` 源文件**生成到
+`lib/client.js`。改完源码后：
+
+```bash
+node build/client-bundle.mjs     # 或 npm run build:client
+node test/client.mjs && node test/client-mount.mjs
+```
+
+两条纪律：**产物必须与源一起提交**（`dsh plugin add` 装的是产物，用户机器上没有构建
+步骤）；**产物不能进 preset 的版本目录**——客户端模块靠 `rev` 哈希失效，与"版本目录
+规则"无关（那条规则只约束被 `import()` 的宿主侧 `.mjs`）。
 
 preset 渠道（受 ESM 模块缓存约束）：
 
@@ -137,8 +164,11 @@ preset 渠道（受 ESM 模块缓存约束）：
 ## 路线图
 
 - **v17（候选池，按需挑选）**：TaqMan 水解探针设计；多重 PCR 互扰检查；蛋白螺旋轮投影图（helical wheel）；疏水性窗口图（hydropathy plot，Kyte-Doolittle）；甲基化敏感位点（dam/dcm/EcoKI）与双酶切 buffer 兼容提示；Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNGRRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）
-- 质粒图谱的浏览器内实时面板（**可行性已调研**，见 `docs/client-pipeline-exploration.md`：preset 渠道被三层机制挡住，需走 bundle 渠道 `dsh.client` 双面包 + 自建 lazy-CJS client bundle；0.1.5 起最优落点是右栏 tab `sidebar.right.pane.tab`，辅以 `tool.call.toolview` 自定义工具卡）
-- 文献库的浏览器端面板（同上；0.1.5 起落点为右栏 tab 的 "Papers" 页或 `conversation.view`）
+- 质粒图谱的浏览器内实时面板（**已开工**：bundle 渠道的第一段已落地——手写 lazy-CJS
+  打包器 + 右栏 Molbio 面板，见 `docs/client-panel.md`；待办：真机确认渲染、
+  `tool.call.toolview` 自定义调用卡、以及第二个面板）
+- 文献库的浏览器端面板（同上；0.1.5 起落点为右栏 tab 的 "Papers" 页或 `conversation.view`；
+  数据面需先定：宿主 Typert RPC 还是把 `papers.json` 当普通文件读写）
 - 向上游提议"preset 渠道挂 client"（探索文档路径 B）
 
 ## 已完成的方向（历史）

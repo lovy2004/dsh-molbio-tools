@@ -9,6 +9,26 @@
 
 版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
 
+## [未发布] — 浏览器内面板（bundle 渠道 / 路径 A 第一段）
+
+**新增 `Molbio` 右栏面板**：列出会话工作区的序列文件，选中即在面板里画图
+（`.dna`/`.gb`/`.gbk` → 质粒图谱，`.fa`/`.fasta` → 序列标识图）。解析与渲染在浏览器里
+跑的是本仓库自己的模块，与 Node 工具**同一份源码**。
+
+- `build/client-bundle.mjs`：零依赖打包器，产出 DSH 客户端加载器要求的 **lazy-CJS**
+  产物（`window.__ModuleLoader__.load({id, factory})`）。官方 `tsdown.client.ts` 预设未随
+  npm 发布，故按加载器契约复刻；同时把纯净度门禁前移成构建期检查（禁 `node:` 内建、
+  禁裸 specifier、禁动态 `import()`）。
+- `build/browser-api.mjs` / `panel-core.mjs` / `client-entry.mjs`：浏览器安全面、面板数据
+  通路（无 React、可在 Node 单测）、以及右栏 tab 的注册与组件。
+- `package.json`：`exports["./client"]` + `dsh.client {platform: web, inject}` +
+  两个客户端包的 optional peer；`build`/`lib` 进入发布白名单；新增 `build:client` 脚本。
+- 测试：`test/client.mjs`（按加载器方式执行产物 + 数据通路，含真实 pUC118 夹具）、
+  `test/client-mount.mjs`（复刻宿主侧图扫描，验证本包与线上 web profile 的挂载与依赖解析）。
+- 文档：新增 `docs/client-panel.md`（实现记录：产物格式、服务契约、上限、验证边界）。
+
+工具侧无变化（仍 46 个）。预设渠道与 bundle 渠道可共存。
+
 ## [0.6.0] — 2026-09-10（preset 目录 v16）
 
 **序列标识图与 CRISPR gRNA 设计（路线图 v16 方向）。** 工具总数 44 → 46。

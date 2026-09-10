@@ -92,6 +92,26 @@
 
 - `molbio_plasmid_map` / `molbio_plasmid_map_file` 新增 `gc_skew: true`（GC skew 环）与 `show_unique_cutters: true`（绿色标记所有单切酶）
 
+## 浏览器内面板（bundle 渠道，可选）
+
+除了工具与"写 SVG 文件 + 系统查看器"这条链路，本包还有一个**浏览器内的 Molbio 右栏
+面板**：在右侧栏列出当前会话工作区的序列文件，选中**当场在面板里画出来**——`.dna`/`.gb`/
+`.gbk` 出质粒图谱，`.fa`/`.fasta` 出序列标识图。解析与渲染在浏览器里跑的就是本仓库
+自己的模块（`lib/genbank/snapgene/plasmid/msa/logo` 的同一份源码），不落盘、不弹外部窗口。
+
+它走的是 **bundle 渠道**（`dsh.client` 双面包），因为 preset 渠道挂不了客户端 UI：
+
+```powershell
+dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools   # 本地目录
+dsh plugin --profile <profile> add dsh-molbio-tools              # 或 npm 包
+```
+
+装上后**刷新页面**（无需重建 Web 应用），右栏的引导页里会出现 "Molbio" 胶囊。
+与 preset 渠道可以共存：preset 给 46 个工具，bundle 给面板。
+
+细节（产物格式、服务契约、上限、验证方式、已知限制）见
+[docs/client-panel.md](docs/client-panel.md)。
+
 ### 文献助手
 
 | 工具 | 功能 |
@@ -133,6 +153,13 @@ dsh-molbio-tools/
 ├── records.mjs      # 协议库/实验日志存储
 ├── papers.mjs       # 文献库存储（经 harness fs 服务 + 沙箱政策）
 ├── view.mjs         # 自动查看：把生成的 SVG 交给系统默认应用打开（镜像 host.openPath 语义）
+├── build/           # 浏览器半的源码与打包器（见下）
+│   ├── client-bundle.mjs # 零依赖打包器：产出 lazy-CJS 客户端产物
+│   ├── browser-api.mjs   # 浏览器安全面：从包根 .mjs 再导出面板可用的一切
+│   ├── panel-core.mjs    # 面板数据通路（分类/解码/解析/渲染，无 React）
+│   └── client-entry.mjs  # 浏览器半本体：右栏 tab 类型 + 正文 + 标题
+├── lib/
+│   └── client.js    # 客户端产物（exports["./client"]；npm run build:client 生成）
 ├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
 │   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v16/）
@@ -141,6 +168,7 @@ dsh-molbio-tools/
 │   └── preset-health.mjs # preset 组合健康检查（逐行按该包自己的 Config schema 校验，对照官方 standard 预设）
 ├── docs/
 │   ├── maintainer.md # 维护者文档（合规对照/开发测试/路线图）
+│   ├── client-panel.md # 浏览器内面板的实现记录（产物格式/服务契约/上限/验证）
 │   └── client-pipeline-exploration.md # 浏览器内面板的可行性与实现路径调研
 ├── CHANGELOG.md     # 变更日志（包版本 + preset 版本目录对照）
 ├── package.json
