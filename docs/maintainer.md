@@ -118,6 +118,34 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 
 ## 发布与更新流程
 
+### 发布前预检（0.7.1 事故之后加的硬步骤）
+
+**任何**要 push 或打 tag 的版本，先跑完这三步，缺一步都不算发布完成：
+
+```bash
+npm test                     # 7 个套件；客户端半的改动必须全绿
+node build/client-bundle.mjs # 产物与源同一批构建
+git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
+```
+
+客户端半的改动还有两条**专门针对"会弄坏 GUI"**的确认：
+
+1. **产物已构建且已提交**——profile 与 `dsh plugin add` 消费的是**产物**：源码改了而产物没
+   重建，用户加载的还是旧逻辑；产物没提交，别人装到的就是旧逻辑。
+2. **安装态与产物一致**（profile 用 junction 指向工作区时，这一步等于自查）：
+
+   ```powershell
+   (Get-FileHash packages\molbio-panel\lib\client.js).Hash -eq `
+   (Get-FileHash $env:USERPROFILE\.dsh\profiles\<profile>\node_modules\dsh-molbio-panel\lib\client.js).Hash
+   ```
+
+   哈希不一致 = 你验证的和用户加载的不是同一个东西。
+
+**回归防线的层次**（哪一层先响，决定排查方向）：`test/client.mjs` 在**运行时语义**上响
+（座位抢注、产物格式、数据通路）；`test/contract.mjs` 在**DSH 契约**上响（官方是否改了规则或
+API）；`test/slots-stub.mjs` 是前者的地基（复刻 shell 的 SlotCore 守卫与 `inject` 语义）。
+只有两层都绿才 push。
+
 ### 客户端产物（browser half）
 
 浏览器半由 `build/client-bundle.mjs` 从**包根的同一份 `.mjs` 源文件**生成到

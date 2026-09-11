@@ -313,12 +313,37 @@ check('every seat claim waits for the declaration (slots.inject, not a bare regi
   assert.equal(registers, waited.length, 'and no registration exists outside such a wait');
 });
 
+check('the committed client artifact is what the current sources build (no stale bundle)', async () => {
+  // The trap this closes: edit build/*.mjs, forget `npm run build:client`, and
+  // every test that runs against the artifact passes while users keep loading
+  // the OLD behaviour — or, worse, a source fix that never reached the bundle.
+  // The bundle is deterministic, so rebuild-and-compare IS the check.
+  const { createHash } = await import('node:crypto');
+  const { spawnSync } = await import('node:child_process');
+  const artifacts = ['lib/client.js', join('packages', 'molbio-panel', 'lib', 'client.js')]
+    .filter((rel) => existsSync(join(packageRoot, rel)));
+  assert.ok(artifacts.length > 0, 'at least one client artifact exists');
+  const hashOf = (rel) => createHash('sha256').update(readFileSync(join(packageRoot, rel))).digest('hex');
+  const before = new Map(artifacts.map((rel) => [rel, hashOf(rel)]));
+
+  const build = spawnSync(process.execPath, [join(packageRoot, 'build', 'client-bundle.mjs')], { cwd: packageRoot, encoding: 'utf8' });
+  assert.equal(build.status, 0, `the bundler runs cleanly (stderr: ${String(build.stderr ?? '').split('\n')[0]})`);
+
+  for (const rel of artifacts) {
+    assert.equal(
+      hashOf(rel),
+      before.get(rel),
+      `${rel} is stale: the sources build a different artifact than the committed one — run \`npm run build:client\` and commit the result`,
+    );
+  }
+});
+
 // ── run ─────────────────────────────────────────────────────────────────────
 
 let failed = 0;
 for (const { name, run } of checks) {
   try {
-    run();
+    await run();
     console.log(`  ok   ${name}`);
   } catch (error) {
     failed++;
