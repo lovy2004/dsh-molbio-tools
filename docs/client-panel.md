@@ -201,10 +201,19 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    （sidebar-right / connection）**本身就是 graph 行**；产物的 `require` 全部有答案。
    实测：153 行挂载行中 54 个是 client 行（含本包自己的那一行）。
 
-**尚未验证（需要真实浏览器）**：只剩"页面里的实际观感"——两个 tab 是否出现在右栏引导页、
-点击后 SVG 是否如预期呈现。上一版列出的三件"只有运行时能回答的事"现在已被 `contract.mjs`
-用**已安装的框架代码**钉住（钩子 prop 规则、root hook 提供方、Remote 的 wire 形状与方法
-签名），失败会直接以测试形式暴露，而不是等页面白屏。
+**真机验证（2026-09-11，无头浏览器 + 专用 profile）**：用一个独立 profile
+（`dsh-base` + `dsh-web-app` + `dsh-molbio-tools` 0.7.2）起了独立实例，在真实页面里确认：
+
+- 页面 boot 正常，boot graph 含本包，**无 `Failed to load plugins`**；
+- 驱动一次真实对话调用 `molbio_plasmid_map` → **图谱调用卡在对话里画出图谱**：卡片摘要
+  `pCARD-LIVE · 212 bp · circular · 1 feature(s) · 2 cut mark(s)`、1 个
+  `viewBox="0 0 840 840"` 的 SVG（520×520 渲染）、以及写入路径——而不是只给一个文件路径；
+- 右栏引导页出现 **Molbio** 与 **Papers** 两个胶囊及描述。
+
+复现这套验证的工具：`build/cdp.mjs`（Chrome DevTools Protocol 的最小驱动：导航 / 求值 / 截图）与
+`build/cdp-drive.mjs`（把提示词真正打进输入框并等到这一轮结束）。一个坑：composer 是
+`contenteditable` 的 div，`textContent = …` **不会**被 React 看到，必须走
+`document.execCommand('insertText')` 这条原生编辑路径，否则"发送"按钮始终是禁用的。
 
 ## 6. 挂载与分发
 
