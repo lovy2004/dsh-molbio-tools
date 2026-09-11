@@ -25,6 +25,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createSlotsStub } from './slots-stub.mjs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -253,6 +254,10 @@ function remote(tree) {
 }
 
 // ── the panels, exactly as the bundle registers them ────────────────────────
+//
+// The seats are declared up front here (test/slots-stub.mjs): this file is
+// about what the components DO, while test/client.mjs owns the claim-order
+// contract (including "apply() must not need a declared seat").
 
 const registrations = [];
 const module = await (async () => {
@@ -284,22 +289,20 @@ const module = await (async () => {
   }
 })();
 
+const slots = createSlotsStub(['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview']);
 const ctx = {
   remote: remote({}),
   effect(factory) {
     return factory();
   },
   sidebarRightTabs: { register: (definition) => registrations.push(definition) },
-  slots: {
-    register(registration, component) {
-      registrations.push({ ...registration, component });
-      return () => undefined;
-    },
-  },
+  slots,
 };
 module.apply(ctx);
 
-const bodyFor = (key) => registrations.find((entry) => entry.name === 'sidebar.right.pane.tab' && entry.key === key).component;
+const bodyFor = (key) => slots.registrations.find(
+  (entry) => entry.registration.name === 'sidebar.right.pane.tab' && entry.registration.key === key,
+).component;
 const MolbioPanel = bodyFor('dsh-molbio-tools');
 const PapersPanel = bodyFor('dsh-molbio-tools/papers');
 

@@ -277,6 +277,42 @@ check('the toolview card contract still holds (meta path + keyed seat)', () => {
   assert.ok(bundle.includes('tool.call.toolview'), 'through the toolview seat');
 });
 
+check('every seat claim waits for the declaration (slots.inject, not a bare register)', () => {
+  // The shell's SlotCore refuses `register()` for a seat no entry has DECLARED
+  // yet — "a parent entry's children table must declare it" — and that refusal
+  // thrown inside apply() fails the plugin's LOADER entry. v0.7.1 shipped a
+  // bare register for `tool.call.toolview`, whose seat is a CHILD of ui-tool's
+  // `conversation.chat.node` entry, so the Web GUI refused to boot.
+  const shellDir = join(packagesDir, 'dsh-web-frontend', 'dist');
+  let guard = false;
+  for (const path of filesUnder(shellDir)) {
+    if (!path.endsWith('.js')) continue;
+    if (readFileSync(path, 'utf8').includes("is not declared (a parent entry's children table must declare it)")) guard = true;
+  }
+  assert.ok(guard, 'the shell still refuses a registration for an undeclared seat');
+
+  const renderer = clientBundle('@deepseek-ai/dsh-client-ui-renderer');
+  assert.ok(renderer !== undefined, 'ui-renderer is installed (it owns the client slots service)');
+  assert.ok(renderer.text.includes('inject(key, callback)'), 'the slots service still exposes inject(key, callback)');
+  assert.ok(renderer.text.includes('this._core.specDynamic(key)'), 'and runs the callback only once the seat is declared');
+
+  // The shipped packages claim our very seats this way.
+  const toolUi = clientBundle('@deepseek-ai/dsh-client-ui-tool');
+  assert.ok(/slots\.inject\(\s*"tool\.call\.toolview"/.test(toolUi.text), 'ui-tool waits for tool.call.toolview');
+  const preview = clientBundle('@deepseek-ai/dsh-client-ui-sidebar-documentpreview');
+  if (preview !== undefined) {
+    assert.ok(/slots\.inject\(\s*"sidebar\.right\.pane\.tab"/.test(preview.text), 'the document preview waits for the tab seat');
+  }
+
+  // Our artifact: every `register` must sit inside a wait for that same seat.
+  const bundle = readFileSync(join(packageRoot, 'lib', 'client.js'), 'utf8');
+  const waited = [...bundle.matchAll(/slots\.inject\('([^']+)', \(\) => (?:ctx\.)?slots\.register\(\{\s*name: '([^']+)'/g)];
+  assert.ok(waited.length > 0, 'the bundle claims its seats through slots.inject');
+  for (const [, seat, name] of waited) assert.equal(seat, name, `the claim of ${name} waits for the seat it registers into`);
+  const registers = (bundle.match(/(?:ctx\.)?slots\.register\(/g) ?? []).length;
+  assert.equal(registers, waited.length, 'and no registration exists outside such a wait');
+});
+
 // ── run ─────────────────────────────────────────────────────────────────────
 
 let failed = 0;

@@ -9,6 +9,31 @@
 
 版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
 
+## [0.7.2] — 2026-09-11（修复：座位未声明就注册 → DSH 拒绝启动）
+
+**修复 HARNESS "Failed to load plugins"**（`failed to apply loader entry …(dsh-molbio-panel):
+slot "tool.call.toolview" is not declared (a parent entry's children table must declare it)`）。
+
+客户端座位只有在**拥有它的那条 entry 在自己的 `children` 表里声明之后**才存在：`sidebar.right.pane.tab`
+由右栏的 `rightbar.session` entry 声明，而 `tool.call.toolview` 是 ui-tool 的
+`conversation.chat.node` entry 的**子座位**。0.7.1 的卡片用裸 `ctx.slots.register()` 抢这个座位，
+启动图里没有任何东西保证我们的 entry 排在 ui-tool 之后——`register()` 于是抛上述 SlotCore 异常，
+异常从本包的 `apply()` 逃出即是**加载器 entry 失败**，也就是整个 Web GUI 拒绝启动（不是"少一个
+tab"）。四个右栏座位当时只是碰巧安全（本包 inject 了右栏提供的服务），同样的竞态依然存在。
+
+- 修法：**所有**座位声明改走 `ctx.slots.inject(seat, cb)`（ui-tool / ui-skill / ui-sidebar-right /
+  ui-sidebar-documentpreview 都是这个写法）：座位已声明则立即执行，未声明则等声明到达，
+  重声明（epoch）时先撤销旧贡献再重放，贡献随本 fiber 销毁。
+- 新增 `test/slots-stub.mjs`：按 shell 的 SlotCore 语义复刻"未声明座位 `register()` 必抛
+  `… is not declared (a parent entry's children table must declare it)`"与 `inject` 的等待/重放规则。
+- `test/client.mjs` 改为从**一个座位都没声明**的最坏启动顺序开始：断言 `apply()` 不抛、四个右栏
+  座位在声明后落地、调用卡座位一直等到 ui-tool 声明才落地，并当场复刻那条异常消息本身。
+- `test/contract.mjs` 增第 10 项：钉住 shell 仍拒绝未声明座位的注册、slots 服务仍提供
+  `inject(key, callback)`、官方包仍用它抢这两个座位，且**本包产物里每一处 `slots.register`
+  都必须落在对应座位的 `slots.inject` 里**（数量与配对都断言）。
+
+工具数量不变（46 个）；preset 版本目录不变（本次只动客户端产物与测试，未改随 preset 分发的 `.mjs`）。
+
 ## [0.7.1] — 2026-09-10（图谱调用卡：`tool.call.toolview`）
 
 **新增图谱调用卡**：`molbio_plasmid_map` 与 `molbio_plasmid_map_file` 的调用**直接在对话里

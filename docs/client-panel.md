@@ -100,7 +100,8 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 | 工作区根目录 | `useSessions((s) => s.byId[sessionId]?.cwd)` | **框架自动注入**：`slots.provideRoot({hooks:{sessions}})` 把每个 root hook 合成为 `use<Name>` prop，所以正文**不需要**自己声明它 |
 | 会话 id / actions | 插槽框架注入的 `sessionId` | 面板自己的 `inject` 工厂只需交出 `remote` |
 | tab 类型注册 | `ctx.sidebarRightTabs.register({id, kind, title, guide})` | `patterns` 省略即"页类型"（按 kind 打开），第三方默认优先级带 `extension`；同一包注册两个页类型即两个 tab（各自一个 guide 胶囊，`order` 决定排布） |
-| 正文 / 标题 | keyed 座位 `sidebar.right.pane.tab` / `…tab.title`，key = 类型的 `id` | —— |
+| 正文 / 标题 | keyed 座位 `sidebar.right.pane.tab` / `…tab.title`，key = 类型的 `id` | 座位**先 inject 再 register**，见下 |
+| 座位声明 | `ctx.slots.inject(座位名, () => ctx.slots.register({name: 座位名, …}, 组件))` | 裸 `register()` 在座位尚未被声明时**抛异常**；异常逃出 `apply()` = 加载器 entry 失败 = GUI 起不来（0.7.1 原样踩过，见 §4） |
 
 **没有做宿主侧 RPC**：两个面板需要的一切（序列解析、图谱/logo 渲染、文献库投影）都是纯
 计算，直接在浏览器里跑同一份源码即可，省掉 Typert Remote 注册这一整块不确定性与版本耦合。
@@ -111,6 +112,15 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 
 ## 4. 上限与已知限制（都是设计取舍，不是未修的 bug）
 
+- **座位必须先被"声明"，且不是本包说了算**（这条是纪律，不是限制）：客户端座位只有在**拥有它的
+  那条 entry 在自己的 `children` 表里声明之后**才存在。`sidebar.right.pane.tab` 由右栏的
+  `rightbar.session` entry 声明，`tool.call.toolview` 更是 ui-tool 的 `conversation.chat.node`
+  entry 的**子座位**。本包的 entry 与这两条之间**没有任何顺序保证**，所以每一处注册都必须
+  `ctx.slots.inject(座位名, …)`（座位已声明则立即执行、未声明则等声明到达、重声明时先撤销再重放，
+  贡献随 fiber 销毁）。0.7.1 用裸 `register()` 抢 `tool.call.toolview`，抛出的
+  `slot "tool.call.toolview" is not declared (a parent entry's children table must declare it)`
+  直接让本包的加载器 entry 失败——症状是 HARNESS 顶栏 **Failed to load plugins**、整个 Web GUI
+  起不来，而不是"少一个 tab"。`test/slots-stub.mjs` 与 `test/contract.mjs` 各钉一遍这条规则。
 - **文件大小**：`readAll` 的上限是部署配置 `maxFileBytes`（默认 **32 MiB**），
   `list` 的条目上限 `maxEntries`（默认 **2000**）；`read` 一次最多 `maxLines`（默认 5000）行。
   超限是明确的 wire 错误，面板原样显示。
@@ -131,9 +141,13 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 1. **产物格式**：`test/client.mjs` 在 `vm` 里执行产物，断言"注册一个工厂、id 正确、
    注册期无全局写入"，再用桩 `require` 物化它，断言 `apply`/`inject` 与
    `require` 只用到 `react`。
-2. **服务契约**：对桩服务 `apply()`，断言**两个** tab 类型（`id`/`kind`/`title`/`guide`、
-   无 `patterns`、guide `order` 40/41）、四个 keyed 座位的注册、两个正文的 `inject`
-   工厂都只交出 `remote`。
+2. **服务契约与抢座位的顺序**：对桩服务 `apply()`，断言**两个** tab 类型（`id`/`kind`/`title`/
+   `guide`、无 `patterns`、guide `order` 40/41）、四个 keyed 座位的注册、两个正文的 `inject`
+   工厂都只交出 `remote`。座位那一层从**一个座位都没声明**的最坏顺序启动（`test/slots-stub.mjs`
+   复刻 shell 的 SlotCore 语义）：`apply()` 必须不抛；右栏座位声明后四条注册落地；调用卡座位在
+   ui-tool 声明之前一直**处于等待**、声明之后才落地；重声明不产生重复注册；并当场复刻
+   "未声明座位 `register()` 必抛"的那条 SlotCore 异常——0.7.1 把整个 GUI 卡在
+   "Failed to load plugins" 的就是它。
 3. **组件行为**：`test/panel-render.mjs` 把**真实的面板组件**放进 Node 跑——没有 React
    （harness 里有，浏览器里的 React 由 shell 播种）也没有 DOM，所以这个文件自带一套最小
    钩子宿主（`createElement`/`useState`/`useEffect`/`useMemo`/`useRef`，语义与 React 一致：
@@ -166,6 +180,10 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    - 本包产物**自己那一侧**：inject 列表、两个 keyed 座位的注册、三个 Remote 调用的实参顺序、
      正文解构的 props 名，以及"inject 工厂只交出 `remote`"（保证不会遮蔽框架注入的
      `sessionId`/钩子）。
+   - **座位声明纪律**（第 10 项）：shell 仍拒绝"未声明座位"的注册、slots 服务仍提供
+     `inject(key, callback)`、官方包仍用它抢 `tool.call.toolview` / `sidebar.right.pane.tab`，
+     并且**本包产物里每一处 `slots.register` 都落在对应座位的 `slots.inject` 里**（逐一配对，
+     且两者总数相等——新加一个裸 `register` 会当场失败）。
    任何一条失败都意味着"DSH 动了面板依赖的东西"——这正是 0.1.5-alpha.2 弄坏 preset 的方式
    （插件契约变了、测试全绿、组合却挂不上），所以这里断言的是**契约**（规则、调用、服务名），
    不是排版细节。
@@ -208,7 +226,8 @@ shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 
 - **`tool.call.toolview`**：✅ 已落地（见第 1 与第 3 节），覆盖两个 map 工具。可继续做的
   是给 `molbio_sequence_logo` / `molbio_grna_design` 之类的工具也加上卡片（同一套
-  `presentationMeta` + 卡片模式）。
+  `presentationMeta` + 卡片模式）。**注意上线前先跑 `test/client.mjs` 的抢座位顺序那一层**：
+  0.7.1 的卡片因为裸 `register()` 抢座位而让 GUI 起不来（0.7.2 修复，见 §4 第一条）。
 - **文献库写回**（可选）：若要面板内编辑笔记/标签，需要先定义与 `molbio_paper_*` 工具
   一致的并发契约（乐观版本号或串行化队列），或让工具走同一条 RPC。
 - **上游提案（路径 B）**：preset 渠道挂 client 仍是真实生态需求，可以在社区反馈时

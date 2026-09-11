@@ -146,6 +146,16 @@ node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && 
 打包检查专门盯着这一条）；**产物不能进 preset 的版本目录**——客户端模块靠 `rev` 哈希
 失效，与"版本目录规则"无关（那条规则只约束被 `import()` 的宿主侧 `.mjs`）。
 
+**第四条纪律（0.7.2 用一次 GUI 起不来换来）**：客户端座位一律
+`ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位, …}, 组件)), 标签)`，
+**绝不裸 `slots.register`**。座位只有在**拥有它的 entry 在自己的 `children` 表里声明之后**才
+存在（`sidebar.right.pane.tab` ← 右栏 `rightbar.session`；`tool.call.toolview` ← ui-tool 的
+`conversation.chat.node` 的**子座位**），而本包与那些包的 entry 之间没有顺序保证；裸 `register`
+抛出的 `slot "…" is not declared (a parent entry's children table must declare it)` 从 `apply()`
+逃出就是**加载器 entry 失败**——HARNESS "Failed to load plugins"，整个 Web GUI 不启动。
+`test/slots-stub.mjs`（SlotCore 语义的桩）与 `test/client.mjs`（从"零座位已声明"启动）在运行时
+看守这条纪律，`test/contract.mjs` 第 10 项再看守"产物里每一处 `register` 都在 `inject` 里"。
+
 客户端通道的发布面：根包（工具 + 面板）与 `packages/molbio-panel`（只面板）是两个独立
 条目，后者从它自己的目录发布（`npm publish packages/molbio-panel`）。
 
@@ -161,6 +171,19 @@ profile 用的是 pnpm 的 **hoisted** linker，而 `link:` 依赖的软链**只
 "Already up to date" 而**不会重建链接**。修复办法就是重新 `add` 一次同一个路径（无需网络，
 package.json 与 lockfile 里的声明不变）。装完核对三件事：链接存在、`package.json` 里
 `dsh.client.platform === "web"`、`lib/client.js` 存在且与仓库产物同哈希。
+
+**UI 起不来（`Failed to load plugins`）的排查顺序**：顶栏这条横幅 + 
+`failed to apply loader entry <id> (<name>): <message>` 说明某个**客户端 entry 的 `apply()` 抛了
+异常**，加载器拒绝 boot——不是"面板没挂上"。先止血：`dsh plugin --profile <profile> remove
+<包>`（或从 profile 的 `dsh.profile.bundles` 里去掉那一行）后重启。定位：
+
+1. `node test/client.mjs`——抢座位的顺序那一层会当场复现"未声明座位 `register()`"这类错误
+   （0.7.1 → 0.7.2 就是这么被测出来的：`slot "tool.call.toolview" is not declared (a parent
+   entry's children table must declare it)`）；
+2. `node test/contract.mjs`——判断是 DSH 动了契约（slots 服务没了 `inject`、座位不再由同一条
+   entry 声明）还是本包写错；
+3. 改 `build/client-entry.mjs` → `node build/client-bundle.mjs` → 重启：**产物不重新构建就
+   没有任何效果**（浏览器拿的是 `lib/client.js`，按 `rev` 哈希失效）。
 
 preset 渠道（受 ESM 模块缓存约束）：
 

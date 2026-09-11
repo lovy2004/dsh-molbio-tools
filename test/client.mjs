@@ -20,6 +20,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
+import { createSlotsStub } from './slots-stub.mjs';
 
 const bundleText = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
 const panelCore = await import('../build/panel-core.mjs');
@@ -86,10 +87,21 @@ assert.equal(typeof module.apply, 'function', 'the materialized module exports a
 assert.deepEqual([...module.inject], ['slots', 'sidebarRightTabs', 'remote'], 'the declared browser services');
 
 // ── 2. apply() against stub services ────────────────────────────────────────
+//
+// The slots stub models the shell's SlotCore (test/slots-stub.mjs): a seat must
+// be DECLARED by the entry that OWNS it before `register()` is legal for it.
+// That rule is what took the GUI down — v0.7.1 claimed `tool.call.toolview`
+// with a bare `register()`, the seat's owner (ui-tool's
+// `conversation.chat.node` entry) had not applied yet, and the throw escaped
+// `apply()` as a failed loader entry: HARNESS "Failed to load plugins".
+//
+// So the boot below starts with NOTHING declared — the worst case the client
+// graph can hand us — and asserts that the panel waits for each seat instead of
+// racing it.
 
 const effects = [];
 const tabTypes = [];
-const slotRegistrations = [];
+const slots = createSlotsStub();
 const ctx = {
   remote: {
     workspaceFiles: {
@@ -106,9 +118,9 @@ const ctx = {
     return factory();
   },
   sidebarRightTabs: { register(definition) { tabTypes.push(definition); return () => undefined; } },
-  slots: { register(registration, component) { slotRegistrations.push({ registration, component }); return () => undefined; } },
+  slots,
 };
-module.apply(ctx);
+assert.doesNotThrow(() => module.apply(ctx), 'apply() must not require any seat to be declared yet');
 
 assert.deepEqual(effects, [
   'molbio panel: tab type',
@@ -133,25 +145,53 @@ for (const type of tabTypes) {
 assert.equal(tabTypes[0].guide[0].title(), 'Molbio');
 assert.equal(tabTypes[1].guide[0].title(), 'Papers');
 assert.deepEqual(tabTypes.map((type) => type.guide[0].order), [40, 41], 'the guide entries have a stable order');
+assert.equal(slots.registrations.length, 0, 'nothing registers before its seat exists');
+assert.deepEqual(
+  slots.injectedSeats,
+  ['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview'],
+  'each seat is claimed by waiting for its declaration, not by registering blindly',
+);
+// The shell's guard, reproduced on the stub: this is the exact exception a bare
+// register raised inside apply() — and therefore the failed loader entry.
+assert.throws(
+  () => slots.register({ name: 'tool.call.toolview', key: 'molbio_plasmid_map' }, () => null),
+  /slot "tool\.call\.toolview" is not declared \(a parent entry's children table must declare it\)/,
+);
+
+// The right sidebar declares its seats; the transcript seat belongs to ui-tool
+// and stays undeclared until that package's entry lands.
+slots.declare('sidebar.right.pane.tab');
+slots.declare('sidebar.right.pane.tab.title');
+assert.deepEqual(
+  slots.pendingSeats,
+  ['tool.call.toolview'],
+  'the transcript card is still waiting for the seat ui-tool declares',
+);
+assert.equal(slots.registrations.length, 4, 'both tab bodies and titles land as soon as their seat exists');
+slots.declare('tool.call.toolview');
+
 // Body + title register in the keyed seats under each type's id, and the two
 // map tools claim their own `tool.call.toolview` key (an unclaimed key falls
 // back to the generic tool row, so claiming ours is additive).
 assert.deepEqual(
-  slotRegistrations.map((entry) => [entry.registration.name, entry.registration.key]),
+  slots.registrations.map((entry) => [entry.registration.name, entry.registration.key]),
   [
     ['sidebar.right.pane.tab', 'dsh-molbio-tools'],
-    ['sidebar.right.pane.tab.title', 'dsh-molbio-tools'],
     ['sidebar.right.pane.tab', 'dsh-molbio-tools/papers'],
+    ['sidebar.right.pane.tab.title', 'dsh-molbio-tools'],
     ['sidebar.right.pane.tab.title', 'dsh-molbio-tools/papers'],
     ['tool.call.toolview', 'molbio_plasmid_map'],
     ['tool.call.toolview', 'molbio_plasmid_map_file'],
   ],
 );
-assert.equal(typeof slotRegistrations[0].component, 'function', 'the plasmid body is a component');
-assert.equal(typeof slotRegistrations[2].component, 'function', 'the papers body is a component');
-assert.equal(typeof slotRegistrations[4].component, 'function', 'the map card is a component');
-for (const index of [0, 2]) {
-  const face = slotRegistrations[index].registration.inject('session-1', {});
+const claim = (name, key) => slots.registrations.find(
+  (entry) => entry.registration.name === name && entry.registration.key === key,
+);
+assert.equal(typeof claim('sidebar.right.pane.tab', 'dsh-molbio-tools').component, 'function', 'the plasmid body is a component');
+assert.equal(typeof claim('sidebar.right.pane.tab', 'dsh-molbio-tools/papers').component, 'function', 'the papers body is a component');
+assert.equal(typeof claim('tool.call.toolview', 'molbio_plasmid_map').component, 'function', 'the map card is a component');
+for (const key of ['dsh-molbio-tools', 'dsh-molbio-tools/papers']) {
+  const face = claim('sidebar.right.pane.tab', key).registration.inject('session-1', {});
   assert.equal(typeof face.remote.workspaceFiles.list, 'function', 'the inject factory hands the body the workspace Remote');
   // `sessionId` and `useSessions` come from the slot runtime, not from this
   // factory: the framework turns every root hook source into a `use<Name>` prop.
@@ -159,7 +199,12 @@ for (const index of [0, 2]) {
 }
 // The map card needs no inject factory at all: its block carries the meta the
 // tool declared, so it stays a pure function of the call.
-assert.equal(slotRegistrations[4].registration.inject, undefined, 'the map card declares no injection');
+assert.equal(claim('tool.call.toolview', 'molbio_plasmid_map').registration.inject, undefined, 'the map card declares no injection');
+
+// A re-declaration of the seat (the shell's declaration-epoch rule) re-runs the
+// wait: the previous entries are disposed first, so claims never accumulate.
+slots.declare('tool.call.toolview');
+assert.equal(slots.registrations.length, 6, 're-declaring the seat re-installs both cards instead of duplicating them');
 
 // ── 3. the panel's data path, against the real fixture ──────────────────────
 

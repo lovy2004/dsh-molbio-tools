@@ -118,6 +118,12 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools
 右栏引导页里会出现 **Molbio** 与 **Papers** 两个胶囊。与 preset 渠道可以共存：preset 给
 46 个工具，bundle 给面板。
 
+若升级后 GUI 顶栏出现 **Failed to load plugins**（`failed to apply loader entry …`），那是某个
+客户端 entry 的 `apply()` 抛了异常，加载器拒绝启动——**不是**"面板没挂上"。0.7.1 的图谱调用卡
+就踩过一次（裸 `register()` 抢一个还没被声明的座位）；0.7.2 起所有座位都改成
+`slots.inject` 等待声明。升级到 0.7.2+、重启并刷新即可；排查清单见
+[docs/maintainer.md](docs/maintainer.md)（"UI 起不来"一节）。
+
 细节（产物格式、服务契约、上限、验证方式、已知限制）见
 [docs/client-panel.md](docs/client-panel.md)。
 
@@ -174,6 +180,7 @@ dsh-molbio-tools/
 │   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v16/）
 ├── test/
 │   ├── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
+│   ├── slots-stub.mjs # 客户端座位桩：复刻 shell 的 SlotCore 声明规则（见下）
 │   └── preset-health.mjs # preset 组合健康检查（逐行按该包自己的 Config schema 校验，对照官方 standard 预设）
 ├── docs/
 │   ├── maintainer.md # 维护者文档（合规对照/开发测试/路线图）

@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { createSlotsStub } from './slots-stub.mjs';
 
 const require = createRequire(import.meta.url);
 const panelCore = await import('../build/panel-core.mjs');
@@ -234,18 +235,16 @@ function mount(Component) {
 
 const registrations = [];
 const module = await import(entryPath.href);
+const slots = createSlotsStub(['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview']);
 module.apply({
   remote: {},
   effect: (factory) => factory(),
   sidebarRightTabs: { register: (definition) => registrations.push(definition) },
-  slots: {
-    register(registration, component) {
-      registrations.push({ ...registration, component });
-      return () => undefined;
-    },
-  },
+  slots,
 });
-const MapCard = registrations.find((entry) => entry.name === 'tool.call.toolview' && entry.key === 'molbio_plasmid_map').component;
+const MapCard = slots.registrations.find(
+  (entry) => entry.registration.name === 'tool.call.toolview' && entry.registration.key === 'molbio_plasmid_map',
+).component;
 assert.equal(typeof MapCard, 'function', 'the map card is registered for molbio_plasmid_map');
 
 const settledBlock = { kind: 'tool-result', callId: 'c1', isError: false, meta, content: [{ type: 'text', text: 'saved' }], call: { name: 'molbio_plasmid_map', argsRaw: '{}' } };

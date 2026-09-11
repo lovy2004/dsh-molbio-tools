@@ -1,6 +1,6 @@
 {
   "name": "dsh-molbio-panel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser panel for the DeepSeek Harness Web GUI: a Molbio tab in the right sidebar that draws plasmid maps and sequence logos from workspace sequence files, using the same computation modules as the dsh-molbio-tools plugin.",
   "type": "module",
   "main": "index.mjs",
