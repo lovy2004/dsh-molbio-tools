@@ -177,6 +177,7 @@ dsh-molbio-tools/
 │   └── client.js    # 客户端产物（exports["./client"]；npm run build:client 生成）
 ├── cordis.patch.yml # bundle 补丁层（可选安装渠道用，按包名插入 tool-molbio 行）
 ├── preset/
+│   ├── install.mjs  # 渠道 B 安装脚本：把包内 preset 注册为该 profile 的额外扫描根
 │   └── molbio-lab/  # 推荐的专属模式预设（agent.cordis.yml + preset.yml + plugins/dsh-molbio-tools-v16/）
 ├── test/
 │   ├── smoke.mjs    # 冒烟测试（复用 harness 自身的 JSON Schema 校验器）
@@ -185,6 +186,7 @@ dsh-molbio-tools/
 ├── docs/
 │   ├── maintainer.md # 维护者文档（合规对照/开发测试/路线图）
 │   ├── client-panel.md # 浏览器内面板的实现记录（产物格式/服务契约/上限/验证）
+│   ├── route-b.md   # 安装渠道 B：把包内 preset 注册进 profile（升级 Runbook/取舍/实测）
 │   └── client-pipeline-exploration.md # 浏览器内面板的可行性与实现路径调研
 ├── CHANGELOG.md     # 变更日志（包版本 + preset 版本目录对照）
 ├── package.json
@@ -196,7 +198,17 @@ dsh-molbio-tools/
 **推荐给最终用户的方式**：安装后预设选择器出现 **Molecular Biology Lab** 专属模式，
 molbio 工具只在该模式出现，不会把 46 个工具和提示段注入到其它会话（避免污染无关场景）。
 
-仓库的 `preset/molbio-lab/` 即完整预设目录，把它复制到对方的 harness 用户目录即可：
+装进对方的 harness 有两条渠道，可以共存：
+
+| | 渠道 A：复制预设目录 | 渠道 B：注册包内 preset（新） |
+| --- | --- | --- |
+| 做法 | 把 `preset/molbio-lab/` 复制到 `~/.dsh/.agent-presets/molbio-lab/` | 跑一次 `preset/install.mjs`，把**包内** preset 目录注册为 profile 的额外扫描根 |
+| 自包含 | 是（不依赖已装的包，可离线带走） | 否（依赖 profile 里已装的包） |
+| 升级 | **每个新版本都要重新复制**到新的 `vN` 目录 | `dsh plugin --profile <p> update dsh-molbio-tools`，不用复制、不用改配置 |
+| 可否被用户编辑 | 可以（在 user 根下） | 否（`trust: system`，只读） |
+| 适用场景 | 无法改 profile 配置的环境；交付一个"带走即用"的目录 | 自己的机器/团队 profile；长期使用并跟随升级 |
+
+**渠道 A（复制）**：仓库的 `preset/molbio-lab/` 即完整预设目录，复制过去即可：
 
 ```
 ~/.dsh/.agent-presets/molbio-lab/
@@ -207,6 +219,28 @@ molbio 工具只在该模式出现，不会把 46 个工具和提示段注入到
 ```
 
 对方重启（或刷新预设列表）后，在预设选择器中选择 **Molecular Biology Lab** 新建会话。
+代价是每个新版本都要把目录重新复制到新的 `vN`（复制的那份会冻结在旧版本）。
+
+**渠道 B（注册，新）**：前提是该 profile 本来就装了本包（`dsh plugin add` 会把 46 个工具
+装进该 profile，但**不会**让 preset 出现在选择器里）：
+
+```powershell
+dsh plugin --profile web add dsh-molbio-tools    # 1. 装包（工具 + bundle 层）
+node <包目录>\preset\install.mjs --profile web   # 2. 注册包内 preset（幂等）
+```
+
+脚本只改 profile 的 `cordis.patch.yml`：追加一条 `- id: agent-presets` 补丁，把
+`<已安装包>/preset` 加进 `config.roots`（`trust: system`）。三个特性：
+
+- **幂等**：重复运行零字节改动；`--check` 可当健康检查（未注册时退出码 1），`--dry-run` 只打印不落盘；
+- **先备份后写**：`cordis.patch.yml.bak-<时间戳>`；
+- **写完自检**：跑 `dsh --profile <p> --dump-config`，确认组合树确实带上了新 root。
+
+之后**重启该 profile**，选择器里就会出现 **Molecular Biology Lab**；以后升级只跑
+`dsh plugin --profile <p> update dsh-molbio-tools` —— root 路径跨版本恒定，所以不用重新复制、
+也不用再动配置。两条渠道共存时，重复 id 由**配置根**（渠道 B）胜出。
+
+机制细节、升级 Runbook、完整取舍表与已知限制见 [docs/route-b.md](docs/route-b.md)。
 
 > **兼容性**：当前 preset 组合已对齐 **DSH 0.1.5-alpha.2**（`persona` 行的
 > `prefix`/`suffix` 契约、`present` 行）。DSH 侧插件包改名或改配置契约时，preset 会

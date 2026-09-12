@@ -9,6 +9,32 @@
 
 版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
 
+## [0.8.0] — 2026-09-12（安装渠道 B：把 preset 注册进 profile，升级不再需要复制）
+
+**新增 `preset/install.mjs`**：把**已安装包内**的 preset 目录注册为 profile 的额外 preset
+扫描根，补上"`dsh plugin add` 装了工具、却不出现在预设选择器里"这个缺口。配置改一次，
+之后每个版本只跑 `dsh plugin --profile <p> update dsh-molbio-tools`，**不需要再复制、也不
+需要再改配置**。
+
+- 机制：在 profile 的 `cordis.patch.yml` 追加一条 `- id: agent-presets` 补丁，其 `config.roots`
+  增加 `{ path: <已安装包>/preset, trust: system }`。`config` 是整体替换，因此重述 `default: standard`。
+- 为什么值得做：复制渠道把 preset 冻结在复制那一刻，每次发布（版本目录规则要求新建
+  `dsh-molbio-tools-vN`）都要重新复制；注册渠道的 root 路径**跨版本恒定**（`link:` 是符号链
+  接、npm/tarball 是真实目录，实测从 `link:` 换成 tarball 后路径不变），升级因此只动包、不动配置。
+- 脚本性质：零依赖、幂等（已注册即零写入）、写入前备份 `cordis.patch.yml`、写完用
+  `dsh --profile <p> --dump-config` 自检；对没有 roster 行的 profile（headless/sdk）**先检查
+  bundle 列表再明确拒绝**，而不是写一个必然被 loader 拒绝的补丁。支持 `--dry-run` / `--check`。
+- 实测覆盖：组合树解析与 root 出现、幂等、`--check`、`--dry-run` 不落盘、无 roster 行被守卫、
+  发现层对已安装副本判定 `healthy` 且四个内置 preset 未受影响、升级（换安装来源）后路径不变；
+  补丁形状另用 harness 自己的 YAML 解析器跑 5 种边界（裸 `[]` 占位符、无尾换行、CRLF、已有条目）。
+- 两个由实测抓到的坑已写进文档：新 profile 的 patch 文件是**裸 `[]`**，追加会产生第二个顶层
+  节点（`end of the stream or a document separator is expected`），必须替换占位符；`roots.path`
+  是 `path.resolve` 解析的，**相对路径随进程 CWD 漂移**，必须写绝对路径。
+- **工具数量不变（46 个）；preset 版本目录不变**——本次只新增包内 `preset/install.mjs` 与文档，
+  未改任何随 preset 分发的 `.mjs`，按版本目录规则无需新建 `v17`。
+- 新增 [docs/route-b.md](docs/route-b.md)：用法、机制、升级 Runbook（含"别提前删旧 `vN` 目录"
+  等三条纪律）、与复制渠道的取舍表、实测方法与已知限制。
+
 ## [0.7.2] — 2026-09-11（修复：座位未声明就注册 → DSH 拒绝启动）
 
 **修复 HARNESS "Failed to load plugins"**（`failed to apply loader entry …(dsh-molbio-panel):
