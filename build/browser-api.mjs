@@ -38,3 +38,19 @@ export { columnComposition, renderSequenceLogo } from '../logo.mjs';
 export { designGrnas, findProtospacers, evaluateGuide } from '../crispr.mjs';
 export { entryStats, parseFasta } from '../seqio.mjs';
 export { digest } from '../lib.mjs';
+// v17 data + renderers that are pure computation and need no host services:
+// the methylation/buffer reference tables, the probe/multiplex analysers, and
+// the protein plot renderers. Exported so the browser half CAN use them; the
+// panels themselves are unchanged in v17.
+export {
+  BUFFERS,
+  METHYLATION_SENSITIVITY,
+  METHYLATION_SITES,
+  methylationImpact,
+  methylationSites,
+  sharedBuffers,
+} from '../lib.mjs';
+export { designTaqmanProbes, evaluateProbe, probeCandidates } from '../taqman.mjs';
+export { checkMultiplex } from '../multiplex.mjs';
+export { helicalWheel, hydropathyProfile, renderHelicalWheel, renderHydropathyPlot } from '../protein-structure.mjs';
+export { analyzeMethylation, bufferReport, planDoubleDigest } from '../methylation.mjs';

@@ -327,6 +327,13 @@ check('the committed client artifact is what the current sources build (no stale
   const before = new Map(artifacts.map((rel) => [rel, hashOf(rel)]));
 
   const build = spawnSync(process.execPath, [join(packageRoot, 'build', 'client-bundle.mjs')], { cwd: packageRoot, encoding: 'utf8' });
+  // A null status with an error means the spawn itself never ran the child (a
+  // confined sandbox refuses piped stdio: EPERM). The generic "the bundler runs
+  // cleanly" message is misleading there — say what actually happened, and how
+  // to verify freshness by hand.
+  if (build.status === null && build.error != null) {
+    assert.fail(`could not spawn the bundler (${build.error.message.split('\n')[0]}); verify freshness by hand: \`node build/client-bundle.mjs && git diff --stat lib packages\``);
+  }
   assert.equal(build.status, 0, `the bundler runs cleanly (stderr: ${String(build.stderr ?? '').split('\n')[0]})`);
 
   for (const rel of artifacts) {

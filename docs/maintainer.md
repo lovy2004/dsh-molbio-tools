@@ -43,7 +43,7 @@ seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关�
 ## 开发与测试
 
 ```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 46 个工具 + 输出 schema 校验
+node test/smoke.mjs         # 插件：mock 注册表跑全部 52 个工具 + 输出 schema 校验
 node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
 node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
 node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
@@ -52,9 +52,13 @@ node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness �
 node test/client-mount.mjs --profile web --dsh <harness 根目录>
 ```
 
+`npm test` 依次跑这三组（`test:unit` = smoke + 四个客户端套件，再 `contract`、`preset-health`）。
+脚本用 `node --run` 串联而不是裸 `&&`——`&&` 是 npm 的 shell 语法、不是 node 的，在 Windows
+的 cmd/PowerShell 下 `npm test` 会失败。只想跑一半时：`node --run test:smoke` / `node --run test:client`。
+
 三个检查回答的是**不同**的问题，发布前都要跑：
 
-- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 46 个工具，并用 harness 自身的
+- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 52 个工具，并用 harness 自身的
 `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
 覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
 SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
@@ -90,7 +94,7 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **2 错配脱靶的互查**（正向两次调用互相指认，mismatch_positions [4, 7]）、脱靶扣分
 （92 vs 无搜索时的 100）、种子末端不错配约束、GC/poly-T/C-run 过滤与「放宽 gc_max 才能
 救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
-排序不变式、九条参数/输入错误路径）。
+排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）。
 
 - `client.mjs` / `panel-render.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面
   两者正交的第三个问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在
@@ -123,7 +127,9 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **任何**要 push 或打 tag 的版本，先跑完这三步，缺一步都不算发布完成：
 
 ```bash
-npm test                     # 7 个套件；客户端半的改动必须全绿
+npm test                     # 7 个套件（= test:unit + contract + preset-health）；客户端半的改动必须全绿
+                             # 受限沙箱下 contract 的"产物新鲜度"一项会因 spawn 被拒而失败：
+                             # 那是环境限制，按提示手动 `node build/client-bundle.mjs && git diff --stat lib packages`
 node build/client-bundle.mjs # 产物与源同一批构建
 git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
 ```
@@ -249,16 +255,15 @@ preset 渠道（受 ESM 模块缓存约束）：
 
 ## 路线图
 
-- **v17（候选池，按需挑选）**：TaqMan 水解探针设计；多重 PCR 互扰检查；蛋白螺旋轮投影图（helical wheel）；疏水性窗口图（hydropathy plot，Kyte-Doolittle）；甲基化敏感位点（dam/dcm/EcoKI）与双酶切 buffer 兼容提示；Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNGRRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）
-- 质粒图谱的浏览器内实时面板（**已开工**：bundle 渠道的第一段已落地——手写 lazy-CJS
-  打包器 + 右栏 Molbio 面板，见 `docs/client-panel.md`；待办：真机确认渲染、
-  `tool.call.toolview` 自定义调用卡、以及第二个面板）
-- 文献库的浏览器端面板（同上；0.1.5 起落点为右栏 tab 的 "Papers" 页或 `conversation.view`；
-  数据面需先定：宿主 Typert RPC 还是把 `papers.json` 当普通文件读写）
+- **v18（候选池，按需挑选）**：Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）；多重 PCR 的温度梯度/引物浓度配平建议；TaqMan 的 MGB/双标记探针变体与探针订购 CSV 直出。
+- **v17 已完成（2026-09-13，包 0.9.0 / preset 目录 v17）**：TaqMan 水解探针设计（`taqman.mjs` + `molbio_design_taqman`）、多重 PCR 互扰检查（`multiplex.mjs` + `molbio_multiplex_check`）、甲基化敏感位点检查与双酶切 buffer 兼容（`methylation.mjs` + `molbio_methylation_check` / `molbio_double_digest`，参考表进 `lib.mjs`）、螺旋轮与疏水性图（`protein-structure.mjs` + `molbio_helical_wheel` / `molbio_hydropathy_plot`）。工具 46 → 52。实现过程中三次纠正探针几何、抓到 `primer_options` 全表静默失效与两处非 lossless-JSON 字段，详见 CHANGELOG 0.9.0。
+- 质粒图谱的浏览器内实时面板（**已落地**：bundle 渠道——手写 lazy-CJS 打包器 + 右栏 Molbio 面板 + 图谱调用卡，见 `docs/client-panel.md`；v17 起 `browser-api.mjs` 也再导出 v17 的纯计算面，但面板未改动）
+- 文献库的浏览器端面板（**已落地**：右栏 "Papers" 页）
 - 向上游提议"preset 渠道挂 client"（探索文档路径 B）
 
 ## 已完成的方向（历史）
 
+- **v17（2026-09-13，包 0.9.0 / preset 目录 v17）**：TaqMan 水解探针设计、多重 PCR 互扰检查、甲基化敏感位点与双酶切 buffer 兼容、螺旋轮与疏水性图。工具 46 → 52。
 - **v16（2026-09-10，包 0.6.0 / preset 目录 v16）**：Sequence logo SVG（`logo.mjs` + `molbio_sequence_logo`，信息量 scaling 含小样本校正）+ CRISPR gRNA 设计（`crispr.mjs` + `molbio_grna_design`，双链 PAM 扫描、逐项公开的排序启发式、复用 v12 mispriming 的 k-mer 索引做错配容差脱靶搜索）。工具 44 → 46。
 - **v15（2026-08-22，包 0.5.0 / preset 目录 v15）**：多序列比对（渐进仿射缺口 NW + UPGMA）与保守性分析。
 - **v12–v14**：引物设计的 Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view。

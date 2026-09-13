@@ -1832,6 +1832,335 @@ function splicedToGenomic(splicedPos, exons) {
   await assert.rejects(() => run('molbio_grna_design', { sequence: target, guide_length: 12 }), /guide_length must be an integer between 15 and 30/);
 }
 
+// ── v17: TaqMan probes, multiplex, protein plots, methylation digests ───────
+
+{
+  const puc118 = await run('molbio_parse_snapgene', { path: 'C:/tmp/pUC118.dna' });
+  const slice = puc118.sequence.slice(1200, 1800); // 600 bp
+
+  // ── TaqMan probe design ───────────────────────────────────────────────────
+  const assays = await run('molbio_design_taqman', { sequence: slice });
+  assert.equal(assays.assays.length, 7, 'seven assays satisfy the probe window on this slice');
+  assert.deepEqual(assays.probe_options.length, [18, 27]);
+  assert.equal(assays.probe_options.min_tm_delta_vs_primer, 5);
+  assert.equal(assays.conditions.primer_nm, 200);
+  assert.deepEqual(assays.primer_options.amplicon, [70, 200], 'the assay designer uses qPCR-sized amplicons by default');
+  assert.deepEqual(assays.primer_options.region, [1, 600]);
+  assert.equal(assays.notes.filter((note) => note.includes('no probe clears the')).length, 5, 'every amplicon whose probe falls short of the Tm margin is reported');
+
+  // Every reported assay must respect the geometry and the probe rules. These
+  // are the invariants the module got wrong twice during development, so they
+  // are checked on EVERY assay, not only a pinned one.
+  for (const assay of assays.assays) {
+    const probe = assay.probe;
+    const forward = assay.forward;
+    const reverse = assay.reverse;
+    assert.equal(probe.orientation === 'forward' ? probe.sequence : reverseComplementOf(probe.sequence),
+      slice.slice(probe.start - 1, probe.end),
+      'a forward probe equals its template slice, a reverse probe its reverse complement');
+    if (probe.orientation === 'forward') {
+      assert.ok(probe.end < reverse.start || probe.start > reverse.end, 'a probe never overlaps the reverse primer');
+    }
+    // The probe is read outward from the primer whose 3' end opens the amplicon's
+    // gap (the one on the gap's left edge), and the reported distance is measured
+    // from exactly that primer's 3' end — for either orientation.
+    const reverseUpstream = reverse.end < forward.start;
+    const stemThreePrime = reverseUpstream ? reverse.end : forward.end;
+    assert.equal(probe.distance_from_primer_3prime, probe.start - stemThreePrime, 'distance is measured from the 3\' end of the primer that opens the gap');
+    // Both orientations must keep the default 1 bp clear of the primer they are
+    // read from — the rule that stops a probe from competing with its own primer.
+    assert.ok(probe.distance_from_primer_3prime >= 1, 'the probe keeps clear of its primer 3\' end');
+    // The probe must sit in the amplicon's gap between the two primer sites.
+    const overlaps = (interval) => probe.start <= interval.end && probe.end >= interval.start;
+    assert.ok(!overlaps({ start: forward.start, end: forward.end }) && !overlaps({ start: reverse.start, end: reverse.end }), 'the probe overlaps neither primer binding site');
+    assert.ok(probe.start >= 1 && probe.end <= slice.length, 'probe coordinates stay on the template');
+    assert.ok(probe.end - probe.start + 1 === probe.length, 'probe length matches its span');
+    assert.equal(probe.five_prime_g, false, 'the no-5\'-G rule is a hard filter');
+    assert.equal(probe.three_prime_g, false, 'a 3\' terminal G is filtered out by default');
+    assert.equal(probe.runs.length, 0, 'no mononucleotide run survives');
+    assert.equal(probe.repeats, 0);
+    assert.ok(probe.gc_percent >= 40 && probe.gc_percent <= 65, 'probe GC stays inside the window');
+    assert.ok(probe.tm >= 58 && probe.tm <= 72, 'probe Tm stays inside the window');
+    assert.ok(probe.tm_delta_vs_primer >= 0 || /Tm margin/.test(assays.notes.join(' ')), 'a negative Tm margin is only acceptable when it is reported');
+    assert.ok(assay.amplicon.length >= 70 && assay.amplicon.length <= 200, 'the assay designer uses qPCR-sized amplicons');
+  }
+
+  // The best-ranked assay, pinned: the probe sits in the amplicon's gap, in the
+  // standard (forward) orientation.
+  const best = assays.assays[0];
+  assert.equal(best.amplicon.length, 83);
+  assert.equal(best.forward.sequence, 'GTTCGGTGTAGGTCGTTCG');
+  assert.equal(best.reverse.sequence, 'AAGGGAGAAAGGCGGACAG');
+  assert.equal(best.probe.sequence, 'AGCGTGGCGCTTTCTCAT');
+  assert.equal(best.probe.orientation, 'forward');
+  assert.equal(best.probe.start, 321);
+  assert.equal(best.probe.end, 338);
+  assert.equal(best.probe.length, 18);
+  assert.equal(best.probe.tm, 61.71);
+  assert.equal(best.probe.tm_delta_vs_primer, 0.81);
+  assert.equal(best.probe.gc_percent, 55.56);
+  assert.equal(best.probe.distance_from_primer_3prime, 6);
+  assert.equal(best.assay_penalty, 11.22);
+  // The reported Tm is the same NN model the primer tools use.
+  const probeTm = lib.primerTm(best.probe.sequence, { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: 200 }).tm_celsius;
+  assert.equal(best.probe.tm, probeTm, 'the probe Tm is the shared NN model, not a second implementation');
+
+  // A second assay, pinned, whose stem primer is the reverse one: the probe is
+  // read outward from the reverse primer's 3' end (that is what the reported
+  // distance measures), and still sits in the same physical gap.
+  const second = assays.assays[2];
+  assert.equal(second.amplicon.length, 170);
+  assert.equal(second.probe.sequence, 'CCTGTCCGCCTTTCTCCCTTC');
+  assert.equal(second.probe.orientation, 'forward');
+  assert.equal(second.probe.start, 296);
+  assert.equal(second.probe.end, 316);
+  assert.equal(second.probe.tm, 64.11);
+  assert.equal(second.probe.tm_delta_vs_primer, 7.31);
+  assert.equal(second.probe.distance_from_primer_3prime, 67);
+  // The gap lies between the reverse primer (upstream) and the forward primer.
+  assert.ok(second.probe.start > second.reverse.end && second.probe.end < second.forward.start);
+
+  // Widening the probe window must be able to rescue an amplicon that had none.
+  const widened = await run('molbio_design_taqman', { sequence: slice, probe_tm_min: 45, probe_len_min: 16, min_tm_delta: 0 });
+  assert.ok(widened.assays.length >= assays.assays.length, 'a wider window never returns fewer assays');
+
+  // Error paths: each option is validated as itself, not as "no assay found".
+  await assert.rejects(() => run('molbio_design_taqman', { sequence: slice, probe_len_max: 10 }), /probe_len_max must be an integer between probe_len_min and 40/);
+  await assert.rejects(() => run('molbio_design_taqman', { sequence: slice, probe_tm_min: 80, probe_tm_max: 60 }), /probe_tm_min must be lower than probe_tm_max/);
+  await assert.rejects(() => run('molbio_design_taqman', { sequence: slice, probe_min_distance_from_primer: 20 }), /probe_min_distance_from_primer must be an integer between 0 and 12/);
+  await assert.rejects(() => run('molbio_design_taqman', { sequence: slice, primer_options: { tm_min: 70, tm_max: 60 } }), /tm_min must be lower than tm_max/);
+
+  // ── multiplex compatibility ───────────────────────────────────────────────
+  // Four real primer pairs designed on the same slice; the last two amplicons
+  // are 164 and 168 bp, which is the gel-resolvability defect a multiplexer has
+  // to catch. The panel is described explicitly (coordinates given) so the test
+  // does not depend on which pair the designer ranks first.
+  const multiplexTargets = [
+    { name: 'amp1', sequence: slice, forward: 'AGGATTAGCAGAGCGAGG', reverse: 'CGAACGACCTACACCGAAC', amplicon_start: 361, amplicon_end: 524 },
+    { name: 'amp2', sequence: slice, forward: 'TACCTGTCCGCCTTTCTC', reverse: 'TATCTTTATAGTCCTGTCGGG', amplicon_start: 209, amplicon_end: 311 },
+    { name: 'amp3', sequence: slice, forward: 'TTAGCAGAGCGAGGTATG', reverse: 'GAACGACCTACACCGAAC', amplicon_start: 361, amplicon_end: 528 },
+    { name: 'amp4', sequence: slice, forward: 'GTTCGGTGTAGGTCGTTCG', reverse: 'AAGGGAGAAAGGCGGACAG', amplicon_start: 297, amplicon_end: 379 },
+  ];
+  const panel = await run('molbio_multiplex_check', { targets: multiplexTargets });
+  assert.equal(panel.target_count, 4);
+  assert.equal(panel.template_count, 1, 'targets sharing a template are one template');
+  assert.equal(panel.primer_count, 8);
+  assert.equal(panel.primers.length, 8);
+  assert.equal(panel.interactions.length, 24, 'every primer pair is checked; a benign intended pair inside one target is not reported');
+  // The pinned panel's real defect is the gel, not the dimers: 164 vs 168 bp.
+  assert.equal(panel.compatible, false);
+  assert.deepEqual(panel.size_conflicts, [
+    { a: 'amp1', b: 'amp3', a_length: 164, b_length: 168, difference_bp: 4, severity: 'indistinguishable' },
+    { a: 'amp2', b: 'amp4', a_length: 103, b_length: 83, difference_bp: 20, severity: 'close' },
+  ]);
+  assert.equal(panel.conflicting_interactions, 3, 'the curated panel has three real cross-target dimers');
+  assert.equal(panel.cross_target_conflicts, 3);
+  assert.deepEqual(panel.interactions.filter((entry) => entry.conflict).map((entry) => [entry.a, entry.b, entry.end_tm]), [
+    ['amp1/reverse', 'amp4/forward', 69.1],
+    ['amp3/reverse', 'amp4/forward', 66.03],
+    ['amp2/forward', 'amp4/reverse', 61.23],
+  ]);
+  assert.equal(panel.cross_template_mispriming, 0, 'one shared template cannot cross-react with itself');
+  assert.ok(panel.advice.some((line) => line.includes('their 3\'-anchored dimer Tm is 69.1')), 'a cross-dimer produces redesign advice');
+  assert.ok(panel.advice.some((line) => line.includes('not resolvable')), 'the size conflict produces redesign advice');
+  assert.ok(!panel.advice.some((line) => line.includes('differ by only 20 bp')), 'a merely close pair is not called unresolvable');
+  assert.ok(panel.notes.some((line) => line.includes('not modelled here')), 'the panel states what it does not model');
+  for (const primer of panel.primers) {
+    assert.ok(['forward', 'reverse'].includes(primer.role));
+    assert.ok(primer.tm > 40 && primer.tm < 80, 'primer Tms are plausible');
+    // The scores are Primer3-style alignment scores: an all-mismatch register is
+    // negative, so only "any" (a local alignment) is guaranteed non-negative.
+    assert.ok(primer.self_any >= 0);
+    assert.ok(Number.isFinite(primer.self_end));
+  }
+
+  // A primer whose 3' tail also matches ANOTHER target's template is the
+  // multiplex cross-reaction: it must be reported as such (and as blocking).
+  // Identical template sequences are ONE template, so they cannot cross-react...
+  const identicalTemplates = await run('molbio_multiplex_check', {
+    targets: [
+      { name: 'geneA', sequence: 'AAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTT', forward: 'AAACCCGGGTTTAAACCCGG', reverse: 'CCCGGGTTTAAACCCGGGTT' },
+      { name: 'geneB', sequence: 'AAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTT', forward: 'AAACCCGGGTTTAAACCCGG', reverse: 'CCCGGGTTTAAACCCGGGTT' },
+    ],
+  });
+  assert.equal(identicalTemplates.template_count, 1, 'identical template sequences are one template');
+  assert.equal(identicalTemplates.cross_template_mispriming, 0);
+  // ...while two DIFFERENT templates sharing a primer's tail do.
+  const distinctTemplates = await run('molbio_multiplex_check', {
+    targets: [
+      { name: 'geneA', sequence: 'AAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTT', forward: 'AAACCCGGGTTTAAACCCGG', reverse: 'CCCGGGTTTAAACCCGGGTT' },
+      { name: 'geneB', sequence: 'AAACCCGGGTTTAAACCCGGGTTTAGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAAAA', forward: 'GGGTTTAAACCCGGGTTTAA', reverse: 'TTTAAACCCGGGTTTAAACC' },
+    ],
+  });
+  assert.equal(distinctTemplates.template_count, 2);
+  assert.equal(distinctTemplates.cross_template_mispriming, 4, 'each primer of the pair finds the other template');
+  assert.ok(distinctTemplates.mispriming.filter((entry) => entry.scope === 'other_templates').every((entry) => entry.perfect_count === 8), 'a cross-reaction needs a perfect 3\' tail');
+  assert.ok(distinctTemplates.advice.some((line) => line.includes('another panel template')));
+  assert.ok(distinctTemplates.mispriming.find((entry) => entry.scope === 'other_templates').templates[0].positions.length <= 6, 'site lists are capped');
+
+  // Two targets with no amplicon coordinates cannot produce a size conflict.
+  const noCoords = await run('molbio_multiplex_check', {
+    targets: [
+      { name: 'a', sequence: 'AAAAGATCTAAAACCTGGAAAAGCATGCTTTTGAATTCTTTTAAGCTTGGATCCAAAAAA', forward: 'AAAAGATCTAAAACCTGGAA', reverse: 'TTTTTGGATCCAAGCTTAAA' },
+      { name: 'b', sequence: 'GGGGCCCCTTTTAAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCCGGGGTTTT', forward: 'GGGGCCCCTTTTAAAACCCC', reverse: 'AAAACCCCGGGGTTTTAAAA' },
+    ],
+  });
+  assert.equal(noCoords.size_conflicts.length, 0);
+  assert.deepEqual(noCoords.amplicons, [{ name: 'a' }, { name: 'b' }], 'an amplicon without coordinates reports no size');
+
+  await assert.rejects(() => run('molbio_multiplex_check', { targets: [] }), /targets must be a non-empty array/);
+  await assert.rejects(() => run('molbio_multiplex_check', { targets: [{ name: 'x' }] }), /targets\[0\]\.sequence": missing/);
+  await assert.rejects(() => run('molbio_multiplex_check', { targets: [{ name: 'x', sequence: slice, forward: 'ACGTACGTACGTACGTAC' }] }), /must give both forward and reverse primers/);
+  await assert.rejects(() => run('molbio_multiplex_check', { targets: multiplexTargets, dimer_tm_threshold: 0 }), /dimer_tm_threshold must be a positive/);
+
+  // ── helical wheel ─────────────────────────────────────────────────────────
+  const wheel = await run('molbio_helical_wheel', { sequence: 'INLKALAALAKKIL' });
+  assert.equal(wheel.residues_shown, 14, 'the whole peptide is drawn at 3.6 residues/turn');
+  assert.equal(wheel.start, 1);
+  assert.equal(wheel.end, 14);
+  assert.equal(wheel.degrees_per_residue, 100);
+  assert.equal(wheel.hydrophobic_moment, 0.353);
+  assert.equal(wheel.maximum_window_moment, 0.584);
+  assert.equal(wheel.maximum_window_start, 3);
+  assert.deepEqual(wheel.class_counts, { hydrophobic: 10, polar: 1, acidic: 0, basic: 3 });
+  assert.equal(wheel.hydrophobic_fraction, 0.714);
+  assert.ok(wheel.notes.some((note) => note.includes('amphipathic')), 'a high moment is called out');
+  // Residue 1 sits at the top (90°) and each step subtracts 100°.
+  assert.equal(wheel.residues[0].amino_acid, 'I');
+  assert.equal(wheel.residues[0].angle_degrees, 90);
+  assert.equal(wheel.residues[0].x, 0);
+  assert.equal(wheel.residues[0].y, -1);
+  assert.equal(wheel.residues[1].amino_acid, 'N');
+  assert.equal(wheel.residues[1].angle_degrees, 350);
+  assert.equal(wheel.residues[1].hydropathy, -3.5);
+  assert.equal(wheel.residues[1].hydrophobicity, -0.78);
+  for (const residue of wheel.residues) {
+    const radius = Math.sqrt(residue.x * residue.x + residue.y * residue.y);
+    assert.ok(Math.abs(radius - 1) < 0.002, 'unit-circle coordinates');
+  }
+  const wheelSvg = memFs.files.get(wheel.svg_path).toString('utf8');
+  assert.ok(wheelSvg.startsWith('<svg') && wheelSvg.endsWith('</svg>'));
+  assert.ok(wheelSvg.includes('Helical wheel'));
+  assert.ok(wheelSvg.includes('μH 0.353'));
+  // Glyphs are bounded by font-size + textLength, so none can overflow a residue
+  // circle of radius 17 (the sequence-logo lesson, re-applied here).
+  const wheelGlyphs = [...wheelSvg.matchAll(/font-size="13"[^>]*textLength="(\d+)"/g)].map((match) => Number(match[1]));
+  assert.equal(wheelGlyphs.length, 14, 'one glyph per residue');
+  assert.ok(wheelGlyphs.every((length) => length <= 34), 'no glyph can overflow its residue circle');
+  assert.equal(wheel.auto_viewed, false, 'auto-view is disabled in tests');
+  await assert.rejects(() => run('molbio_helical_wheel', { sequence: 'INLKALAALAKKIL', start: 0 }), /start must be an integer between 1/);
+  await assert.rejects(() => run('molbio_helical_wheel', { sequence: 'INLKALAALAKKIL', residues_per_turn: 9 }), /residues_per_turn must be a number between 2 and 6/);
+  await assert.rejects(() => run('molbio_helical_wheel', { sequence: 'INLKALAALAKKIL', moment_window: 1 }), /moment_window must be an integer between 2 and 40/);
+
+  // ── hydropathy plot ───────────────────────────────────────────────────────
+  const hydropathyProtein = 'MKKLLLLLLLGGGGGAAGGGGGLLLLLLLKKKKRRRRDDDDEEEE' + 'MKTIIALSYIFCLVFADYKDDDDK';
+  const profile = await run('molbio_hydropathy_plot', { sequence: hydropathyProtein, window: 9 });
+  assert.equal(profile.length, 69);
+  assert.equal(profile.window, 9);
+  assert.equal(profile.threshold, 1.6);
+  assert.equal(profile.gravy, -0.13);
+  assert.equal(profile.mean_profile, -0.103);
+  assert.equal(profile.minimum_hydropathy, -4.122);
+  assert.equal(profile.maximum_hydropathy, 2.867);
+  assert.deepEqual(profile.peaks, [
+    { start: 4, end: 10, length: 7, maximum: 2.867, maximum_position: 8 },
+    { start: 23, end: 27, length: 5, maximum: 2.867, maximum_position: 25 },
+    { start: 52, end: 59, length: 8, maximum: 2.478, maximum_position: 53 },
+  ]);
+  assert.equal(profile.points.length, 69, 'one profile point per residue');
+  assert.deepEqual(profile.points[0], { position: 1, amino_acid: 'M', hydropathy: 0.34, window: [1, 5] });
+  // The first residue's window is truncated at the terminus (centred window).
+  assert.deepEqual(profile.points[68].window, [65, 69]);
+  // A window average is the mean of the raw Kyte-Doolittle values it spans.
+  const manual = [...hydropathyProtein.slice(0, 5)].map((aa) => ({ A: 1.8, M: 1.9, K: -3.9, L: 3.8 }[aa] ?? -0.8));
+  const manualMean = manual.reduce((sum, value) => sum + value, 0) / manual.length;
+  assert.equal(profile.points[0].hydropathy, Math.round(manualMean * 1000) / 1000, 'the first window is the mean over residues 1-5');
+  const hydropathySvg = memFs.files.get(profile.svg_path).toString('utf8');
+  assert.ok(hydropathySvg.startsWith('<svg') && hydropathySvg.endsWith('</svg>'));
+  assert.ok(hydropathySvg.includes('threshold 1.6'));
+  assert.equal((hydropathySvg.match(/<polyline points="([^"]+)"/)[1]).split(' ').length, 69, 'the profile line has one vertex per residue');
+  assert.equal([...hydropathySvg.matchAll(/fill="#e07a5f"\/>/g)].length, 3, 'one marker per peak');
+  assert.ok(hydropathySvg.includes('>4-10<'), 'peaks are labelled with their residue range');
+  // A 21-residue window smooths the same protein into fewer, flatter peaks.
+  const smooth = await run('molbio_hydropathy_plot', { sequence: hydropathyProtein, window: 21 });
+  assert.equal(smooth.peaks.length, 2);
+  assert.equal(smooth.maximum_hydropathy, 1.845);
+  assert.equal(smooth.gravy, profile.gravy, 'GRAVY is window-independent');
+  await assert.rejects(() => run('molbio_hydropathy_plot', { sequence: hydropathyProtein, window: 2 }), /window must be an integer between 3 and 51/);
+  await assert.rejects(() => run('molbio_hydropathy_plot', { sequence: hydropathyProtein, threshold: 9 }), /threshold must be a number between -4.5 and 4.5/);
+  await assert.rejects(() => run('molbio_hydropathy_plot', { sequence: 'MKKZ' }), /invalid character "Z"/);
+
+  // ── methylation-aware digest ──────────────────────────────────────────────
+  // Hand-built fixture: three GATC-bearing ClaI sites (blocked by Dam), one
+  // BamHI site whose GATC is Dam-methylated (impaired), one Dcm site that
+  // overlaps nothing in the selection, and clean EcoRI/HindIII/XbaI sites.
+  const blockedSequence = 'GATCGATCGATCGGATCCAAAAATCGATAAAAAAGCTTTTTTGAATTCAAAACCTGGAAAAATCTAGATTTTT';
+  const methyl = await run('molbio_methylation_check', { sequence: blockedSequence, enzymes: ['BamHI', 'ClaI', 'XbaI', 'EcoRI', 'HindIII', 'KpnI', 'ApaI'] });
+  assert.equal(methyl.length, blockedSequence.length);
+  assert.deepEqual(methyl.sites_by_mark, { dam: 4, dcm: 1 });
+  assert.equal(methyl.enzymes_checked, 7);
+  const status = (name) => methyl.per_enzyme.find((entry) => entry.enzyme === name);
+  assert.equal(status('ClaI').status, 'blocked');
+  assert.deepEqual(status('ClaI').blocked_by, ['dam']);
+  assert.equal(status('ClaI').sites, 3);
+  assert.equal(status('BamHI').status, 'impaired');
+  assert.deepEqual(status('BamHI').impaired_by, ['dam']);
+  assert.equal(status('EcoRI').status, 'cuts');
+  assert.equal(status('HindIII').status, 'cuts');
+  assert.equal(status('XbaI').status, 'cuts');
+  assert.equal(status('KpnI').status, 'no_site');
+  assert.deepEqual(methyl.usable, ['EcoRI', 'HindIII', 'XbaI']);
+  assert.deepEqual(methyl.risky, ['BamHI', 'ClaI']);
+  assert.deepEqual(methyl.blocked, [{ enzyme: 'ClaI', by: ['dam'], sites: 3 }]);
+  assert.deepEqual(methyl.impaired, [{ enzyme: 'BamHI', by: ['dam'], sites: 1 }]);
+  // Fragment arithmetic: EcoRI cuts at 44 linear -> 43 + 30.
+  const eco = methyl.recommended.find((entry) => entry.enzyme === 'EcoRI');
+  assert.deepEqual(eco.cut_positions, [44]);
+  assert.deepEqual(eco.fragments, [43, 30]);
+  assert.ok(methyl.advice.some((line) => line.includes('BLOCKED by dam methylation') && line.includes('EcoRI')), 'the advice names the blocked enzyme and survivable alternatives');
+  // The Dam marks are only attributed to an enzyme whose own site they overlap.
+  const damSites = methyl.methylation_sites.filter((site) => site.mark === 'dam');
+  assert.equal(damSites.length, 4);
+  assert.deepEqual(damSites[0], { mark: 'dam', site: 'GATC', start: 1, sequence: 'GATC', strand: 'top', overlapping_enzymes: ['ClaI'] });
+  assert.deepEqual(damSites[3].overlapping_enzymes, ['BamHI', 'BstYI']);
+  const dcmSite = methyl.methylation_sites.find((site) => site.mark === 'dcm');
+  assert.deepEqual(dcmSite, { mark: 'dcm', site: 'CCWGG', start: 53, sequence: 'CCTGG', strand: 'top', overlapping_enzymes: [] });
+  assert.ok(methyl.notes.some((note) => note.includes('quick reference')), 'the reference-data caveat travels with the result');
+
+  // On the real plasmid the default selection finds Dam/Dcm marks and reports
+  // the methylation-sensitive enzymes that survive them.
+  const plasmidMethyl = await run('molbio_methylation_check', { sequence: puc118.sequence });
+  assert.deepEqual(plasmidMethyl.sites_by_mark, { dam: 15, dcm: 5 });
+  assert.equal(plasmidMethyl.blocked.length, 0);
+  assert.deepEqual(plasmidMethyl.impaired, [{ enzyme: 'BamHI', by: ['dam'], sites: 1 }, { enzyme: 'BstYI', by: ['dam'], sites: 7 }]);
+  assert.ok(plasmidMethyl.usable.includes('KpnI') && plasmidMethyl.usable.includes('XbaI'));
+  assert.ok(plasmidMethyl.per_enzyme.some((entry) => entry.status === 'no_site'), 'enzymes with no site are reported as no_site, not as blocked');
+
+  await assert.rejects(() => run('molbio_methylation_check', { sequence: blockedSequence, marks: [] }), /marks must be a non-empty array/);
+  await assert.rejects(() => run('molbio_methylation_check', { sequence: blockedSequence, enzymes: ['NopeI'] }), /unknown enzyme "NopeI"/);
+
+  // ── double digest ─────────────────────────────────────────────────────────
+  const doubleDigest = await run('molbio_double_digest', { sequence: puc118.sequence, first: 'EcoRI', second: 'HindIII', circular: true });
+  assert.deepEqual(doubleDigest.first, { name: 'EcoRI', cut_positions: [927], fragments: [3162] });
+  assert.deepEqual(doubleDigest.second, { name: 'HindIII', cut_positions: [876], fragments: [3162] });
+  assert.deepEqual(doubleDigest.combined_cut_positions, [876, 927]);
+  assert.deepEqual(doubleDigest.combined_fragments, [3111, 51]);
+  assert.equal(doubleDigest.sequential_required, false);
+  assert.deepEqual(doubleDigest.buffers.map((buffer) => buffer.key), ['r1.1', 'r2.1', 'r3.1', 'cutsmart']);
+  assert.ok(doubleDigest.all_shared_buffers.some((buffer) => buffer.legacy === true), 'legacy buffers are kept but not recommended');
+  assert.ok(doubleDigest.advice[0].includes('digested together in'), 'a shared buffer is stated as advice');
+  // Two enzymes with no shared buffer in the table force a sequential digest.
+  const sequential = await run('molbio_double_digest', { sequence: puc118.sequence, first: 'BstXI', second: 'SmaI' });
+  assert.equal(sequential.sequential_required, true);
+  assert.deepEqual(sequential.buffers, []);
+  assert.ok(sequential.advice[0].includes('share no buffer'), 'the sequential-digest route is spelled out');
+  // A site-less combination is flagged rather than silently reported.
+  const single = await run('molbio_double_digest', { sequence: 'AAAAGAATTCAAACCCGGGTTT', first: 'EcoRI', second: 'XhoI' });
+  assert.ok(single.advice.some((line) => line.includes('has no site on this template')), 'an enzyme with no site is called out');
+  await assert.rejects(() => run('molbio_double_digest', { sequence: puc118.sequence, first: 'EcoRI', second: 'EcoRI' }), /needs two different enzymes/);
+  await assert.rejects(() => run('molbio_double_digest', { sequence: puc118.sequence, first: 'EcoRI', second: 'NopeI' }), /unknown enzyme "NopeI"/);
+}
+
 // ── plugin surface ──────────────────────────────────────────────────────────
 
 assert.equal(plugin.name, 'dsh-molbio-tools');

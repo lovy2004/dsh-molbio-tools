@@ -271,11 +271,12 @@
 - id: present
   name: '@deepseek-ai/dsh-tool-present'
 
-# dsh-molbio-tools: molecular-biology toolset (46 tools across sequence
-# analysis, primers, cloning (incl. Golden Gate), enzyme catalog, plasmids,
-# Sanger verification, proteins, qPCR, virtual gels, multiple sequence
-# alignment/conservation, sequence logos, CRISPR gRNA design, and
-# literature/protocol/experiment records).
+# dsh-molbio-tools: molecular-biology toolset (52 tools across sequence
+# analysis, primers (incl. TaqMan probes and multiplex compatibility), cloning
+# (incl. Golden Gate), enzyme catalog, methylation-aware and double digests,
+# plasmids, Sanger verification, proteins (incl. helical wheel/hydropathy plots),
+# qPCR, virtual gels, multiple sequence alignment/conservation, sequence logos,
+# CRISPR gRNA design, and literature/protocol/experiment records).
 # Registers into the host `tools` registry and publishes no service, so it
 # needs no isolate realm. The relative specifier resolves against THIS preset
 # directory — the plugin travels with the preset, which is what makes it
@@ -287,4 +288,4 @@
   # never modify a released directory in place — copy the new files into a
   # fresh version directory and update this row, or new sessions keep
   # running cached old modules.
-  name: './plugins/dsh-molbio-tools-v16/index.mjs'
+  name: './plugins/dsh-molbio-tools-v17/index.mjs'

@@ -1064,6 +1064,328 @@ window.__ModuleLoader__.load({
 			  };
 			}
 
+			// ── methylation sensitivity and double-digest buffer compatibility (v17) ────
+			//
+			// Both tables are small published reference data sets, transcribed by hand from
+			// the standard supplier tables (New England Biolabs and the REBASE-derived
+			// summaries every molecular-biology bench book reprints). They are a QUICK
+			// REFERENCE, not an authority: suppliers add/retire buffers and re-measure
+			// methylation sensitivity, so every derived result carries the note
+			// `METHYLATION_DATA_NOTE` / `BUFFER_DATA_NOTE` and callers must present these
+			// values as "check against the supplier's current table".
+
+			/** Note attached to every methylation-derived result. */
+			const METHYLATION_DATA_NOTE = 'Methylation sensitivity is a hand-transcribed quick reference (NEB/REBASE-style tables): dam/dcm/CpG blocking depends on the enzyme lot and the methylation state of the DNA — verify against the supplier\'s current table before choosing an enzyme.';
+
+			/** Note attached to every buffer-derived result. */
+			const BUFFER_DATA_NOTE = 'Buffer compatibility is a hand-transcribed quick reference for the NEB buffer series; suppliers change buffer formulations, so confirm against the current supplier table (or run a pilot digest) before committing to a double digest.';
+
+			/**
+			 * Dam (GATC) and Dcm (CCWGG) are the two methylation marks a standard E. coli
+			 * cloning host puts on its own DNA, and they are the ones that silently block a
+			 * digest: an enzyme reported `blocked` here will not cut DNA prepared from a
+			 * dam+/dcm+ strain. `sensitive` = impaired but not necessarily abolished.
+			 */
+			const METHYLATION_SITES = {
+			  dam: {
+			    site: 'GATC',
+			    label: 'Dam (GATC) — GATC methylated at the adenine by DNA adenine methyltransferase',
+			  },
+			  dcm: {
+			    site: 'CCWGG',
+			    label: 'Dcm (CCWGG) — the internal cytosine of CCWGG is methylated',
+			  },
+			};
+
+			/**
+			 * Enzyme → methylation marks it is sensitive to.
+			 * `blocked`: does not cut that methylated site. `sensitive`: cutting impaired
+			 * (overlapping-site / partial-digest cases are the usual reason).
+			 */
+			const METHYLATION_SENSITIVITY = {
+			  ClaI: { blocked: ['dam'] },
+			  XbaI: { blocked: ['dam'] },
+			  MboI: { blocked: ['dam'] },
+			  BclI: { blocked: ['dam'] },
+			  HphI: { blocked: ['dam'] },
+			  NruI: { blocked: ['dam'] },
+			  TaqI: { blocked: ['dam'] },
+			  BspEI: { blocked: ['dam'] },
+			  BspHI: { blocked: ['dam'] },
+			  BstYI: { sensitive: ['dam'] },
+			  BglII: { sensitive: ['dam'] },
+			  MluI: { sensitive: ['dam'] },
+			  PvuII: { sensitive: ['dam'] },
+			  XhoI: { sensitive: ['dam'] },
+			  EcoRV: { blocked: ['dam'], sensitive: ['dcm'] },
+			  BamHI: { sensitive: ['dam'] },
+			  AvaII: { blocked: ['dcm'] },
+			  EcoRII: { blocked: ['dcm'] },
+			  StuI: { blocked: ['dcm'] },
+			  ApaI: { blocked: ['dcm'] },
+			  BstNI: { blocked: ['dcm'] },
+			  KpnI: { blocked: ['dcm'] },
+			  NaeI: { blocked: ['dcm'] },
+			  PspGI: { blocked: ['dcm'] },
+			  SexAI: { blocked: ['dcm'] },
+			  SmaI: { sensitive: ['dcm'] },
+			  HincII: { sensitive: ['dcm'] },
+			  ScaI: { sensitive: ['dcm'] },
+			  SacI: { sensitive: ['dcm'] },
+			};
+
+			/**
+			 * Standard NEB buffer series (the modern colour-coded set), by NaCl content.
+			 * `r1.1`/`r2.1`/`r3.1`/`cutsmart` share one instruction sheet; the legacy
+			 * H/O/N buffers are kept because bench protocols still cite them, but
+			 * `legacy: true` marks them so recommendations can prefer the current set.
+			 */
+			const BUFFERS = {
+			  'r1.1': { label: 'NEBuffer r1.1', nacl_mm: 50 },
+			  'r2.1': { label: 'NEBuffer r2.1', nacl_mm: 50 },
+			  'r3.1': { label: 'NEBuffer r3.1', nacl_mm: 100 },
+			  cutsmart: { label: 'CutSmart', nacl_mm: 50 },
+			  h: { label: 'NEBuffer H (legacy)', nacl_mm: 50, legacy: true },
+			  o: { label: 'NEBuffer O (legacy)', nacl_mm: 50, legacy: true },
+			  n: { label: 'NEBuffer N (legacy)', nacl_mm: 0, legacy: true },
+			};
+
+			const BUFFER_ORDER = Object.keys(BUFFERS);
+
+			/**
+			 * Enzymes that are active in every buffer of the standard series: they can
+			 * never make a double digest incompatible, so they are omitted from the table
+			 * and treated as universally compatible.
+			 */
+			const ANY_BUFFER_ENZYMES = ['BamHI', 'BglII', 'EcoRI', 'HindIII', 'NdeI', 'NheI', 'PstI', 'SacI', 'SalI', 'ScaI', 'SpeI', 'XbaI', 'XhoI'];
+
+			/** Enzymes whose activity the table covers (plus {@link ANY_BUFFER_ENZYMES}). */
+			const ENZYME_BUFFERS = {
+			  AgeI: ['r1.1', 'cutsmart'],
+			  ApaI: ['cutsmart'],
+			  AscI: ['r3.1', 'cutsmart'],
+			  AvrII: ['r1.1', 'cutsmart'],
+			  BclI: ['r2.1', 'r3.1', 'cutsmart'],
+			  BstBI: ['r2.1', 'cutsmart'],
+			  BstEII: ['r2.1', 'r3.1', 'cutsmart'],
+			  BstXI: ['r3.1'],
+			  Bsu36I: ['r2.1', 'r3.1', 'cutsmart'],
+			  ClaI: ['r1.1', 'cutsmart'],
+			  DraI: ['r1.1', 'cutsmart'],
+			  EagI: ['r1.1', 'r3.1', 'cutsmart'],
+			  EcoNI: ['r3.1', 'cutsmart'],
+			  EcoRV: ['r2.1', 'r3.1', 'cutsmart'],
+			  FseI: ['r3.1', 'cutsmart'],
+			  HpaI: ['r1.1', 'cutsmart'],
+			  KpnI: ['r1.1', 'cutsmart'],
+			  MfeI: ['r1.1', 'cutsmart'],
+			  MluI: ['r1.1', 'r3.1', 'cutsmart'],
+			  NcoI: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  NotI: ['r3.1', 'cutsmart'],
+			  NruI: ['r3.1', 'cutsmart'],
+			  NsiI: ['r2.1', 'r3.1', 'cutsmart'],
+			  PacI: ['r1.1', 'cutsmart'],
+			  PmeI: ['r1.1', 'cutsmart'],
+			  PmlI: ['r3.1', 'cutsmart'],
+			  PshAI: ['r3.1', 'cutsmart'],
+			  PspOMI: ['r1.1', 'cutsmart'],
+			  PvuII: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  RsrII: ['r1.1', 'cutsmart'],
+			  SacII: ['r1.1', 'cutsmart'],
+			  SbfI: ['r3.1', 'cutsmart'],
+			  SexAI: ['r1.1', 'cutsmart'],
+			  SfiI: ['r1.1', 'cutsmart'],
+			  SgrAI: ['r1.1', 'cutsmart'],
+			  SmaI: ['r1.1', 'cutsmart'],
+			  SphI: ['r2.1', 'cutsmart'],
+			  StuI: ['r1.1', 'cutsmart'],
+			  XmaI: ['r1.1', 'cutsmart'],
+			  XmnI: ['r2.1', 'r3.1', 'cutsmart'],
+			  AatII: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  Acc65I: ['r1.1', 'cutsmart'],
+			  AflII: ['r2.1', 'cutsmart'],
+			  AleI: ['r1.1', 'cutsmart'],
+			  AseI: ['r1.1', 'r3.1', 'cutsmart'],
+			  BglI: ['r1.1', 'r3.1', 'cutsmart'],
+			  BmtI: ['r1.1', 'r2.1', 'cutsmart'],
+			  BsaAI: ['r2.1', 'cutsmart'],
+			  BspEI: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  BsrGI: ['r2.1', 'cutsmart'],
+			  BssHII: ['r1.1', 'r3.1', 'cutsmart'],
+			  BstAPI: ['r2.1', 'r3.1', 'cutsmart'],
+			  BstYI: ['r2.1', 'cutsmart'],
+			  BstZ17I: ['r3.1', 'cutsmart'],
+			  BtgI: ['r1.1', 'r2.1', 'cutsmart'],
+			  DraIII: ['r2.1', 'r3.1', 'cutsmart'],
+			  FspI: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  HincII: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  KasI: ['r2.1', 'cutsmart'],
+			  MscI: ['r1.1', 'cutsmart'],
+			  NaeI: ['r1.1', 'r3.1', 'cutsmart'],
+			  NarI: ['r1.1', 'cutsmart'],
+			  NgoMIV: ['r3.1', 'cutsmart'],
+			  PaeR7I: ['r1.1', 'cutsmart'],
+			  PciI: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  PluTI: ['r3.1', 'cutsmart'],
+			  PpuMI: ['r1.1', 'cutsmart'],
+			  PsiI: ['r1.1', 'cutsmart'],
+			  PvuI: ['r2.1', 'r3.1', 'cutsmart'],
+			  SfoI: ['r1.1', 'r2.1', 'cutsmart'],
+			  SnaBI: ['r1.1', 'r2.1', 'r3.1', 'cutsmart'],
+			  SrfI: ['r1.1', 'cutsmart'],
+			  SspI: ['r2.1', 'r3.1', 'cutsmart'],
+			  TspMI: ['r1.1', 'cutsmart'],
+			  XcmI: ['r2.1', 'r3.1', 'cutsmart'],
+			  ZraI: ['r1.1', 'r3.1', 'cutsmart'],
+			  BsaI: ['r1.1', 'cutsmart'],
+			  BsmBI: ['r3.1', 'cutsmart'],
+			  Esp3I: ['r3.1', 'cutsmart'],
+			  BbsI: ['r1.1', 'cutsmart'],
+			  BspQI: ['r3.1', 'cutsmart'],
+			  SapI: ['r1.1', 'cutsmart'],
+			  LguI: ['r1.1', 'cutsmart'],
+			  PaqCI: ['r1.1', 'r3.1', 'cutsmart'],
+			  AarI: ['r1.1', 'r3.1', 'cutsmart'],
+			  BfuAI: ['r3.1', 'cutsmart'],
+			  BveI: ['r3.1', 'cutsmart'],
+			  BtgZI: ['r3.1', 'cutsmart'],
+			  BsmFI: ['r3.1', 'cutsmart'],
+			  FokI: ['r1.1', 'cutsmart'],
+			};
+
+			/** Every enzyme name the buffer table covers (including the universal ones). */
+			const BUFFER_TABLE_ENZYMES = [...new Set([...Object.keys(ENZYME_BUFFERS), ...ANY_BUFFER_ENZYMES])].sort();
+
+			/** Every methylation mark the sensitivity table mentions. */
+			const METHYLATION_MARKS = [...new Set(Object.values(METHYLATION_SENSITIVITY).flatMap((entry) => [...(entry.blocked ?? []), ...(entry.sensitive ?? [])]))].sort();
+
+			/** Buffers one enzyme is active in, or undefined when the table does not cover it. */
+			function enzymeBuffers(name) {
+			  if (!Object.hasOwn(ENZYMES, name)) {
+			    throw new MolbioInputError(`unknown enzyme ${JSON.stringify(name)}; available: ${ENZYME_NAMES.join(', ')}`);
+			  }
+			  if (ANY_BUFFER_ENZYMES.includes(name)) return BUFFER_ORDER.slice();
+			  const entry = ENZYME_BUFFERS[name];
+			  return entry === undefined ? undefined : [...entry];
+			}
+
+			/** Buffers every enzyme in `names` is active in (order of {@link BUFFERS}). */
+			function sharedBuffers(names) {
+			  const known = names.map((name) => enzymeBuffers(name));
+			  return BUFFER_ORDER.filter((buffer) => known.every((list) => list === undefined || list.includes(buffer)));
+			}
+
+			/** Enzymes whose buffer activity the table does not cover (empty when covered). */
+			function enzymesMissingBufferData(names) {
+			  return names.filter((name) => enzymeBuffers(name) === undefined);
+			}
+
+			/**
+			 * Every Dam/Dcm site in `seq`, with the enzymes whose recognition site overlaps
+			 * it (the enzymes most likely to be affected by that particular mark).
+			 * @returns {Array<{mark, site, start, sequence, strand, overlapping_enzymes}>}
+			 */
+			function methylationSites(seq, marks = Object.keys(METHYLATION_SITES)) {
+			  const out = [];
+			  const rc = reverseComplement(seq);
+			  for (const mark of marks) {
+			    const definition = METHYLATION_SITES[mark];
+			    if (definition === undefined) throw new MolbioInputError(`unknown methylation mark ${JSON.stringify(mark)}; available: ${Object.keys(METHYLATION_SITES).join(', ')}`);
+			    const found = [];
+			    for (const hit of findAllMatches(seq, definition.site)) {
+			      found.push({ strand: 'top', start: hit.start, sequence: hit.sequence, span: [hit.start, hit.end] });
+			    }
+			    // GATC is palindromic (the same site), but a non-palindromic mark such as
+			    // CCWGG must also be found on the bottom strand.
+			    if (reverseComplement(definition.site) !== definition.site) {
+			      for (const hit of findAllMatches(rc, definition.site)) {
+			        const start = seq.length - (hit.start + hit.sequence.length);
+			        found.push({ strand: 'bottom', start, sequence: seq.slice(start, start + hit.sequence.length), span: [start, start + hit.sequence.length - 1] });
+			      }
+			    }
+			    found.sort((a, b) => a.start - b.start || (a.strand === 'top' ? -1 : 1));
+			    for (const site of found) {
+			      const overlapping = [];
+			      for (const name of Object.keys(ENZYMES)) {
+			        const sensitivity = METHYLATION_SENSITIVITY[name];
+			        if (sensitivity === undefined) continue;
+			        const marks_ = [...(sensitivity.blocked ?? []), ...(sensitivity.sensitive ?? [])];
+			        if (!marks_.includes(mark)) continue;
+			        // Recognition-event overlap, not "cut position overlap": what matters is
+			        // whether the methylated base sits inside the enzyme's own site.
+			        const pattern = enzymePattern(name).pattern;
+			        const hits = [...findAllMatches(seq, pattern).map((hit) => hit.start), ...findAllMatches(seq, reverseComplement(pattern)).map((hit) => hit.start)];
+			        if (hits.some((start) => start <= site.span[1] && start + pattern.length - 1 >= site.span[0])) {
+			          overlapping.push(name);
+			        }
+			      }
+			      out.push({
+			        mark,
+			        site: definition.site,
+			        start: site.start + 1,
+			        sequence: site.sequence,
+			        strand: site.strand,
+			        overlapping_enzymes: overlapping.sort(),
+			      });
+			    }
+			  }
+			  return out.sort((a, b) => a.start - b.start || a.mark.localeCompare(b.mark));
+			}
+
+			/**
+			 * Which of `names` are blocked / impaired by a Dam or Dcm site in `seq`.
+			 * An enzyme appears under `blocked` only when the methylated site it is
+			 * sensitive to actually overlaps one of its own recognition sites — a Dam site
+			 * elsewhere in the sequence does not affect it.
+			 */
+			function methylationImpact(seq, names, { marks = ['dam', 'dcm'] } = {}) {
+			  const sites = methylationSites(seq, marks);
+			  const sensitive = names.filter((name) => Object.hasOwn(METHYLATION_SENSITIVITY, name));
+			  const blocked = [];
+			  const impaired = [];
+			  for (const name of sensitive) {
+			    const sensitivity = METHYLATION_SENSITIVITY[name];
+			    const overlapping = new Set(sites.filter((site) => site.overlapping_enzymes.includes(name)).map((site) => site.mark));
+			    const marked = (sensitivity.blocked ?? []).filter((mark) => overlapping.has(mark));
+			    const partial = (sensitivity.sensitive ?? []).filter((mark) => overlapping.has(mark));
+			    if (marked.length > 0) blocked.push({ enzyme: name, marks: marked });
+			    else if (partial.length > 0) impaired.push({ enzyme: name, marks: partial });
+			  }
+			  return {
+			    sites,
+			    blocked,
+			    impaired,
+			    checked: names,
+			    not_in_table: names.filter((name) => !Object.hasOwn(METHYLATION_SENSITIVITY, name)),
+			  };
+			}
+
+			/**
+			 * Combined digest of two enzymes on one sequence, reporting the fragments each
+			 * enzyme gives alone and the combined fragment set, so a double digest can be
+			 * read off the same call as the single digests.
+			 */
+			function doubleDigest(seq, first, second, circular) {
+			  if (first === second) throw new MolbioInputError('a double digest needs two different enzymes; use molbio_restriction_sites for a single enzyme');
+			  const single = (name) => {
+			    const cuts = enzymeCuts(seq, name);
+			    return {
+			      name,
+			      cut_positions: cuts.map((cut) => cut.cut_position + 1),
+			      fragments: fragmentSizes(seq.length, [...new Set(cuts.map((cut) => cut.cut_position))], circular === true),
+			    };
+			  };
+			  const a = single(first);
+			  const b = single(second);
+			  const combined = [...new Set([...a.cut_positions.map((p) => p - 1), ...b.cut_positions.map((p) => p - 1)])].sort((x, y) => x - y);
+			  return {
+			    first: a,
+			    second: b,
+			    combined_cut_positions: combined.map((position) => position + 1),
+			    combined_fragments: fragmentSizes(seq.length, combined, circular === true),
+			  };
+			}
+
 			// ── lab math ────────────────────────────────────────────────────────────────
 
 			function labMath(operation, inputs) {
@@ -1140,6 +1462,21 @@ window.__ModuleLoader__.load({
 			exports.endStability5 = endStability5;
 			exports.endGcCount5 = endGcCount5;
 			exports.analyzeQpcr = analyzeQpcr;
+			exports.METHYLATION_DATA_NOTE = METHYLATION_DATA_NOTE;
+			exports.BUFFER_DATA_NOTE = BUFFER_DATA_NOTE;
+			exports.METHYLATION_SITES = METHYLATION_SITES;
+			exports.METHYLATION_SENSITIVITY = METHYLATION_SENSITIVITY;
+			exports.BUFFERS = BUFFERS;
+			exports.ANY_BUFFER_ENZYMES = ANY_BUFFER_ENZYMES;
+			exports.ENZYME_BUFFERS = ENZYME_BUFFERS;
+			exports.BUFFER_TABLE_ENZYMES = BUFFER_TABLE_ENZYMES;
+			exports.METHYLATION_MARKS = METHYLATION_MARKS;
+			exports.enzymeBuffers = enzymeBuffers;
+			exports.sharedBuffers = sharedBuffers;
+			exports.enzymesMissingBufferData = enzymesMissingBufferData;
+			exports.methylationSites = methylationSites;
+			exports.methylationImpact = methylationImpact;
+			exports.doubleDigest = doubleDigest;
 			exports.labMath = labMath;
 			return exports;
 		};
@@ -3421,6 +3758,2730 @@ window.__ModuleLoader__.load({
 			exports.entryStats = entryStats;
 			return exports;
 		};
+		__molbio_modules["design.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/design.mjs
+			 *
+			 * Automatic PCR primer pair design. Pure computation: scans the template for
+			 * forward primers, scans the reverse complement for reverse primers, then
+			 * pairs them within the amplicon window and ranks by Tm balance.
+			 */
+
+			const { DNA_BASES, MolbioInputError, baseCounts, complement, dimerThermo, endGcCount5, endStability5, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore, selfEndScore } = __molbio_require("lib.mjs");
+			// Design-time PCR conditions for the NN Tm model. v13: these are the DEFAULT
+			// salt/concentration knobs; resolveDesignOptions validates user overrides and
+			// derives per-call `tmOpts`/`ctMolar` on the options object. The constants
+			// below only serve as fallbacks when the engine is called directly with
+			// hand-built options (as the smoke tests do).
+			const DEFAULT_TM_OPTS = { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: 200 };
+
+			/** Molar primer concentration used for the hairpin/dimer folding Tm. */
+			const DEFAULT_CT_MOLAR = DEFAULT_TM_OPTS.primerNm * 1e-9;
+
+			function round1(value) {
+			  return Math.round(value * 10) / 10;
+			}
+
+			/**
+			 * Upper bound on how many mismatch variants are tried per window per mismatch count.
+			 */
+			const MAX_MISMATCH_VARIANTS_PER_K = 400;
+
+			/** Cap on how many PASSING variants are kept per window at the lowest mismatch count that yields any. */
+			const MAX_PASSING_VARIANTS_PER_WINDOW = 24;
+
+			/** Total variant evaluations allowed per window across ALL mismatch counts (k=1,2,3...). */
+			const MAX_MISMATCH_EVALS_PER_WINDOW = 150;
+
+			/**
+			 * Evaluate the full design filter chain for one primer sequence against the
+			 * template. Returns the candidate-quality fields on success, or
+			 * `{ reason, ... }` describing the FIRST failing constraint. `seq` must be
+			 * canonical (no IUPAC ambiguity). Cheap checks run first; the structural
+			 * checks are the Primer3-style thermodynamic models (self-any/self-end
+			 * alignment scores, hairpin folding Tm, end stability, end GC).
+			 */
+			function evaluateSeq(seq, opts, tmCenter) {
+			  const {
+			    gcMin, gcMax, maxRun, gcClamp,
+			    maxSelfAny, maxSelfEnd, maxHairpinTm,
+			    maxEndStability, maxEndGc, tmMin, tmMax,
+			  } = opts;
+			  const { gc, at } = baseCounts(seq);
+			  const gcPercent = (gc / (gc + at)) * 100;
+			  if (gcPercent < gcMin || gcPercent > gcMax) return { reason: 'gc', gcPercent };
+			  if (findRuns(seq, maxRun + 1).length > 0) return { reason: 'run' };
+			  if (gcClamp > 0) {
+			    let clamp = 0;
+			    for (let i = seq.length - 1; i >= 0 && (seq[i] === 'G' || seq[i] === 'C'); i--) clamp++;
+			    if (clamp < gcClamp) return { reason: 'clamp', clamp };
+			  }
+			  const endGc = endGcCount5(seq);
+			  if (endGc > maxEndGc) return { reason: 'end_gc', endGc };
+			  const endStability = endStability5(seq);
+			  if (endStability < -maxEndStability) return { reason: 'end_stability', endStability };
+			  const selfAny = selfAnyScore(seq);
+			  if (selfAny > maxSelfAny) return { reason: 'self', selfAny };
+			  const selfEnd = selfEndScore(seq);
+			  if (selfEnd > maxSelfEnd) return { reason: 'self_end', selfEnd };
+			  const hairpin = hairpinThermo(seq, opts.ctMolar ?? DEFAULT_CT_MOLAR)[0];
+			  const hairpinTm = hairpin === undefined ? 0 : hairpin.tm;
+			  if (hairpinTm > maxHairpinTm) return { reason: 'hairpin', hairpinTm };
+			  let tm;
+			  try {
+			    tm = primerTm(seq, opts.tmOpts ?? DEFAULT_TM_OPTS).tm_celsius;
+			  } catch {
+			    return { reason: 'tm' };
+			  }
+			  if (tm < tmMin || tm > tmMax) return { reason: 'tm', tm };
+			  return {
+			    tm: round1(tm),
+			    gc_percent: round1(gcPercent),
+			    tmDelta: Math.abs(tm - tmCenter),
+			    self_any: round1(selfAny),
+			    self_end: round1(selfEnd),
+			    hairpin_tm: hairpinTm,
+			    end_stability_kcal: endStability,
+			    end_gc_count: endGc,
+			  };
+			}
+
+			/**
+			 * Whether mismatch variants are worth attempting for a window: a handful of
+			 * substitutions can realistically only rescue GC balance, run breaking, or a
+			 * MARGINAL Tm miss — never clamp/end rules or structural folds. Returning
+			 * false skips the variant search entirely, which keeps mismatch mode fast on
+			 * large templates.
+			 */
+			function mismatchesCouldRescue(failure, seed, opts) {
+			  const maxMismatches = opts.maxMismatches ?? DESIGN_DEFAULTS.maxMismatches;
+			  // a mismatch can break a run, rebalance GC, or nudge a marginal Tm — nothing else
+			  if (failure.reason === 'run') return true;
+			  if (failure.reason === 'gc') {
+			    const len = seed.length;
+			    // each substitution moves GC% by 1/len; estimate the substitutions needed
+			    const needed = Math.ceil((Math.max(0, opts.gcMin - failure.gcPercent, failure.gcPercent - opts.gcMax) * len) / 100);
+			    return needed <= maxMismatches;
+			  }
+			  if (failure.reason === 'tm') {
+			    // a substitution shifts the NN Tm by roughly 1-3 °C; a miss further out
+			    // cannot be repaired within the mismatch budget
+			    const tol = 3 + 1.5 * maxMismatches;
+			    return failure.tm !== undefined && (failure.tm < opts.tmMin + tol || failure.tm > opts.tmMax - tol);
+			  }
+			  return false; // clamp, end_gc, end_stability, self, self_end, hairpin
+			}
+
+			/**
+			 * Deterministic, bounded substitution variants of a primer window with exactly
+			 * `k` mismatches (v12 mismatch tolerance). Rules:
+			 *  - the 3'-TERMINAL base is never substituted — a terminal mismatch kills
+			 *    polymerase extension, so it is never offered;
+			 *  - the 3' critical zone (last `mismatch3PrimeZone` bases before the
+			 *    terminal) is off-limits unless `max3PrimeMismatches` tolerates it, and
+			 *    then at most that many zone positions per variant;
+			 *  - substitutions are TARGETED at the failing constraint: the failure reason
+			 *    selects which positions and which replacement bases matter (raising or
+			 *    lowering GC/Tm, breaking a run), so the search stays small on large
+			 *    templates — generic all-position enumerations would be quadratic.
+			 * Returns [{ sequence, offsets: [{ p, base }] }] where `p` is the 0-based
+			 * position in the primer (5'→3') and `base` the substituted base. Generation
+			 * order is deterministic (positions from the 5' side, bases sorted).
+			 */
+			function mismatchVariants(seed, k, opts, failure) {
+			  const mismatch3PrimeZone = opts.mismatch3PrimeZone ?? DESIGN_DEFAULTS.mismatch3PrimeZone;
+			  const max3PrimeMismatches = opts.max3PrimeMismatches ?? DESIGN_DEFAULTS.max3PrimeMismatches;
+			  const len = seed.length;
+			  const zoneFrom = Math.max(1, len - mismatch3PrimeZone - 1); // 0-based index of the first 3'-zone position (distance ≤ zone)
+
+			  // Build the pool of (position → candidate bases) moves that can actually
+			  // repair this window's failure. Positions are ordered 5' first.
+			  const moves = [];
+			  const addMoves = (p, bases) => {
+			    if (p >= zoneFrom && max3PrimeMismatches < 1) return;
+			    moves.push({ p, zone: p >= zoneFrom, bases: bases.filter((b) => b !== seed[p]) });
+			  };
+			  if (failure.reason === 'run') {
+			    // break runs: substitute one base inside each run that exceeds the limit.
+			    // Positions are ordered by distance from the run's center so that
+			    // evenly-spread splits (the minimal-substitution repair) are tried first
+			    // within the per-window evaluation budget.
+			    for (const run of findRuns(seed, opts.maxRun + 1)) {
+			      const center = run.start + run.count / 2;
+			      const positions = [];
+			      for (let i = run.start; i < run.start + run.count; i++) positions.push(i);
+			      positions.sort((a, b) => Math.abs(a - center) - Math.abs(b - center) || a - b);
+			      for (const i of positions) {
+			        addMoves(i, ['A', 'C', 'G', 'T']);
+			      }
+			    }
+			  } else if (failure.reason === 'gc' || failure.reason === 'tm') {
+			    // rebalance toward the window: raise GC/Tm by swapping A/T for C/G, or
+			    // lower it by swapping G/C for A/T
+			    let raise = false;
+			    let lower = false;
+			    if (failure.reason === 'gc') {
+			      raise = failure.gcPercent < opts.gcMin;
+			      lower = failure.gcPercent > opts.gcMax;
+			    } else {
+			      raise = failure.tm < opts.tmMin;
+			      lower = failure.tm > opts.tmMax;
+			    }
+			    for (let p = 0; p < len - 1; p++) {
+			      if (raise && (seed[p] === 'A' || seed[p] === 'T')) addMoves(p, ['C', 'G']);
+			      else if (lower && (seed[p] === 'G' || seed[p] === 'C')) addMoves(p, ['A', 'T']);
+			    }
+			  }
+
+			  // Bounded search: combos of k moves, capped so pathological windows stay fast.
+			  const pool = moves;
+			  if (pool.length < k) return [];
+
+			  const variants = [];
+			  const seen = new Set();
+			  const combo = [];
+			  const build = (comboPos, seq, offsets) => {
+			    if (comboPos === k) {
+			      if (!seen.has(seq)) {
+			        seen.add(seq);
+			        variants.push({ sequence: seq, offsets });
+			      }
+			      return;
+			    }
+			    const { p } = combo[comboPos];
+			    for (const base of combo[comboPos].bases) {
+			      build(comboPos + 1, seq.slice(0, p) + base + seq.slice(p + 1), [...offsets, { p, base }]);
+			    }
+			  };
+			  const gen = (start) => {
+			    if (combo.length === k) {
+			      const zoneCount = combo.filter((entry) => entry.zone).length;
+			      if (zoneCount <= max3PrimeMismatches) build(0, seed, []);
+			      return;
+			    }
+			    for (let i = start; i < pool.length; i++) {
+			      combo.push(pool[i]);
+			      gen(i + 1);
+			      combo.pop();
+			    }
+			  };
+			  gen(0);
+			  return variants;
+			}
+
+			/** One passing primer candidate on the scanned strand (forward: template, reverse: reverse complement). */
+			function scanCandidates(strand, from, to, opts, clampFrom) {
+			  const { lenMin, lenMax, maxCandidates } = opts;
+			  const allowedMismatches = opts.maxMismatches ?? DESIGN_DEFAULTS.maxMismatches;
+			  const candidates = [];
+			  const tmCenter = (opts.tmMin + opts.tmMax) / 2;
+			  for (let start = from; start <= to; start++) {
+			    for (let len = lenMin; len <= lenMax; len++) {
+			      if (start + len > strand.length) break;
+			      const seed = strand.slice(start, start + len);
+			      let ambiguous = false;
+			      for (const base of seed) {
+			        if (!DNA_BASES.has(base)) {
+			          ambiguous = true;
+			          break;
+			        }
+			      }
+			      if (ambiguous) continue;
+			      const exact = evaluateSeq(seed, opts, tmCenter);
+			      if (exact.reason === undefined) {
+			        // Perfect match always wins — no mismatch variants are needed here.
+			        candidates.push({ ...exact, start, length: len, sequence: seed, mismatches: [] });
+			        continue;
+			      }
+			      if (allowedMismatches === 0) continue;
+			      if (!mismatchesCouldRescue(exact, seed, opts)) continue;
+			      // v12 mismatch tolerance: rescue windows whose exact sequence fails a
+			      // constraint, using the FEWEST substitutions that make it pass. All
+			      // passing variants at that count are kept; any variant is preferred over
+			      // nothing, but exact primers always outrank them in pair ranking.
+			      let hitAny = false;
+			      let sawFixableFailure = false; // a variant failed on gc/run — more substitutions could help
+			      let budget = MAX_MISMATCH_EVALS_PER_WINDOW;
+			      for (let k = 1; k <= allowedMismatches && !hitAny && budget > 0; k++) {
+			        const variants = mismatchVariants(seed, k, opts, exact).slice(0, Math.min(MAX_MISMATCH_VARIANTS_PER_K, budget));
+			        budget -= variants.length;
+			        let kept = 0;
+			        for (const variant of variants) {
+			          const evaluated = evaluateSeq(variant.sequence, opts, tmCenter);
+			          if (evaluated.reason !== undefined) {
+			            if (evaluated.reason === 'gc' || evaluated.reason === 'run') sawFixableFailure = true;
+			            continue;
+			          }
+			          candidates.push({ ...evaluated, start, length: len, sequence: variant.sequence, mismatches: variant.offsets });
+			          hitAny = true;
+			          if (++kept >= MAX_PASSING_VARIANTS_PER_WINDOW) break;
+			        }
+			        // More substitutions can only rescue a window whose variants still fail
+			        // on GC/run balance; structural failures (clamp/self/hairpin/tm) are
+			        // not fixable by adding mismatches, so stop searching this window.
+			        if (!sawFixableFailure) break;
+			      }
+			    }
+			  }
+			  candidates.sort((a, b) => a.tmDelta - b.tmDelta || a.start - b.start || a.length - b.length);
+			  return candidates.slice(0, maxCandidates ?? 2000);
+			}
+
+			/**
+			 * Translate a candidate's raw mismatch offsets into the reported shape.
+			 * `template` is the forward-strand sequence; `anchorStart` is the 0-based
+			 * start of the primer window ON THE TEMPLATE FORWARD STRAND (for reverse
+			 * candidates this is `anchor`, not the RC-scan start). Convention:
+			 * `template_base` is the base a PERFECTLY MATCHING primer would carry at that
+			 * position — for forward primers the template base itself, for reverse
+			 * primers its complement — so `primer_base !== template_base` always marks a
+			 * real mismatch on both strands.
+			 */
+			function mismatchReport(candidate, template, anchorStart, isReverse) {
+			  const len = candidate.length;
+			  return candidate.mismatches.map(({ p, base }) => {
+			    let templateBase;
+			    let templatePosition;
+			    let distanceFrom3Prime = len - 1 - p;
+			    if (!isReverse) {
+			      templatePosition = anchorStart + p + 1; // 1-based on the template
+			      templateBase = template[anchorStart + p];
+			    } else {
+			      const forwardIndex = anchorStart + len - 1 - p; // antiparallel position on the template
+			      templatePosition = forwardIndex + 1;
+			      templateBase = complement(template[forwardIndex]);
+			    }
+			    return {
+			      position: p + 1,
+			      template_base: templateBase,
+			      primer_base: base,
+			      template_position: templatePosition,
+			      distance_from_3prime: distanceFrom3Prime,
+			    };
+			  });
+			}
+
+			/**
+			 * Ranking penalty for the mismatches carried by one primer (added to the pair
+			 * penalty). Heavy enough that an exact primer pair on the same amplicon always
+			 * outranks a mismatched one, while a window with NO exact rescue can still
+			 * surface a mismatched candidate.
+			 */
+			function mismatchPenalty(offsets, zone) {
+			  return offsets.reduce((sum, m) => sum + 8 + (m.distanceFrom3Prime <= zone ? 4 : 0), 0);
+			}
+
+			// ── mispriming check (non-specific 3' annealing on the template) ────────────
+
+			/** Index of every canonical k-mer of `seq` (IUPAC-ambiguous k-mers are skipped). */
+			function buildKmerIndex(seq, k) {
+			  const index = new Map();
+			  for (let i = 0; i + k <= seq.length; i++) {
+			    const key = seq.slice(i, i + k);
+			    let canonical = true;
+			    for (const base of key) {
+			      if (!DNA_BASES.has(base)) {
+			        canonical = false;
+			        break;
+			      }
+			    }
+			    if (!canonical) continue;
+			    let list = index.get(key);
+			    if (list === undefined) {
+			      list = [];
+			      index.set(key, list);
+			    }
+			    list.push(i);
+			  }
+			  return index;
+			}
+
+			/**
+			 * All tail keys that bind a template position with at most `maxMismatches`
+			 * substitutions. The primer's 3'-TERMINAL base must always pair, so variant
+			 * substitutions are only generated for the other tail positions. Order is
+			 * deterministic: exact first, then one substitution, then two.
+			 */
+			function tailVariantKeys(tail, maxMismatches) {
+			  const bases = ['A', 'C', 'G', 'T'];
+			  const keys = [tail];
+			  if (maxMismatches >= 1) {
+			    for (let p = 0; p < tail.length - 1; p++) {
+			      for (const base of bases) {
+			        if (base === tail[p]) continue;
+			        keys.push(tail.slice(0, p) + base + tail.slice(p + 1));
+			      }
+			    }
+			  }
+			  if (maxMismatches >= 2) {
+			    for (let i = 0; i < tail.length - 2; i++) {
+			      for (let j = i + 1; j < tail.length - 1; j++) {
+			        for (const bi of bases) {
+			          if (bi === tail[i]) continue;
+			          for (const bj of bases) {
+			            if (bj === tail[j]) continue;
+			            keys.push(tail.slice(0, i) + bi + tail.slice(i + 1, j) + bj + tail.slice(j + 1));
+			          }
+			        }
+			      }
+			    }
+			  }
+			  return keys;
+			}
+
+			/**
+			 * Extra (non-intended) template positions where a candidate's 3' tail anneals:
+			 * top-strand occurrences of RC(tail) mean the primer binds the TOP strand;
+			 * top-strand occurrences of tail mean it binds the BOTTOM strand. Sites inside
+			 * the primer's own binding window [intendedPos, intendedPos+k) are excluded
+			 * (position-range exclusion is robust even when the primer carries designed
+			 * mismatches inside its tail). Returns { count, sites } with up to 8 reported
+			 * sites; the result is memoized on the candidate.
+			 */
+			function misprimingForCandidate(candidate, tail, templateIndex, opts, intendedPos) {
+			  if (candidate._mispriming !== undefined) return candidate._mispriming;
+			  const k = tail.length;
+			  const seen = new Set();
+			  const sites = [];
+			  for (const key of tailVariantKeys(tail, opts.misprimingMaxMismatches ?? DESIGN_DEFAULTS.misprimingMaxMismatches)) {
+			    const mismatches = hamming(key, tail);
+			    for (const [lookupKey, strand] of [[key, 'bottom'], [reverseComplement(key), 'top']]) {
+			      const list = templateIndex.get(lookupKey);
+			      if (list === undefined) continue;
+			      for (const pos of list) {
+			        if (pos >= intendedPos && pos < intendedPos + k) continue; // the primer's own binding window
+			        const id = `${pos}:${lookupKey}`;
+			        if (seen.has(id)) continue;
+			        seen.add(id);
+			        sites.push({ position: pos + 1, strand, matches: k - mismatches });
+			      }
+			    }
+			  }
+			  const result = { count: sites.length, sites: sites.slice(0, 8) };
+			  candidate._mispriming = result;
+			  return result;
+			}
+
+			/** Hamming distance between two equal-length strings (canonical bases only). */
+			function hamming(a, b) {
+			  let d = 0;
+			  for (let i = 0; i < a.length; i++) {
+			    if (a[i] !== b[i]) d++;
+			  }
+			  return d;
+			}
+
+			/**
+			 * Design primer pairs flanking an amplicon inside `template`.
+			 *
+			 * @param {string} template - normalized template sequence.
+			 * @param {object} opts - constraints, see DESIGN_DEFAULTS.
+			 * @returns {Array} ranked pairs.
+			 */
+			function designPrimerPairs(template, opts) {
+			  const length = template.length;
+			  const rc = reverseComplement(template);
+
+			  // Amplicon window, 0-based inclusive template positions.
+			  const regionStart = (opts.regionStart ?? 1) - 1;
+			  const regionEnd = (opts.regionEnd ?? length) - 1;
+			  if (regionStart < 0 || regionEnd >= length || regionStart >= regionEnd) {
+			    throw new MolbioInputError(`region ${regionStart + 1}-${regionEnd + 1} is outside the template (length ${length})`);
+			  }
+
+			  // v13 target position preference: the ranking penalty pulls primer 3' ends
+			  // toward the given template position (SNP / site-directed design).
+			  const targetPosition = opts.targetPosition;
+			  if (targetPosition !== undefined && (!Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > length)) {
+			    throw new MolbioInputError(`target_position ${targetPosition} is outside the template (length ${length})`);
+			  }
+			  const targetWeight = opts.targetPenalty ?? DESIGN_DEFAULTS.targetPenalty;
+
+			  // Forward candidates: 3' end must stay inside the region.
+			  const fwd = scanCandidates(template, regionStart, regionEnd - opts.lenMin + 1, opts);
+			  // Reverse candidates on the reverse complement, mapped to template coordinates.
+			  const revOnRc = scanCandidates(rc, 0, rc.length - opts.lenMin, opts);
+			  const rev = revOnRc
+			    .map((candidate) => {
+			      const q = candidate.start;
+			      const a = length - (q + candidate.length); // 0-based template position of the 3' end
+			      return { ...candidate, anchor: a };
+			    })
+			    .sort((x, y) => x.anchor - y.anchor);
+			  const anchors = rev.map((candidate) => candidate.anchor);
+
+			  // Optional mispriming check: k-mer index of the template built once.
+			  const misprimingIndex = opts.checkMispriming
+			    ? buildKmerIndex(template, opts.mispriming3PrimeBases ?? DESIGN_DEFAULTS.mispriming3PrimeBases)
+			    : undefined;
+			  const maxSites = opts.misprimingMaxSites ?? DESIGN_DEFAULTS.misprimingMaxSites;
+
+			  const pairs = [];
+			  const tmCenter = (opts.tmMin + opts.tmMax) / 2;
+			  for (const f of fwd) {
+			    const fwdEnd = f.start + f.length - 1; // 0-based 3' end on template
+			    const aMin = fwdEnd - opts.ampliconMax + 1;
+			    const aMax = fwdEnd - opts.ampliconMin + 1;
+			    let lo = 0;
+			    let hi = anchors.length;
+			    while (lo < hi) {
+			      const mid = (lo + hi) >> 1;
+			      if (anchors[mid] < aMin) lo = mid + 1;
+			      else hi = mid;
+			    }
+			    for (let i = lo; i < rev.length; i++) {
+			      const r = rev[i];
+			      if (r.anchor > aMax) break;
+			      if (r.anchor < 0 || r.anchor + r.length - 1 > regionEnd) continue;
+			      if (Math.abs(f.tm - r.tm) > opts.maxTmDelta) continue;
+			      const dimer = dimerThermo(f.sequence, r.sequence, opts.ctMolar ?? DEFAULT_CT_MOLAR);
+			      if (dimer.any_tm > opts.maxDimerTm || dimer.end_tm > opts.maxDimerEndTm) continue;
+			      const ampliconStart = r.anchor;
+			      const ampliconEnd = fwdEnd;
+			      const ampliconLength = ampliconEnd - ampliconStart + 1;
+			      if (ampliconLength < opts.ampliconMin || ampliconLength > opts.ampliconMax) continue;
+			      let fMispriming = { count: 0, sites: [] };
+			      let rMispriming = { count: 0, sites: [] };
+			      if (misprimingIndex !== undefined) {
+			        const misK = opts.mispriming3PrimeBases ?? DESIGN_DEFAULTS.mispriming3PrimeBases;
+			        fMispriming = misprimingForCandidate(f, f.sequence.slice(-misK), misprimingIndex, opts, f.start);
+			        if (fMispriming.count > maxSites) continue;
+			        rMispriming = misprimingForCandidate(r, r.sequence.slice(-misK), misprimingIndex, opts, r.anchor);
+			        if (rMispriming.count > maxSites) continue;
+			      }
+			      const fMismatches = mismatchReport(f, template, f.start, false);
+			      const rMismatches = mismatchReport(r, template, r.anchor, true);
+			      const zone = opts.mismatch3PrimeZone ?? DESIGN_DEFAULTS.mismatch3PrimeZone;
+			      let fTargetDistance;
+			      let rTargetDistance;
+			      let targetDistance;
+			      if (targetPosition !== undefined) {
+			        fTargetDistance = Math.abs(f.start + f.length - targetPosition); // 1-based 3' end
+			        rTargetDistance = Math.abs(r.anchor + 1 - targetPosition);       // 1-based 3' end
+			        targetDistance = Math.min(fTargetDistance, rTargetDistance);
+			      }
+			      const penalty =
+			        0.6 * Math.abs(f.tm - r.tm) + Math.abs(f.tm - tmCenter) + Math.abs(r.tm - tmCenter)
+			        + 0.5 * Math.max(0, f.self_any - 4) + 0.5 * Math.max(0, r.self_any - 4)
+			        + 1.0 * Math.max(0, f.self_end - 1) + 1.0 * Math.max(0, r.self_end - 1)
+			        + 0.2 * Math.max(0, f.hairpin_tm - 40) + 0.2 * Math.max(0, r.hairpin_tm - 40)
+			        + 0.2 * Math.max(0, dimer.any_tm - 40) + 0.2 * Math.max(0, dimer.end_tm - 40)
+			        + mismatchPenalty(fMismatches, zone)
+			        + mismatchPenalty(rMismatches, zone)
+			        + 8 * fMispriming.count + 8 * rMispriming.count
+			        + (targetDistance !== undefined ? targetWeight * targetDistance : 0);
+			      pairs.push({
+			        forward: {
+			          sequence: f.sequence,
+			          start: f.start + 1,
+			          end: f.start + f.length,
+			          length: f.length,
+			          tm: f.tm,
+			          gc_percent: f.gc_percent,
+			          self_any: f.self_any,
+			          self_end: f.self_end,
+			          hairpin_tm: f.hairpin_tm,
+			          end_stability_kcal: f.end_stability_kcal,
+			          end_gc_count: f.end_gc_count,
+			          mismatch_count: fMismatches.length,
+			          mismatches: fMismatches,
+			          mispriming_count: fMispriming.count,
+			          mispriming_sites: fMispriming.sites,
+			          ...(fTargetDistance !== undefined ? { target_distance: fTargetDistance } : {}),
+			        },
+			        reverse: {
+			          sequence: r.sequence,
+			          start: r.anchor + 1,
+			          end: r.anchor + r.length,
+			          length: r.length,
+			          tm: r.tm,
+			          gc_percent: r.gc_percent,
+			          self_any: r.self_any,
+			          self_end: r.self_end,
+			          hairpin_tm: r.hairpin_tm,
+			          end_stability_kcal: r.end_stability_kcal,
+			          end_gc_count: r.end_gc_count,
+			          mismatch_count: rMismatches.length,
+			          mismatches: rMismatches,
+			          mispriming_count: rMispriming.count,
+			          mispriming_sites: rMispriming.sites,
+			          ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
+			        },
+			        amplicon: {
+			          start: ampliconStart + 1,
+			          end: ampliconEnd + 1,
+			          length: ampliconLength,
+			        },
+			        ...(targetDistance !== undefined ? { target_distance: targetDistance } : {}),
+			        penalty: Math.round(penalty * 100) / 100,
+			      });
+			    }
+			  }
+			  pairs.sort((a, b) => a.penalty - b.penalty || a.amplicon.start - b.amplicon.start);
+			  // Dedupe identical amplicon spans.
+			  const seen = new Set();
+			  const unique = [];
+			  for (const pair of pairs) {
+			    const key = `${pair.amplicon.start}:${pair.amplicon.end}`;
+			    if (seen.has(key)) continue;
+			    seen.add(key);
+			    unique.push(pair);
+			  }
+			  return unique.slice(0, opts.maxResults ?? 5);
+			}
+
+			/** Bounds for the designer tool. */
+			const DESIGN_DEFAULTS = {
+			  lenMin: 18,
+			  lenMax: 28,
+			  tmMin: 55,
+			  tmMax: 65,
+			  gcMin: 40,
+			  gcMax: 60,
+			  ampliconMin: 80,
+			  ampliconMax: 1000,
+			  // v12: Primer3-style structural constraints (thresholds match Primer3 defaults).
+			  gcClamp: 1,            // consecutive G/C bases required at the 3' end (0-3)
+			  maxRun: 3,
+			  maxSelfAny: 8,         // local alignment score, match +1 / mismatch -1 / gap -0.25
+			  maxSelfEnd: 3,         // 3'-anchored alignment score
+			  maxHairpinTm: 47,      // hairpin folding Tm °C
+			  maxDimerTm: 47,        // most stable primer dimer Tm °C
+			  maxDimerEndTm: 47,     // dimer Tm when a 3' end participates
+			  maxEndStability: 9,    // |ΔG(37°C)| of the last 5 bases, kcal/mol
+			  maxEndGc: 5,           // G/C bases allowed in the last 5 bases
+			  maxTmDelta: 3,
+			  maxResults: 5,
+			  maxCandidates: 2000,
+			  // v13: PCR reaction-condition knobs for the NN Tm model (Primer3-aligned).
+			  naMm: 50,             // monovalent cation concentration, mM (von Ahsen 2001 equivalence)
+			  mgMm: 1.5,            // Mg2+ concentration, mM
+			  dntpMm: 0.8,          // dNTP concentration, mM
+			  primerNm: 200,        // primer concentration, nM
+			  // v13: 3' target position preference (SNP / site-directed design).
+			  targetPenalty: 0.5,   // ranking penalty per bp between the nearer primer 3' end and target_position
+			  // v12 mismatch tolerance: 0 = exact match required (v11 behavior).
+			  maxMismatches: 0,
+			  max3PrimeMismatches: 0,
+			  mismatch3PrimeZone: 5,
+			  // v12 mispriming (non-specific 3' annealing) check on the template.
+			  checkMispriming: false,
+			  mispriming3PrimeBases: 8,
+			  misprimingMaxMismatches: 1,
+			  misprimingMaxSites: 1,
+			};
+
+			/** Merge user options over the defaults with basic range validation. */
+			function resolveDesignOptions(raw) {
+			  // Full merge, not just known defaults: regionStart/regionEnd and the
+			  // intron-only keys (minJunctionBases/minGenomicSpan) are NOT part of
+			  // DESIGN_DEFAULTS and must reach the engine intact.
+			  const opts = { ...DESIGN_DEFAULTS };
+			  for (const [key, value] of Object.entries(raw ?? {})) {
+			    if (value !== undefined && value !== null) opts[key] = value;
+			  }
+			  if (!Number.isInteger(opts.lenMin) || opts.lenMin < 12) throw new MolbioInputError('primer_len_min must be an integer >= 12');
+			  if (!Number.isInteger(opts.lenMax) || opts.lenMax > 40 || opts.lenMax < opts.lenMin) throw new MolbioInputError('primer_len_max must be an integer between primer_len_min and 40');
+			  if (!(opts.tmMin < opts.tmMax)) throw new MolbioInputError('tm_min must be lower than tm_max');
+			  if (!(opts.gcMin < opts.gcMax)) throw new MolbioInputError('gc_min must be lower than gc_max');
+			  if (!(opts.ampliconMin <= opts.ampliconMax) || opts.ampliconMin < 1) throw new MolbioInputError('amplicon_min must be >= 1 and <= amplicon_max');
+			  if (opts.minJunctionBases !== undefined && (!Number.isInteger(opts.minJunctionBases) || opts.minJunctionBases < 3 || opts.minJunctionBases > 15)) throw new MolbioInputError('min_junction_bases must be an integer between 3 and 15');
+			  if (opts.minGenomicSpan !== undefined && (!Number.isInteger(opts.minGenomicSpan) || opts.minGenomicSpan < 0)) throw new MolbioInputError('min_genomic_span must be a non-negative integer');
+			  if (!Number.isInteger(opts.gcClamp) || opts.gcClamp < 0 || opts.gcClamp > 3) throw new MolbioInputError('gc_clamp must be an integer between 0 and 3');
+			  if (!Number.isInteger(opts.maxEndGc) || opts.maxEndGc < 0 || opts.maxEndGc > 5) throw new MolbioInputError('max_end_gc must be an integer between 0 and 5');
+			  if (!(typeof opts.maxSelfAny === 'number' && opts.maxSelfAny >= 0)) throw new MolbioInputError('max_self_any must be a non-negative number');
+			  if (!(typeof opts.maxSelfEnd === 'number' && opts.maxSelfEnd >= 0)) throw new MolbioInputError('max_self_end must be a non-negative number');
+			  if (!(typeof opts.maxHairpinTm === 'number' && opts.maxHairpinTm >= 0)) throw new MolbioInputError('max_hairpin_tm must be a non-negative number (°C)');
+			  if (!(typeof opts.maxDimerTm === 'number' && opts.maxDimerTm >= 0)) throw new MolbioInputError('max_dimer_tm must be a non-negative number (°C)');
+			  if (!(typeof opts.maxDimerEndTm === 'number' && opts.maxDimerEndTm >= 0)) throw new MolbioInputError('max_dimer_end_tm must be a non-negative number (°C)');
+			  if (!(typeof opts.maxEndStability === 'number' && opts.maxEndStability >= 0)) throw new MolbioInputError('max_end_stability must be a non-negative number (kcal/mol)');
+			  if (!Number.isInteger(opts.mispriming3PrimeBases) || opts.mispriming3PrimeBases < 6 || opts.mispriming3PrimeBases > 10) throw new MolbioInputError('mispriming_3prime_bases must be an integer between 6 and 10');
+			  if (!Number.isInteger(opts.misprimingMaxMismatches) || opts.misprimingMaxMismatches < 0 || opts.misprimingMaxMismatches > 2) throw new MolbioInputError('mispriming_max_mismatches must be an integer between 0 and 2');
+			  if (!Number.isInteger(opts.misprimingMaxSites) || opts.misprimingMaxSites < 0 || opts.misprimingMaxSites > 20) throw new MolbioInputError('mispriming_max_sites must be an integer between 0 and 20');
+			  if (!Number.isInteger(opts.maxMismatches) || opts.maxMismatches < 0 || opts.maxMismatches > 5) throw new MolbioInputError('max_mismatches must be an integer between 0 and 5');
+			  if (!Number.isInteger(opts.max3PrimeMismatches) || opts.max3PrimeMismatches < 0 || opts.max3PrimeMismatches > opts.maxMismatches) throw new MolbioInputError('max_3prime_mismatches must be an integer between 0 and max_mismatches');
+			  if (!Number.isInteger(opts.mismatch3PrimeZone) || opts.mismatch3PrimeZone < 1 || opts.mismatch3PrimeZone > 10) throw new MolbioInputError('mismatch_3prime_zone must be an integer between 1 and 10');
+			  // v13 reaction-condition knobs: validate, then derive the per-call Tm options
+			  // and the molar concentration used for the hairpin/dimer folding Tm.
+			  if (!(typeof opts.naMm === 'number' && opts.naMm >= 1 && opts.naMm <= 1000)) throw new MolbioInputError('na_mm must be a number between 1 and 1000 (mM monovalent cations)');
+			  if (!(typeof opts.mgMm === 'number' && opts.mgMm >= 0 && opts.mgMm <= 300)) throw new MolbioInputError('mg_mm must be a number between 0 and 300 (mM Mg2+)');
+			  if (!(typeof opts.dntpMm === 'number' && opts.dntpMm >= 0 && opts.dntpMm <= 10)) throw new MolbioInputError('dntp_mm must be a number between 0 and 10 (mM dNTP)');
+			  if (!(typeof opts.primerNm === 'number' && opts.primerNm >= 1 && opts.primerNm <= 5000)) throw new MolbioInputError('primer_nm must be a number between 1 and 5000 (nM primer)');
+			  if (opts.targetPosition !== undefined && (!Number.isInteger(opts.targetPosition) || opts.targetPosition < 1)) throw new MolbioInputError('target_position must be a 1-based integer position on the template');
+			  if (opts.targetPenalty !== undefined && !(typeof opts.targetPenalty === 'number' && opts.targetPenalty >= 0)) throw new MolbioInputError('target_penalty must be a non-negative number');
+			  opts.tmOpts = { naMm: opts.naMm, mgMm: opts.mgMm, dntpMm: opts.dntpMm, primerNm: opts.primerNm };
+			  opts.ctMolar = opts.primerNm * 1e-9;
+			  return opts;
+			}
+
+			/** Full entry point used by the tool: normalize + design. */
+			function designPrimers(rawTemplate, rawOptions) {
+			  const template = normalizeSequence(rawTemplate);
+			  if (template.length < 24) throw new MolbioInputError(`template is too short for primer design (${template.length} bases; need >= 24)`);
+			  const opts = resolveDesignOptions(rawOptions);
+			  const pairs = designPrimerPairs(template, opts);
+			  return { pairs, opts };
+			}
+
+			// ── cross-intron primer design ──────────────────────────────────────────────
+
+			/**
+			 * Mismatch report for cross-intron candidates. Both primer scans run on the
+			 * spliced transcript in the sense orientation (the reported reverse.sequence
+			 * follows the established sense-substring convention of this tool), so the
+			 * mapping is uniform: `template_base` is what a perfectly matching primer
+			 * carries at the position on the spliced transcript, and coordinates come back
+			 * both spliced and genomic.
+			 */
+			function intronMismatchReport(candidate, spliced, splicedToGenomic) {
+			  const len = candidate.length;
+			  return candidate.mismatches.map(({ p, base }) => ({
+			    position: p + 1,
+			    template_base: spliced[candidate.start + p],
+			    primer_base: base,
+			    spliced_position: candidate.start + p + 1,
+			    genomic_position: splicedToGenomic[candidate.start + p] + 1,
+			    distance_from_3prime: len - 1 - p,
+			  }));
+			}
+
+			/**
+			 * Design qPCR primer pairs where the forward primer spans an exon-exon
+			 * junction (>= min_junction_bases on each side) so genomic DNA cannot be
+			 * amplified, and the reverse primer sits in a different exon. Coordinates are
+			 * reported both on the spliced transcript and on the genomic sequence.
+			 */
+			function designIntronSpanningPrimers(genomic, exons, opts) {
+			  if (!Array.isArray(exons) || exons.length < 2) throw new MolbioInputError('exons must be an array of at least two {start, end} spans');
+			  const sorted = [...exons].sort((a, b) => a.start - b.start);
+			  for (const exon of sorted) {
+			    if (!Number.isInteger(exon.start) || !Number.isInteger(exon.end) || exon.start < 1 || exon.end > genomic.length || exon.start > exon.end) {
+			      throw new MolbioInputError(`exon ${JSON.stringify(exon)} is outside the genomic sequence (length ${genomic.length})`);
+			    }
+			  }
+			  for (let i = 1; i < sorted.length; i++) {
+			    if (sorted[i].start <= sorted[i - 1].end) throw new MolbioInputError('exons must not overlap');
+			  }
+			  const minSide = opts.minJunctionBases ?? 6;
+			  const minGenomicSpan = opts.minGenomicSpan ?? 0;
+
+			  // Build the spliced transcript plus coordinate maps.
+			  let spliced = '';
+			  const splicedToGenomic = [];
+			  const splicedToExon = [];
+			  const junctionPositions = [];
+			  sorted.forEach((exon, exonIndex) => {
+			    if (exonIndex > 0) junctionPositions.push({ splicedPos: spliced.length, up: exonIndex - 1, down: exonIndex });
+			    for (let g = exon.start - 1; g < exon.end; g++) {
+			      splicedToGenomic.push(g);
+			      splicedToExon.push(exonIndex);
+			      spliced += genomic[g];
+			    }
+			  });
+			  if (spliced.length < 24) throw new MolbioInputError('the spliced transcript is too short for primer design');
+
+			  // v13 target position preference (coordinates on the spliced transcript).
+			  const targetPosition = opts.targetPosition;
+			  if (targetPosition !== undefined && (!Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > spliced.length)) {
+			    throw new MolbioInputError(`target_position ${targetPosition} is outside the spliced transcript (length ${spliced.length})`);
+			  }
+			  const targetWeight = opts.targetPenalty ?? DESIGN_DEFAULTS.targetPenalty;
+
+			  // Forward candidates must span a junction with minSide bases on each side.
+			  const fwd = [];
+			  for (const candidate of scanCandidates(spliced, 0, spliced.length - opts.lenMin, opts)) {
+			    for (const junction of junctionPositions) {
+			      const left = junction.splicedPos - candidate.start;
+			      const right = candidate.start + candidate.length - junction.splicedPos;
+			      if (left >= minSide && right >= minSide) {
+			        fwd.push({ ...candidate, junction, junction_left: left, junction_right: right });
+			        break;
+			      }
+			    }
+			  }
+
+			  // Reverse candidates sit entirely inside one exon.
+			  const rev = scanCandidates(spliced, 0, spliced.length - opts.lenMin, opts)
+			    .filter((candidate) => splicedToExon[candidate.start] === splicedToExon[candidate.start + candidate.length - 1])
+			    .map((candidate) => ({ ...candidate, exon: splicedToExon[candidate.start] }))
+			    .sort((a, b) => a.start - b.start);
+			  const revStarts = rev.map((candidate) => candidate.start);
+
+			  const tmCenter = (opts.tmMin + opts.tmMax) / 2;
+			  const misprimingIndex = opts.checkMispriming
+			    ? buildKmerIndex(spliced, opts.mispriming3PrimeBases ?? DESIGN_DEFAULTS.mispriming3PrimeBases)
+			    : undefined;
+			  const maxSites = opts.misprimingMaxSites ?? DESIGN_DEFAULTS.misprimingMaxSites;
+			  const pairs = [];
+			  for (const f of fwd) {
+			    const fwdEnd = f.start + f.length - 1;
+			    const aMin = fwdEnd - opts.ampliconMax + 1;
+			    const aMax = fwdEnd - opts.ampliconMin + 1;
+			    let lo = 0;
+			    let hi = revStarts.length;
+			    while (lo < hi) {
+			      const mid = (lo + hi) >> 1;
+			      if (revStarts[mid] < aMin) lo = mid + 1;
+			      else hi = mid;
+			    }
+			    for (let i = lo; i < rev.length; i++) {
+			      const r = rev[i];
+			      if (r.start > aMax) break;
+			      if (r.exon === f.junction.down) continue; // reverse primer must sit in a different exon
+			      const gEnd = splicedToGenomic[fwdEnd];
+			      const gStart = splicedToGenomic[r.start];
+			      if (gEnd - gStart + 1 < minGenomicSpan) continue;
+			      if (Math.abs(f.tm - r.tm) > opts.maxTmDelta) continue;
+			      const dimer = dimerThermo(f.sequence, r.sequence, opts.ctMolar ?? DEFAULT_CT_MOLAR);
+			      if (dimer.any_tm > opts.maxDimerTm || dimer.end_tm > opts.maxDimerEndTm) continue;
+			      let fMispriming = { count: 0, sites: [] };
+			      let rMispriming = { count: 0, sites: [] };
+			      if (misprimingIndex !== undefined) {
+			        const misK = opts.mispriming3PrimeBases ?? DESIGN_DEFAULTS.mispriming3PrimeBases;
+			        fMispriming = misprimingForCandidate(f, f.sequence.slice(-misK), misprimingIndex, opts, f.start);
+			        if (fMispriming.count > maxSites) continue;
+			        // the reported reverse sequence follows the sense-substring convention:
+			        // the real oligo is its reverse complement, so its 3' tail is the RC
+			        // of the FIRST k bases and the intended site is r.start
+			        const rTail = reverseComplement(r.sequence.slice(0, misK));
+			        rMispriming = misprimingForCandidate(r, rTail, misprimingIndex, opts, r.start);
+			        if (rMispriming.count > maxSites) continue;
+			      }
+			      const fMismatches = intronMismatchReport(f, spliced, splicedToGenomic);
+			      const rMismatches = intronMismatchReport(r, spliced, splicedToGenomic);
+			      const zone = opts.mismatch3PrimeZone ?? DESIGN_DEFAULTS.mismatch3PrimeZone;
+			      let fTargetDistance;
+			      let rTargetDistance;
+			      let targetDistance;
+			      if (targetPosition !== undefined) {
+			        fTargetDistance = Math.abs(f.start + f.length - targetPosition); // spliced 1-based 3' end
+			        rTargetDistance = Math.abs(r.start + 1 - targetPosition);
+			        targetDistance = Math.min(fTargetDistance, rTargetDistance);
+			      }
+			      const penalty = 0.6 * Math.abs(f.tm - r.tm) + Math.abs(f.tm - tmCenter) + Math.abs(r.tm - tmCenter)
+			        + 0.5 * Math.max(0, f.self_any - 4) + 0.5 * Math.max(0, r.self_any - 4)
+			        + 1.0 * Math.max(0, f.self_end - 1) + 1.0 * Math.max(0, r.self_end - 1)
+			        + 0.2 * Math.max(0, f.hairpin_tm - 40) + 0.2 * Math.max(0, r.hairpin_tm - 40)
+			        + 0.2 * Math.max(0, dimer.any_tm - 40) + 0.2 * Math.max(0, dimer.end_tm - 40)
+			        + mismatchPenalty(fMismatches, zone)
+			        + mismatchPenalty(rMismatches, zone)
+			        + 8 * fMispriming.count + 8 * rMispriming.count
+			        + (targetDistance !== undefined ? targetWeight * targetDistance : 0);
+			      pairs.push({
+			        forward: {
+			          sequence: f.sequence,
+			          length: f.length,
+			          tm: f.tm,
+			          gc_percent: f.gc_percent,
+			          self_any: f.self_any,
+			          self_end: f.self_end,
+			          hairpin_tm: f.hairpin_tm,
+			          end_stability_kcal: f.end_stability_kcal,
+			          end_gc_count: f.end_gc_count,
+			          spliced_start: f.start + 1,
+			          spliced_end: f.start + f.length,
+			          genomic_start: splicedToGenomic[f.start] + 1,
+			          genomic_end: splicedToGenomic[f.start + f.length - 1] + 1,
+			          exons: [String(f.junction.up + 1), String(f.junction.down + 1)],
+			          junction_left: f.junction_left,
+			          junction_right: f.junction_right,
+			          mismatch_count: fMismatches.length,
+			          mismatches: fMismatches,
+			          mispriming_count: fMispriming.count,
+			          mispriming_sites: fMispriming.sites.map((site) => ({
+			            position: site.position,
+			            genomic_position: splicedToGenomic[site.position - 1] + 1,
+			            strand: site.strand,
+			            matches: site.matches,
+			          })),
+			          ...(fTargetDistance !== undefined ? { target_distance: fTargetDistance } : {}),
+			        },
+			        reverse: {
+			          sequence: r.sequence,
+			          length: r.length,
+			          tm: r.tm,
+			          gc_percent: r.gc_percent,
+			          self_any: r.self_any,
+			          self_end: r.self_end,
+			          hairpin_tm: r.hairpin_tm,
+			          end_stability_kcal: r.end_stability_kcal,
+			          end_gc_count: r.end_gc_count,
+			          spliced_start: r.start + 1,
+			          spliced_end: r.start + r.length,
+			          genomic_start: splicedToGenomic[r.start] + 1,
+			          genomic_end: splicedToGenomic[r.start + r.length - 1] + 1,
+			          exon: r.exon + 1,
+			          mismatch_count: rMismatches.length,
+			          mismatches: rMismatches,
+			          mispriming_count: rMispriming.count,
+			          mispriming_sites: rMispriming.sites.map((site) => ({
+			            position: site.position,
+			            genomic_position: splicedToGenomic[site.position - 1] + 1,
+			            strand: site.strand,
+			            matches: site.matches,
+			          })),
+			          ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
+			        },
+			        spliced_amplicon: { start: r.start + 1, end: fwdEnd + 1, length: fwdEnd - r.start + 1 },
+			        genomic_amplicon_length: gEnd - gStart + 1,
+			        ...(targetDistance !== undefined ? { target_distance: targetDistance } : {}),
+			        penalty: Math.round(penalty * 100) / 100,
+			      });
+			    }
+			  }
+			  pairs.sort((a, b) => a.penalty - b.penalty || a.spliced_amplicon.start - b.spliced_amplicon.start);
+			  const seen = new Set();
+			  const unique = [];
+			  for (const pair of pairs) {
+			    const key = `${pair.spliced_amplicon.start}:${pair.spliced_amplicon.end}`;
+			    if (seen.has(key)) continue;
+			    seen.add(key);
+			    unique.push(pair);
+			  }
+			  return unique.slice(0, opts.maxResults ?? 5);
+			}
+
+			/** Entry point used by the tool: normalize + validate + design. */
+			function designIntronPrimers(rawGenomic, exons, rawOptions) {
+			  const genomic = normalizeSequence(rawGenomic, 'genomic');
+			  const opts = resolveDesignOptions(rawOptions);
+			  const pairs = designIntronSpanningPrimers(genomic, exons, opts);
+			  return { pairs, opts };
+			}
+
+			exports.evaluateSeq = evaluateSeq;
+			exports.mismatchVariants = mismatchVariants;
+			exports.scanCandidates = scanCandidates;
+			exports.designPrimerPairs = designPrimerPairs;
+			exports.DESIGN_DEFAULTS = DESIGN_DEFAULTS;
+			exports.resolveDesignOptions = resolveDesignOptions;
+			exports.designPrimers = designPrimers;
+			exports.designIntronSpanningPrimers = designIntronSpanningPrimers;
+			exports.designIntronPrimers = designIntronPrimers;
+			return exports;
+		};
+		__molbio_modules["taqman.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/taqman.mjs
+			 *
+			 * TaqMan (hydrolysis probe) design on top of the v11-v13 primer engine: the
+			 * primer pair comes from design.mjs unchanged, and this module adds the probe
+			 * that makes a 5'-nuclease assay work.
+			 *
+			 * The probe rules encoded here are the standard assay-design heuristics every
+			 * probe-design guide states (Applied Biosystems / IDT / Primer3's
+			 * `PRIMER_TASK=pick_hyb_probe` family):
+			 *
+			 *   - the probe sits INSIDE the amplicon and overlaps neither primer — the
+			 *     preferred orientation is the amplicon's 5' gap (same reading direction as
+			 *     the forward primer, so it is cleaved as the polymerase extends); when no
+			 *     candidate fits there, the same chemistry is offered reverse-oriented, and
+			 *     the result says so;
+			 *   - a 5' guanine quenches the reporter even before cleavage, so the probe's
+			 *     5' base must not be G (the classic "no G at the 5' end" rule);
+			 *   - the probe Tm must exceed the primer Tm by a margin (`min_tm_delta`, 5 °C
+			 *     by default) so the probe stays annealed while the polymerase extends;
+			 *   - short probes (<= 30 nt) are extended by the polymerase even without
+			 *     cleavage, so a 3' terminal G is discouraged (`allow_3prime_g` opts in);
+			 *   - no mononucleotide runs (a G run in particular quenches and mis-hybridizes).
+			 *
+			 * Everything is an ESTIMATE from the same SantaLucia-1998 nearest-neighbour
+			 * model the primer tools use; none of it predicts assay efficiency.
+			 */
+
+			const { MolbioInputError, dimerThermo, findRepeats, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore, selfEndScore } = __molbio_require("lib.mjs");
+			const { designPrimers, resolveDesignOptions } = __molbio_require("design.mjs");
+			/** Probe-design bounds (primer bounds live in DESIGN_DEFAULTS). */
+			const PROBE_DEFAULTS = {
+			  probeLenMin: 18,
+			  probeLenMax: 27,
+			  probeTmMin: 58,
+			  probeTmMax: 72,
+			  probeGcMin: 40,
+			  probeGcMax: 65,
+			  minTmDelta: 5,
+			  maxRun: 4,
+			  maxSelfAny: 8,
+			  minDistanceFromPrimer: 1,
+			  maxProbesPerAmplicon: 3,
+			  maxAmplicons: 5,
+			};
+
+			const round2 = (value) => Math.round(value * 100) / 100;
+
+			function pairTm(pair) {
+			  return Math.max(pair.forward.tm, pair.reverse.tm);
+			}
+
+			/** GC percent of a short DNA string (integer percent). */
+			function gcPercent(seq) {
+			  let gc = 0;
+			  for (const base of seq) {
+			    if (base === 'G' || base === 'C') gc++;
+			  }
+			  return seq.length === 0 ? 0 : round2((gc / seq.length) * 100);
+			}
+
+			function safeSelfAny(seq) {
+			  try {
+			    return selfAnyScore(seq);
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			function safeSelfEnd(seq) {
+			  try {
+			    return selfEndScore(seq);
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			function safeHairpinTm(seq, ctMolar) {
+			  try {
+			    const hairpins = hairpinThermo(seq, ctMolar); // sorted by Tm, highest first
+			    return hairpins.length === 0 ? 0 : hairpins[0].tm;
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			function safeDimerAnyTm(a, b, ctMolar) {
+			  try {
+			    const dimer = dimerThermo(a, b, ctMolar);
+			    return dimer.any_tm ?? 0;
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			/**
+			 * Evaluate one probe candidate: thermodynamics, structure, and the heuristic
+			 * flags a designer must know before ordering it.
+			 */
+			function evaluateProbe(seq, { tmOpts, ctMolar, primerTmMax, maxRun, maxSelfAny }) {
+			  const lower = seq.toUpperCase();
+			  const tm = primerTm(lower, tmOpts).tm_celsius;
+			  const gc = gcPercent(lower);
+			  const runs = findRuns(lower, maxRun + 1);
+			  const repeats = findRepeats(lower);
+			  const hairpin = safeHairpinTm(lower, ctMolar);
+			  const selfAny = safeSelfAny(lower);
+			  const selfEnd = safeSelfEnd(lower);
+			  const notes = [];
+			  if (lower[0] === 'G') notes.push('5\' terminal G: the guanine quenches the reporter even before cleavage — move the probe or pick the reverse strand');
+			  if (lower[lower.length - 1] === 'G') notes.push('3\' terminal G: a short probe is extended by the polymerase without cleavage — prefer a different 3\' base');
+			  if (runs.length > 0) notes.push(`mononucleotide run >= ${maxRun + 1} bases (${runs.map((run) => `${run.base}${run.count}`).join(', ')})`);
+			  if (repeats.length > 0) notes.push(`repeat motif ${repeats.map((repeat) => `${repeat.motif}x${repeat.count}`).join(', ')}`);
+			  if (hairpin > 45) notes.push(`stable hairpin (Tm ${round2(hairpin)} °C)`);
+			  if (selfAny > maxSelfAny) notes.push(`self-complementarity score ${selfAny} above ${maxSelfAny}`);
+			  const tmDelta = primerTmMax === undefined ? undefined : round2(tm - primerTmMax);
+			  if (tmDelta !== undefined && tmDelta < 0) notes.push(`probe Tm is ${Math.abs(tmDelta)} °C BELOW the hotter primer (target >= 0)`);
+			  const penalty =
+			    2.0 * Math.max(0, (primerTmMax ?? tm) - tm)
+			    + Math.abs(gc - 50) * 0.1
+			    + 0.3 * Math.max(0, hairpin - 40)
+			    + 0.4 * selfAny
+			    + 0.8 * selfEnd
+			    + 3.0 * runs.length
+			    + 2.0 * repeats.length
+			    + (lower[0] === 'G' ? 50 : 0)
+			    + (lower[lower.length - 1] === 'G' ? 20 : 0);
+			  return {
+			    sequence: lower,
+			    length: lower.length,
+			    tm: round2(tm),
+			    gc_percent: gc,
+			    tm_delta_vs_primer: tmDelta,
+			    hairpin_tm: round2(hairpin),
+			    self_any: selfAny,
+			    self_end: selfEnd,
+			    repeats: repeats.length,
+			    runs: runs.map((run) => ({ base: run.base, count: run.count, start: run.start })),
+			    five_prime_g: lower[0] === 'G',
+			    three_prime_g: lower[lower.length - 1] === 'G',
+			    notes,
+			    penalty: round2(penalty),
+			  };
+			}
+
+			/**
+			 * All probe candidates for one amplicon, ranked best-first.
+			 *
+			 * The primer pair is given as the two primers' binding intervals on the TOP
+			 * strand: `forwardInterval` (its 3' end is `end`) and `reverseInterval` (read
+			 * 5'→3' on the bottom strand, so ITS 3' end is the LOW coordinate `start`).
+			 *
+			 * An amplicon has two gaps between its primers, and each primer's 3' end faces
+			 * exactly one of them:
+			 *
+			 *            gap 1                        gap 2
+			 *   ... [reverse] 3' ------> 3' [forward] 5' ...    (forward primer on the right)
+			 *   ... [forward] 3' ------> 3' [reverse] 5' ...    (forward primer on the left)
+			 *
+			 * A hydrolysis probe is read outward from the primer whose 3' end faces its gap:
+			 *
+			 *   - `orientation: 'forward'` reads on the top strand out of the gap the
+			 *     FORWARD primer's 3' end faces — the standard design, in the same direction
+			 *     the polymerase extends;
+			 *   - `orientation: 'reverse'` reads on the bottom strand out of the gap the
+			 *     REVERSE primer's 3' end faces, reported reverse-complemented.
+			 *
+			 * In both cases the probe keeps `minGap` bases clear of that primer's 3' end and
+			 * stops before the other primer's 5' end, so it can never overlap a primer
+			 * binding site — a probe on a primer's site competes with that primer instead of
+			 * reporting the amplicon. One of the two gaps is often empty (primers sitting at
+			 * the template's edge leave room on one strand only), which is why the caller
+			 * falls back to the other orientation.
+			 *
+			 * `primerTmMax` is the hotter primer's Tm, used for the reported Tm margin.
+			 */
+			function probeCandidates(template, forwardInterval, reverseInterval, opts, primerTmMax, { reverse = false } = {}) {
+			  const minGap = opts.minDistanceFromPrimer;
+			  const n = template.length;
+			  // The amplicon's single physical gap, on the top strand: the stretch between
+			  // the two primer binding sites, whichever order they are in. A probe only ever
+			  // lives in here.
+			  const forwardUpstream = forwardInterval.end < reverseInterval.start;
+			  const gap = forwardUpstream
+			    ? [forwardInterval.end - 1, reverseInterval.start - 1]
+			    : [reverseInterval.end - 1, forwardInterval.start - 1];
+			  // The primer whose 3' end opens the gap: it is the one the probe is read
+			  // outward from, and the 3' end the reported distance is measured against.
+			  const stem = forwardUpstream ? forwardInterval : reverseInterval;
+			  const work = reverse ? reverseComplement(template) : template;
+			  // On `work`, a top-strand interval [s, e] corresponds to [n-1-e, n-1-s].
+			  const windowStart = reverse ? n - 1 - gap[1] : gap[0] + minGap;
+			  const windowEnd = reverse ? n - 1 - gap[0] - minGap : gap[1] - minGap;
+			  const candidates = [];
+			  for (let length = opts.probeLenMin; length <= opts.probeLenMax; length++) {
+			    for (let start = windowStart; start + length - 1 <= windowEnd; start++) {
+			      const sequence = work.slice(start, start + length);
+			      const evaluated = evaluateProbe(sequence, {
+			        tmOpts: opts.tmOpts,
+			        ctMolar: opts.ctMolar,
+			        primerTmMax,
+			        maxRun: opts.maxRun,
+			        maxSelfAny: opts.maxSelfAny,
+			      });
+			      if (evaluated.gc_percent < opts.probeGcMin || evaluated.gc_percent > opts.probeGcMax) continue;
+			      if (evaluated.tm < opts.probeTmMin || evaluated.tm > opts.probeTmMax) continue;
+			      if (evaluated.five_prime_g) continue;
+			      if (evaluated.three_prime_g && opts.allowThreePrimeG !== true) continue;
+			      if (evaluated.runs.length > 0) continue;
+			      if (evaluated.repeats > 0) continue;
+			      if (evaluated.self_any > opts.maxSelfAny) continue;
+			      const templateStart = reverse ? n - (start + length) : start; // 0-based top-strand start
+			      const templateEnd = templateStart + length - 1;
+			      // Belt and braces: whatever the window arithmetic did, the probe must not
+			      // overlap either primer's binding site on the top strand.
+			      const overlaps = (interval) => templateStart <= interval.end - 1 && templateEnd >= interval.start - 1;
+			      if (overlaps(forwardInterval) || overlaps(reverseInterval)) continue;
+			      // Gap between the probe's 5' end and the 3' end of the primer it is read
+			      // from, in top-strand coordinates for both orientations.
+			      const distance = reverse ? stem.start - 1 - templateEnd : templateStart - (stem.end - 1);
+			      candidates.push({
+			        ...evaluated,
+			        orientation: reverse ? 'reverse' : 'forward',
+			        start: templateStart + 1,
+			        end: templateEnd + 1,
+			        distance_from_primer_3prime: distance,
+			        // Signed position of the probe's midpoint against the amplicon centre,
+			        // so a caller can see whether the probe sits centred or skewed.
+			        midpoint_offset: round2((templateStart + templateEnd) / 2 + 1 - (forwardInterval.end + reverseInterval.start) / 2),
+			      });
+			    }
+			  }
+			  candidates.sort((a, b) => a.penalty - b.penalty || a.start - b.start || a.length - b.length);
+			  // Drop candidates that differ only by a shifted window: keep the best of each
+			  // overlapping cluster so the caller gets distinct choices.
+			  const kept = [];
+			  for (const candidate of candidates) {
+			    if (kept.some((other) => other.orientation === candidate.orientation && candidate.start <= other.end && candidate.end >= other.start)) continue;
+			    kept.push(candidate);
+			  }
+			  return kept;
+			}
+
+			/**
+			 * Design TaqMan assays on a template.
+			 *
+			 * @param {string} rawTemplate template sequence (IUPAC).
+			 * @param {object} rawOptions probe + primer options (snake_case, as the tool takes them).
+			 * @returns {{assays: Array, conditions: object, primer_options: object, notes: string[]}}
+			 */
+			function designTaqmanProbes(rawTemplate, rawOptions = {}) {
+			  const template = normalizeSequence(rawTemplate);
+			  const opts = { ...PROBE_DEFAULTS };
+			  for (const [key, value] of Object.entries(rawOptions)) {
+			    if (value !== undefined && value !== null) opts[key] = value;
+			  }
+			  // A hydrolysis-probe assay is deliberately short (the amplicon is the stretch
+			  // the polymerase must traverse before it reaches and cleaves the probe), so
+			  // the primer engine runs with qPCR-style windows unless the caller overrides
+			  // them through primer_options. The primer engine's own ranking knows nothing
+			  // about probes, so it is asked for a POOL several times the number of assays
+			  // wanted — otherwise a high-ranking amplicon with no usable probe window
+			  // would hide every workable one behind it.
+			  const primerOptions = {
+			    ampliconMin: 70,
+			    ampliconMax: 200,
+			    // The engine leaves region_start undefined when it is not given (meaning
+			    // "the whole template"), which would surface as a null in the reported
+			    // windows — state the window explicitly instead.
+			    regionStart: 1,
+			    regionEnd: template.length,
+			    maxResults: Math.min(50, Math.max(10, opts.maxAmplicons * 4)),
+			    ...primerEngineOptions(rawOptions.primer_options ?? {}),
+			  };
+			  const { pairs, opts: primerOpts } = designPrimers(template, primerOptions);
+			  opts.tmOpts = primerOpts.tmOpts;
+			  opts.ctMolar = primerOpts.ctMolar;
+
+			  const conditions = {
+			    na_mm: primerOpts.naMm,
+			    mg_mm: primerOpts.mgMm,
+			    dntp_mm: primerOpts.dntpMm,
+			    primer_nm: primerOpts.primerNm,
+			  };
+			  const notes = [];
+			  const emptyAmplicons = [];
+			  const assays = [];
+			  for (const pair of pairs) {
+			    const hotter = pairTm(pair);
+			    const window = (orientation) => probeCandidates(
+			      template,
+			      { start: pair.forward.start, end: pair.forward.end },
+			      { start: pair.reverse.start, end: pair.reverse.end },
+			      opts,
+			      hotter,
+			      { reverse: orientation === 'reverse' },
+			    );
+			    // Preference order, stated rather than hidden: (1) a probe in the amplicon's
+			    // 5' gap that clears the Tm margin, (2) one on the other strand that does,
+			    // (3) the best candidate that exists even if the margin is short. Only a
+			    // probe that exists at all can be reported.
+			    const forwardOriented = window('forward');
+			    const reverseOriented = forwardOriented.length === 0 ? window('reverse') : [];
+			    const clears = (probe) => (probe.tm_delta_vs_primer ?? 0) >= opts.minTmDelta;
+			    const pooled = forwardOriented.length > 0 ? forwardOriented : reverseOriented;
+			    const strict = pooled.filter(clears);
+			    if (strict.length === 0 && pooled.length > 0) {
+			      notes.push(`amplicon ${pair.amplicon.start}-${pair.amplicon.end}: no probe clears the ${opts.minTmDelta} °C Tm margin over the primers; the best available probe(s) are reported and flagged`);
+			    } else if (forwardOriented.length === 0 && reverseOriented.length > 0) {
+			      notes.push(`amplicon ${pair.amplicon.start}-${pair.amplicon.end}: no probe fits the amplicon's 5' gap, so the probe is reported reverse-oriented (same chemistry, opposite strand: order the sequence as given and use it as the probe, or reverse-complement it to read it on the forward strand)`);
+			    }
+			    const used = (strict.length > 0 ? strict : pooled).slice(0, opts.maxProbesPerAmplicon);
+			    for (const probe of used) {
+			      // The probe must also be independent of the primers at the sequence level:
+			      // a probe that self-dimerizes with a primer out-competes the amplicon.
+			      probe.dimer_tm_vs_forward = round2(safeDimerAnyTm(probe.sequence, pair.forward.sequence, opts.ctMolar));
+			      probe.dimer_tm_vs_reverse = round2(safeDimerAnyTm(probe.sequence, pair.reverse.sequence, opts.ctMolar));
+			      if (Math.max(probe.dimer_tm_vs_forward, probe.dimer_tm_vs_reverse) > 47) {
+			        probe.notes = [...probe.notes, 'probe forms a stable dimer with a primer (Tm > 47 °C) — prefer another probe'];
+			      }
+			      assays.push({
+			        forward: pair.forward,
+			        reverse: pair.reverse,
+			        amplicon: pair.amplicon,
+			        probe,
+			        pair_penalty: pair.penalty,
+			        assay_penalty: round2(pair.penalty + probe.penalty),
+			      });
+			    }
+			    if (used.length === 0) {
+			      emptyAmplicons.push(`${pair.amplicon.start}-${pair.amplicon.end}`);
+			    }
+			  }
+			  if (emptyAmplicons.length > 0) {
+			    const shown = emptyAmplicons.slice(0, 5).join(', ');
+			    notes.push(`${emptyAmplicons.length} amplicon(s) yielded no probe inside the Tm/GC/length window (${shown}${emptyAmplicons.length > 5 ? ', …' : ''}) — widen probe_len_min/max, probe_tm_min/max or probe_gc_min/max`);
+			  }
+			  if (pairs.length === 0) {
+			    notes.push('no primer pair satisfied the primer constraints — relax the primer windows (Tm/GC/amplicon) and retry');
+			  }
+			  assays.sort((a, b) => a.assay_penalty - b.assay_penalty || a.amplicon.start - b.amplicon.start);
+			  const best = [];
+			  const seenAmplicons = new Set();
+			  for (const assay of assays) {
+			    const key = `${assay.amplicon.start}:${assay.amplicon.end}`;
+			    if (!seenAmplicons.has(key)) {
+			      if (seenAmplicons.size >= opts.maxAmplicons) continue;
+			      seenAmplicons.add(key);
+			    }
+			    best.push(assay);
+			  }
+			  return {
+			    assays: best,
+			    conditions,
+			    primer_options: {
+			      region: [primerOpts.regionStart, primerOpts.regionEnd ?? template.length],
+			      amplicon: [primerOpts.ampliconMin, primerOpts.ampliconMax],
+			      tm: [primerOpts.tmMin, primerOpts.tmMax],
+			      gc: [primerOpts.gcMin, primerOpts.gcMax],
+			    },
+			    probe_options: {
+			      length: [opts.probeLenMin, opts.probeLenMax],
+			      tm: [opts.probeTmMin, opts.probeTmMax],
+			      gc: [opts.probeGcMin, opts.probeGcMax],
+			      min_tm_delta_vs_primer: opts.minTmDelta,
+			    },
+			    notes,
+			  };
+			}
+
+			/**
+			 * The primer-engine option names (camelCase, as `designPrimers` takes them) for
+			 * the snake_case keys this module's callers pass in `primer_options`. Without
+			 * this map a mistyped option would silently fall back to a default instead of
+			 * being validated — 0.9.0 shipped that bug for one test run, which is why the
+			 * mapping is explicit here rather than a convention.
+			 */
+			const PRIMER_OPTION_KEYS = {
+			  region_start: 'regionStart',
+			  region_end: 'regionEnd',
+			  primer_len_min: 'lenMin',
+			  primer_len_max: 'lenMax',
+			  tm_min: 'tmMin',
+			  tm_max: 'tmMax',
+			  gc_min: 'gcMin',
+			  gc_max: 'gcMax',
+			  amplicon_min: 'ampliconMin',
+			  amplicon_max: 'ampliconMax',
+			  gc_clamp: 'gcClamp',
+			  max_run: 'maxRun',
+			  max_self_any: 'maxSelfAny',
+			  max_self_end: 'maxSelfEnd',
+			  max_hairpin_tm: 'maxHairpinTm',
+			  max_dimer_tm: 'maxDimerTm',
+			  max_dimer_end_tm: 'maxDimerEndTm',
+			  max_end_stability: 'maxEndStability',
+			  max_end_gc: 'maxEndGc',
+			  max_tm_delta: 'maxTmDelta',
+			  max_mismatches: 'maxMismatches',
+			  max_3prime_mismatches: 'max3PrimeMismatches',
+			  mismatch_3prime_zone: 'mismatch3PrimeZone',
+			  check_mispriming: 'checkMispriming',
+			  mispriming_3prime_bases: 'mispriming3PrimeBases',
+			  mispriming_max_mismatches: 'misprimingMaxMismatches',
+			  mispriming_max_sites: 'misprimingMaxSites',
+			  max_results: 'maxResults',
+			  na_mm: 'naMm',
+			  mg_mm: 'mgMm',
+			  dntp_mm: 'dntpMm',
+			  primer_nm: 'primerNm',
+			  target_position: 'targetPosition',
+			  target_penalty: 'targetPenalty',
+			};
+
+			/** Translate snake_case `primer_options` into the engine's camelCase options. */
+			function primerEngineOptions(raw = {}) {
+			  const translated = {};
+			  for (const [key, value] of Object.entries(raw)) {
+			    if (value === undefined || value === null) continue;
+			    const engineKey = PRIMER_OPTION_KEYS[key];
+			    if (engineKey === undefined) {
+			      throw new MolbioInputError(`primer_options has an unknown option ${JSON.stringify(key)}; known: ${Object.keys(PRIMER_OPTION_KEYS).join(', ')}`);
+			    }
+			    translated[engineKey] = value;
+			  }
+			  return translated;
+			}
+
+			/**
+			 * Validate the probe option ranges the tool accepts. The nested primer options
+			 * are translated to the engine's own option names and validated by
+			 * `resolveDesignOptions`, so both halves of an assay are checked by the code
+			 * that will run them.
+			 */
+			function resolveProbeOptions(raw = {}) {
+			  const opts = { ...PROBE_DEFAULTS };
+			  for (const [key, value] of Object.entries(raw)) {
+			    if (value !== undefined && value !== null && key !== 'primer_options') opts[key] = value;
+			  }
+			  if (!Number.isInteger(opts.probeLenMin) || opts.probeLenMin < 12) throw new MolbioInputError('probe_len_min must be an integer >= 12');
+			  if (!Number.isInteger(opts.probeLenMax) || opts.probeLenMax > 40 || opts.probeLenMax < opts.probeLenMin) throw new MolbioInputError('probe_len_max must be an integer between probe_len_min and 40');
+			  if (!(opts.probeTmMin < opts.probeTmMax)) throw new MolbioInputError('probe_tm_min must be lower than probe_tm_max');
+			  if (!(opts.probeGcMin < opts.probeGcMax)) throw new MolbioInputError('probe_gc_min must be lower than probe_gc_max');
+			  if (!(typeof opts.minTmDelta === 'number' && opts.minTmDelta >= 0)) throw new MolbioInputError('min_tm_delta must be a non-negative number (°C)');
+			  if (!Number.isInteger(opts.maxRun) || opts.maxRun < 2 || opts.maxRun > 8) throw new MolbioInputError('probe_max_run must be an integer between 2 and 8');
+			  if (!(typeof opts.maxSelfAny === 'number' && opts.maxSelfAny >= 0)) throw new MolbioInputError('probe_max_self_any must be a non-negative number');
+			  if (!Number.isInteger(opts.minDistanceFromPrimer) || opts.minDistanceFromPrimer < 0 || opts.minDistanceFromPrimer > 12) throw new MolbioInputError('probe_min_distance_from_primer must be an integer between 0 and 12 (bp the probe keeps clear of each primer)');
+			  if (!Number.isInteger(opts.maxProbesPerAmplicon) || opts.maxProbesPerAmplicon < 1 || opts.maxProbesPerAmplicon > 10) throw new MolbioInputError('max_probes_per_amplicon must be an integer between 1 and 10');
+			  if (!Number.isInteger(opts.maxAmplicons) || opts.maxAmplicons < 1 || opts.maxAmplicons > 50) throw new MolbioInputError('max_amplicons must be an integer between 1 and 50');
+			  // Reuse the primer engine's own validation for the nested primer options.
+			  resolveDesignOptions(primerEngineOptions(raw.primer_options ?? {}));
+			  return opts;
+			}
+
+			exports.PROBE_DEFAULTS = PROBE_DEFAULTS;
+			exports.evaluateProbe = evaluateProbe;
+			exports.probeCandidates = probeCandidates;
+			exports.designTaqmanProbes = designTaqmanProbes;
+			exports.primerEngineOptions = primerEngineOptions;
+			exports.resolveProbeOptions = resolveProbeOptions;
+			return exports;
+		};
+		__molbio_modules["multiplex.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/multiplex.mjs
+			 *
+			 * Multiplex PCR compatibility checking: given several amplicons designed on the
+			 * same template (each a named primer pair), report the interactions that make a
+			 * multiplex fail — primer cross-dimers between different targets, primers that
+			 * anneal at an unintended site (in their own or another target's template), and
+			 * amplicons that are too close in size to be told apart on a gel.
+			 *
+			 * Everything reuses the v12 thermodynamics (`lib.mjs`): dimer Tm and hairpin Tm
+			 * are the same Primer3-aligned NN folding temperatures the single-target primer
+			 * designer uses, so a number here means the same thing it means there.
+			 *
+			 * All values are ESTIMATES for ranking and triage; a real multiplex still has to
+			 * be optimized at the bench.
+			 */
+
+			const { MolbioInputError, DNA_BASES, dimerThermo, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore, selfEndScore } = __molbio_require("lib.mjs");
+			/** Bounds for the multiplex checker. */
+			const MULTIPLEX_DEFAULTS = {
+			  maxTargets: 30,
+			  maxSequenceLength: 50000,
+			  /** Dimer Tm at which a primer pair interaction is reported as conflicting. */
+			  dimerTmThreshold: 47,
+			  /** Amplicon size difference below which two bands are called indistinguishable. */
+			  minSizeSeparationBp: 20,
+			  /** Amplicon size difference below which two bands are called close. */
+			  warnSizeSeparationBp: 40,
+			  /** Length of the 3' tail checked for unintended annealing. */
+			  mispriming3PrimeBases: 8,
+			  misprimingMaxMismatches: 1,
+			  /** Sites reported per primer (the count is always complete). */
+			  maxSitesReported: 6,
+			  /** Concentration used for folding Tm (nM primer -> molar). */
+			  primerNm: 200,
+			};
+
+			const round2 = (value) => Math.round(value * 100) / 100;
+
+			function safeSelfAny(seq) {
+			  try {
+			    return selfAnyScore(seq);
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			function safeSelfEnd(seq) {
+			  try {
+			    return selfEndScore(seq);
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			function safeHairpinTm(seq, ctMolar) {
+			  try {
+			    const hairpins = hairpinThermo(seq, ctMolar);
+			    return hairpins.length === 0 ? 0 : hairpins[0].tm;
+			  } catch {
+			    return 0;
+			  }
+			}
+
+			function safeDimerThermo(a, b, ctMolar) {
+			  try {
+			    return dimerThermo(a, b, ctMolar);
+			  } catch {
+			    return { any_tm: 0, end_tm: 0 };
+			  }
+			}
+
+			/**
+			 * Build a k-mer index over one template for the 3'-tail annealing check.
+			 * Canonical k-mers only (an ambiguous template base disqualifies its windows,
+			 * which is the honest reading: an ambiguous base may or may not pair).
+			 */
+			function buildKmerIndex(seq, k) {
+			  const index = new Map();
+			  for (let start = 0; start + k <= seq.length; start++) {
+			    const key = seq.slice(start, start + k);
+			    if (![...key].every((base) => DNA_BASES.has(base))) continue;
+			    const list = index.get(key);
+			    if (list === undefined) index.set(key, [start]);
+			    else list.push(start);
+			  }
+			  return index;
+			}
+
+			/** Every spelling of `tail` within `maxMismatches` substitutions (tail <= 10). */
+			function tailVariants(tail, maxMismatches, limit = 400) {
+			  const bases = ['A', 'C', 'G', 'T'];
+			  const out = [tail];
+			  if (maxMismatches >= 1) {
+			    for (let i = 0; i < tail.length; i++) {
+			      for (const base of bases) {
+			        if (base !== tail[i]) out.push(tail.slice(0, i) + base + tail.slice(i + 1));
+			      }
+			    }
+			  }
+			  if (maxMismatches >= 2) {
+			    for (let i = 0; i < tail.length; i++) {
+			      for (let j = i + 1; j < tail.length; j++) {
+			        for (const a of bases) {
+			          if (a === tail[i]) continue;
+			          for (const b of bases) {
+			            if (b === tail[j]) continue;
+			            out.push(tail.slice(0, i) + a + tail.slice(i + 1, j) + b + tail.slice(j + 1));
+			          }
+			        }
+			      }
+			    }
+			  }
+			  return out.slice(0, limit);
+			}
+
+			/** Hamming distance between equal-length canonical strings. */
+			function hamming(a, b) {
+			  let distance = 0;
+			  for (let i = 0; i < a.length; i++) {
+			    if (a[i] !== b[i]) distance++;
+			  }
+			  return distance;
+			}
+
+			/**
+			 * Sites where `tail` (a primer's 3' end) can anneal on either strand of
+			 * `template`. The caller filters out the primer's own binding site by comparing
+			 * the full primer length at each hit, so no position has to be special-cased
+			 * here.
+			 */
+			function annealSites(tail, template, index, opts) {
+			  const k = tail.length;
+			  const found = new Map();
+			  for (const key of tailVariants(tail, opts.misprimingMaxMismatches)) {
+			    const mismatches = hamming(key, tail);
+			    for (const [lookup, strand] of [[key, 'bottom'], [reverseComplement(key), 'top']]) {
+			      const positions = index.get(lookup);
+			      if (positions === undefined) continue;
+			      for (const position of positions) {
+			        const id = `${strand}:${position}`;
+			        if (found.has(id)) continue;
+			        found.set(id, { strand, position: position + 1, matches: k - mismatches });
+			      }
+			    }
+			  }
+			  return [...found.values()].sort((a, b) => b.matches - a.matches || a.position - b.position);
+			}
+
+			/**
+			 * Check a set of multiplex amplicons for mutual interference.
+			 *
+			 * @param {Array<{name, sequence, forward?, reverse?, forward_tm?, reverse_tm?, amplicon_start?, amplicon_end?}>} targets
+			 *   One entry per amplicon. `sequence` is the template the pair was designed on
+			 *   (each target may have its own, e.g. different genes); `forward`/`reverse`
+			 *   are the primer sequences (5'→3', as ordered).
+			 * @param {object} [rawOptions] overrides for {@link MULTIPLEX_DEFAULTS}.
+			 */
+			function checkMultiplex(rawTargets, rawOptions = {}) {
+			  const opts = { ...MULTIPLEX_DEFAULTS };
+			  for (const [key, value] of Object.entries(rawOptions)) {
+			    if (value !== undefined && value !== null) opts[key] = value;
+			  }
+			  if (!Array.isArray(rawTargets) || rawTargets.length === 0) throw new MolbioInputError('targets must be a non-empty array of {name, sequence, forward, reverse}');
+			  if (rawTargets.length > opts.maxTargets) throw new MolbioInputError(`targets has ${rawTargets.length} entries; the limit is ${opts.maxTargets} per call`);
+			  if (!(opts.dimerTmThreshold > 0)) throw new MolbioInputError('dimer_tm_threshold must be a positive temperature in °C');
+			  if (!Number.isInteger(opts.minSizeSeparationBp) || opts.minSizeSeparationBp < 0) throw new MolbioInputError('min_size_separation_bp must be a non-negative integer');
+
+			  const ctMolar = opts.primerNm * 1e-9;
+			  const targets = rawTargets.map((target, index) => {
+			    const label = target?.name ?? `target${index + 1}`;
+			    if (typeof target?.sequence !== 'string' || target.sequence === '') throw new MolbioInputError(`target ${JSON.stringify(label)} needs a template sequence`);
+			    const template = normalizeSequence(target.sequence, `target ${label} sequence`);
+			    if (template.length > opts.maxSequenceLength) {
+			      throw new MolbioInputError(`target ${JSON.stringify(label)} is ${template.length} bp; the limit is ${opts.maxSequenceLength} bp per target`);
+			    }
+			    const forward = target.forward === undefined ? undefined : normalizeSequence(target.forward, `target ${label} forward primer`);
+			    const reverse = target.reverse === undefined ? undefined : normalizeSequence(target.reverse, `target ${label} reverse primer`);
+			    if ((forward === undefined) !== (reverse === undefined)) {
+			      throw new MolbioInputError(`target ${JSON.stringify(label)} must give both forward and reverse primers, or neither`);
+			    }
+			    return {
+			      name: String(label),
+			      template,
+			      forward,
+			      reverse,
+			      forwardTm: target.forward_tm ?? (forward === undefined ? undefined : primerTm(forward, { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: opts.primerNm }).tm_celsius),
+			      reverseTm: target.reverse_tm ?? (reverse === undefined ? undefined : primerTm(reverse, { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: opts.primerNm }).tm_celsius),
+			      ampliconStart: target.amplicon_start,
+			      ampliconEnd: target.amplicon_end,
+			      index,
+			    };
+			  });
+
+			  // Every primer in the panel, tagged with the target it belongs to.
+			  const primers = [];
+			  for (const target of targets) {
+			    if (target.forward === undefined) continue;
+			    for (const [role, sequence] of [['forward', target.forward], ['reverse', target.reverse]]) {
+			      primers.push({
+			        target: target.name,
+			        targetIndex: target.index,
+			        role,
+			        sequence,
+			        tm: round2(role === 'forward' ? target.forwardTm : target.reverseTm),
+			        gc_percent: round2(([...sequence].filter((base) => base === 'G' || base === 'C').length / sequence.length) * 100),
+			        hairpin_tm: round2(safeHairpinTm(sequence, ctMolar)),
+			        self_any: safeSelfAny(sequence),
+			        self_end: safeSelfEnd(sequence),
+			        runs: findRuns(sequence, 4).length,
+			      });
+			    }
+			  }
+
+			  // Cross interactions: every primer pair that is not the same primer. Within a
+			  // target, forward+reverse is the intended pair (its dimer was already checked
+			  // by the designer), so the conflicts are the CROSS-target ones plus each
+			  // primer against the other target's primers.
+			  const interactions = [];
+			  for (let i = 0; i < primers.length; i++) {
+			    for (let j = i + 1; j < primers.length; j++) {
+			      const a = primers[i];
+			      const b = primers[j];
+			      const intraTarget = a.targetIndex === b.targetIndex;
+			      const intendedPair = intraTarget && a.role !== b.role;
+			      const dimer = safeDimerThermo(a.sequence, b.sequence, ctMolar);
+			      const conflicting = dimer.any_tm > opts.dimerTmThreshold || dimer.end_tm > opts.dimerTmThreshold;
+			      if (!conflicting && intendedPair) continue; // a benign intended pair is noise
+			      interactions.push({
+			        a: `${a.target}/${a.role}`,
+			        b: `${b.target}/${b.role}`,
+			        cross_target: !intraTarget,
+			        any_tm: round2(dimer.any_tm),
+			        end_tm: round2(dimer.end_tm),
+			        conflict: conflicting,
+			      });
+			    }
+			  }
+			  interactions.sort((x, y) => y.end_tm - x.end_tm || y.any_tm - x.any_tm);
+
+			  // Unintended annealing, split by what it means:
+			  //   - own template: a site in the primer's own template that is not its
+			  //     intended binding site (it will amplify the wrong product there);
+			  //   - other templates: the same 3' tail present in ANOTHER target's template
+			  //     (the classic multiplex cross-reaction).
+			  // Targets that share a template sequence are one template — otherwise every
+			  // primer would "cross-react" with its own amplicon listed under another name.
+			  const ownIndexes = targets.map((target) => buildKmerIndex(target.template, opts.mispriming3PrimeBases));
+			  const distinctTemplates = [];
+			  const templateIndexBySequence = new Map();
+			  for (const target of targets) {
+			    if (!templateIndexBySequence.has(target.template)) {
+			      templateIndexBySequence.set(target.template, distinctTemplates.length);
+			      distinctTemplates.push({ sequence: target.template, index: buildKmerIndex(target.template, opts.mispriming3PrimeBases) });
+			    }
+			  }
+			  const ownTemplateId = (target) => templateIndexBySequence.get(target.template);
+			  const isOwnSite = (site, target, primer) => {
+			    const start = site.position - 1;
+			    const window = target.template.slice(start, start + primer.sequence.length);
+			    const onStrand = site.strand === 'top' ? window : reverseComplement(window);
+			    return onStrand === primer.sequence;
+			  };
+			  const mispriming = [];
+			  for (const primer of primers) {
+			    const tail = primer.sequence.slice(-opts.mispriming3PrimeBases);
+			    const own = targets[primer.targetIndex];
+			    const ownSites = annealSites(tail, own.template, ownIndexes[primer.targetIndex], opts).filter((site) => !isOwnSite(site, own, primer));
+			    if (ownSites.length > 0) {
+			      mispriming.push({
+			        primer: `${primer.target}/${primer.role}`,
+			        scope: 'own_template',
+			        target: own.name,
+			        count: ownSites.length,
+			        perfect_count: ownSites.filter((site) => site.matches === opts.mispriming3PrimeBases).length,
+			        sites: ownSites.slice(0, opts.maxSitesReported),
+			      });
+			    }
+			    // Cross-template: only a perfect 3'-tail match counts, which is what makes a
+			    // primer actually extend on the wrong template.
+			    const perTemplate = [];
+			    for (const [templateId, template] of distinctTemplates.entries()) {
+			      if (templateId === ownTemplateId(own)) continue;
+			      const sites = annealSites(tail, template.sequence, template.index, { ...opts, misprimingMaxMismatches: 0 });
+			      if (sites.length === 0) continue;
+			      perTemplate.push({ template: templateId + 1, positions: sites.slice(0, opts.maxSitesReported).map((site) => site.position), count: sites.length });
+			    }
+			    if (perTemplate.length > 0) {
+			      mispriming.push({
+			        primer: `${primer.target}/${primer.role}`,
+			        scope: 'other_templates',
+			        target: own.name,
+			        count: perTemplate.reduce((sum, entry) => sum + entry.count, 0),
+			        perfect_count: perTemplate.reduce((sum, entry) => sum + entry.count, 0),
+			        templates: perTemplate,
+			        sites: [],
+			      });
+			    }
+			  }
+			  mispriming.sort((x, y) => Number(y.scope === 'other_templates') - Number(x.scope === 'other_templates') || y.count - x.count);
+
+			  // Amplicon sizes: from explicit coordinates when given, otherwise the size is
+			  // simply absent (an unknown length must not travel as `undefined`, which is
+			  // not lossless JSON).
+			  const sizes = targets.map((target) => {
+			    const known = target.ampliconStart !== undefined && target.ampliconEnd !== undefined;
+			    return {
+			      name: target.name,
+			      ...known ? { start: target.ampliconStart, end: target.ampliconEnd, length: target.ampliconEnd - target.ampliconStart + 1 } : {},
+			    };
+			  });
+			  const sizeConflicts = [];
+			  for (let i = 0; i < sizes.length; i++) {
+			    for (let j = i + 1; j < sizes.length; j++) {
+			      const a = sizes[i];
+			      const b = sizes[j];
+			      if (a.length === undefined || b.length === undefined) continue;
+			      const difference = Math.abs(a.length - b.length);
+			      if (difference > opts.warnSizeSeparationBp) continue;
+			      sizeConflicts.push({
+			        a: a.name,
+			        b: b.name,
+			        a_length: a.length,
+			        b_length: b.length,
+			        difference_bp: difference,
+			        severity: difference < opts.minSizeSeparationBp ? 'indistinguishable' : 'close',
+			      });
+			    }
+			  }
+			  sizeConflicts.sort((x, y) => x.difference_bp - y.difference_bp);
+
+			  const blockingInteractions = interactions.filter((entry) => entry.conflict && entry.cross_target);
+			  const blockingMispriming = mispriming.filter((entry) => entry.scope === 'other_templates');
+			  const blockingSizes = sizeConflicts.filter((entry) => entry.severity === 'indistinguishable');
+
+			  const advice = [];
+			  for (const entry of blockingInteractions.slice(0, 5)) {
+			    advice.push(`redesign ${entry.a} or ${entry.b}: their 3'-anchored dimer Tm is ${entry.end_tm} °C (threshold ${opts.dimerTmThreshold})`);
+			  }
+			  for (const entry of blockingMispriming.slice(0, 5)) {
+			    const templates = entry.templates.map((template) => `template ${template.template} (${template.positions.join(', ')})`).join('; ');
+			    advice.push(`${entry.primer} also matches ${entry.count} site(s) in another panel template: ${templates} — that primer can amplify the wrong target`);
+			  }
+			  for (const entry of blockingSizes.slice(0, 5)) {
+			    advice.push(`${entry.a} (${entry.a_length} bp) and ${entry.b} (${entry.b_length} bp) differ by only ${entry.difference_bp} bp — not resolvable on a standard gel`);
+			  }
+
+			  return {
+			    compatible: blockingInteractions.length === 0 && blockingMispriming.length === 0 && blockingSizes.length === 0,
+			    target_count: targets.length,
+			    template_count: distinctTemplates.length,
+			    primer_count: primers.length,
+			    // Drop the internal template index: it is an implementation detail of the
+			    // cross-template search, not part of the report.
+			    primers: primers.map(({ targetIndex, ...primer }) => primer),
+			    interactions,
+			    conflicting_interactions: interactions.filter((entry) => entry.conflict).length,
+			    cross_target_conflicts: blockingInteractions.length,
+			    mispriming,
+			    cross_template_mispriming: blockingMispriming.length,
+			    amplicons: sizes,
+			    size_conflicts: sizeConflicts,
+			    advice,
+			    notes: [
+			      'Dimer/hairpin Tms are the same SantaLucia-1998 nearest-neighbour estimates the primer designer uses; they rank risk, they do not predict a multiplex outcome.',
+			      'Cross-template annealing is searched with a perfect 3\' tail only; own-template mispriming allows the configured mismatch tolerance.',
+			      'A panel that passes this check can still fail on the bench: template competition, unequal primer efficiencies and amplicon secondary structure are not modelled here.',
+			    ],
+			  };
+			}
+
+			exports.MULTIPLEX_DEFAULTS = MULTIPLEX_DEFAULTS;
+			exports.checkMultiplex = checkMultiplex;
+			return exports;
+		};
+		__molbio_modules["protein.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/protein.mjs
+			 *
+			 * Protein tools: physicochemical properties (MW, pI, extinction coefficient,
+			 * GRAVY, aliphatic index), in silico protease digestion for mass spectrometry,
+			 * and host-aware codon optimization. All values are ESTIMATES computed with
+			 * published parameters (Bjellqvist 1993 pK values, Kyte-Doolittle
+			 * hydropathy, Ikai 1980 aliphatic index, monoisotopic residue masses).
+			 */
+
+			const { MolbioInputError } = __molbio_require("lib.mjs");
+			const AA_SET = new Set('ACDEFGHIKLMNPQRSTVWY');
+
+			function normalizeProtein(raw, label = 'protein') {
+			  if (typeof raw !== 'string') throw new MolbioInputError(`${label} must be a string`);
+			  const seq = raw.toUpperCase().replace(/[\s\d*._-]/g, '');
+			  if (seq.length === 0) throw new MolbioInputError(`${label} contains no amino acids`);
+			  for (const aa of seq) {
+			    if (!AA_SET.has(aa)) throw new MolbioInputError(`${label} contains invalid character ${JSON.stringify(aa)}; expected one-letter amino acid codes`);
+			  }
+			  return seq;
+			}
+
+			// ── physicochemical properties ──────────────────────────────────────────────
+
+			const RESIDUE_MASS = {
+			  A: 71.08, R: 156.19, N: 114.10, D: 115.09, C: 103.14, E: 129.12,
+			  Q: 128.13, G: 57.05, H: 137.14, I: 113.16, L: 113.16, K: 128.17,
+			  M: 131.19, F: 147.18, P: 97.12, S: 87.08, T: 101.10, W: 186.21,
+			  Y: 163.18, V: 99.13,
+			};
+			const WATER = 18.015;
+
+			// Bjellqvist 1993 pK values (EMBOSS-style)
+			const PK = {
+			  Nterm: 8.6, Cterm: 3.6, C: 9.0, D: 4.05, E: 4.45, H: 6.04,
+			  K: 10.8, R: 12.0, Y: 10.3,
+			};
+
+			const HYDROPATHY = {
+			  A: 1.8, R: -4.5, N: -3.5, D: -3.5, C: 2.5, Q: -3.5, E: -3.5,
+			  G: -0.4, H: -3.2, I: 4.5, L: 3.8, K: -3.9, M: 1.9, F: 2.8,
+			  P: -1.6, S: -0.8, T: -0.7, W: -0.9, Y: -1.3, V: 4.2,
+			};
+
+			function countAminoAcids(seq) {
+			  const counts = {};
+			  for (const aa of seq) counts[aa] = (counts[aa] ?? 0) + 1;
+			  return counts;
+			}
+
+			function chargeAt(seq, counts, pH) {
+			  let charge = 0;
+			  const pos = (pKa) => 1 / (1 + Math.pow(10, pH - pKa));
+			  const neg = (pKa) => 1 / (1 + Math.pow(10, pKa - pH));
+			  charge += pos(PK.Nterm);
+			  for (const [aa, pKa] of [['K', PK.K], ['R', PK.R], ['H', PK.H]]) {
+			    if (counts[aa] !== undefined) charge += counts[aa] * pos(pKa);
+			  }
+			  charge -= neg(PK.Cterm);
+			  for (const [aa, pKa] of [['D', PK.D], ['E', PK.E], ['C', PK.C], ['Y', PK.Y]]) {
+			    if (counts[aa] !== undefined) charge -= counts[aa] * neg(pKa);
+			  }
+			  return charge;
+			}
+
+			/** Isoelectric point by bisection over the net-charge function. */
+			function isoelectricPoint(seq, counts) {
+			  let lo = 0;
+			  let hi = 14;
+			  let chargeLo = chargeAt(seq, counts, lo);
+			  let chargeHi = chargeAt(seq, counts, hi);
+			  for (let i = 0; i < 60; i++) {
+			    const mid = (lo + hi) / 2;
+			    const chargeMid = chargeAt(seq, counts, mid);
+			    if (Math.abs(chargeMid) < 1e-4) return Math.round(mid * 100) / 100;
+			    if (Math.sign(chargeMid) === Math.sign(chargeLo)) {
+			      lo = mid;
+			      chargeLo = chargeMid;
+			    } else {
+			      hi = mid;
+			      chargeHi = chargeMid;
+			    }
+			  }
+			  return Math.round(((lo + hi) / 2) * 100) / 100;
+			}
+
+			/** Protein physicochemical properties (estimates). */
+			function proteinProperties(raw) {
+			  const seq = normalizeProtein(raw);
+			  const counts = countAminoAcids(seq);
+			  let mw = WATER;
+			  for (const aa of seq) mw += RESIDUE_MASS[aa];
+			  const pi = isoelectricPoint(seq, counts);
+			  const w = counts.W ?? 0;
+			  const y = counts.Y ?? 0;
+			  const c = counts.C ?? 0;
+			  const extReduced = 5500 * w + 1490 * y;
+			  const extOxidized = extReduced + 125 * Math.floor(c / 2);
+			  let gravy = 0;
+			  for (const aa of seq) gravy += HYDROPATHY[aa];
+			  gravy = seq.length === 0 ? 0 : gravy / seq.length;
+			  const aliphatic = 100 * ((counts.A ?? 0) + 2.9 * (counts.V ?? 0) + 3.9 * (counts.I ?? 0) + 3.9 * (counts.L ?? 0)) / seq.length;
+			  const round4 = (v) => Math.round(v * 10000) / 10000;
+			  const round2 = (v) => Math.round(v * 100) / 100;
+			  return {
+			    length: seq.length,
+			    mw_da: round2(mw),
+			    pi: pi,
+			    extinction_reduced_m1cm1: extReduced,
+			    extinction_oxidized_m1cm1: extOxidized,
+			    absorbance_0_1_percent: round4((extReduced / mw) * 10),
+			    gravy: round4(gravy),
+			    aliphatic_index: round2(aliphatic),
+			  };
+			}
+
+			// ── peptide digestion ───────────────────────────────────────────────────────
+
+			const MONO_MASS = {
+			  A: 71.03711, R: 156.10111, N: 114.04293, D: 115.02694, C: 103.00919,
+			  E: 129.04259, Q: 128.05858, G: 57.02146, H: 137.05891, I: 113.08406,
+			  L: 113.08406, K: 128.09496, M: 131.04049, F: 147.06841, P: 97.05276,
+			  S: 87.03203, T: 101.04768, W: 186.07931, Y: 163.06333, V: 99.06841,
+			};
+			const AVG_MASS = {
+			  A: 71.0788, R: 156.1875, N: 114.1038, D: 115.0886, C: 103.1388,
+			  E: 129.1155, Q: 128.1307, G: 57.0519, H: 137.1411, I: 113.1594,
+			  L: 113.1594, K: 128.1741, M: 131.1926, F: 147.1766, P: 97.1167,
+			  S: 87.0782, T: 101.1051, W: 186.2132, Y: 163.1760, V: 99.1326,
+			};
+			const H_PLUS = 1.00728;
+			const H2O_MASS = 18.01056;
+
+			const PROTEASES = {
+			  trypsin: { after: new Set(['K', 'R']), label: 'trypsin (after K/R, not before P)' },
+			  chymotrypsin: { after: new Set(['F', 'Y', 'W']), label: 'chymotrypsin (after F/Y/W, not before P)' },
+			  lysc: { after: new Set(['K']), label: 'LysC (after K, not before P)' },
+			  gluc: { after: new Set(['E']), label: 'GluC (after E)' },
+			};
+
+			/** In silico protease digestion with missed cleavages and [M+H]+ masses. */
+			function peptideDigest(raw, { enzyme = 'trypsin', missed = 0, massType = 'monoisotopic', minMass, maxMass } = {}) {
+			  const seq = normalizeProtein(raw);
+			  const protease = PROTEASES[enzyme];
+			  if (protease === undefined) throw new MolbioInputError(`unknown protease ${JSON.stringify(enzyme)}; available: ${Object.keys(PROTEASES).join(', ')}`);
+			  if (!Number.isInteger(missed) || missed < 0 || missed > 3) throw new MolbioInputError('missed must be an integer between 0 and 3');
+			  const masses = massType === 'monoisotopic' ? MONO_MASS : massType === 'average' ? AVG_MASS : undefined;
+			  if (masses === undefined) throw new MolbioInputError('mass_type must be "monoisotopic" or "average"');
+
+			  // cut positions: index after which the bond breaks (0-based index of the
+			  // residue the protease cuts after); no cut when the next residue is P.
+			  const cuts = [];
+			  for (let i = 0; i < seq.length; i++) {
+			    if (!protease.after.has(seq[i])) continue;
+			    if (i + 1 < seq.length && seq[i + 1] === 'P') continue;
+			    cuts.push(i);
+			  }
+
+			  // base peptides (0 missed cleavages): bounds are the 0-based indices of the
+			  // last residue of each peptide; a cut after the final residue adds nothing.
+			  const bounds = [-1, ...cuts];
+			  if (bounds[bounds.length - 1] !== seq.length - 1) bounds.push(seq.length - 1);
+			  const bases = [];
+			  for (let i = 0; i + 1 < bounds.length; i++) {
+			    const start = bounds[i] + 1;
+			    const end = bounds[i + 1];
+			    if (start > end) continue;
+			    bases.push({ start: start + 1, end: end + 1, sequence: seq.slice(start, end + 1), missed: 0 });
+			  }
+
+			  const mhMass = (peptide) => {
+			    let sum = H2O_MASS + H_PLUS;
+			    for (const aa of peptide) sum += masses[aa];
+			    return Math.round(sum * 10000) / 10000;
+			  };
+
+			  const peptides = [];
+			  const seen = new Set();
+			  const push = (start, end, sequence, m) => {
+			    const key = `${start}:${end}`;
+			    if (seen.has(key)) return;
+			    seen.add(key);
+			    const mass = mhMass(sequence);
+			    if (minMass !== undefined && mass < minMass) return;
+			    if (maxMass !== undefined && mass > maxMass) return;
+			    peptides.push({
+			      start,
+			      end,
+			      sequence,
+			      length: sequence.length,
+			      mh_mass: mass,
+			      missed: m,
+			    });
+			  };
+
+			  for (const base of bases) push(base.start, base.end, base.sequence, 0);
+			  for (let m = 1; m <= missed; m++) {
+			    for (let i = 0; i + m < bases.length; i++) {
+			      const merged = bases.slice(i, i + m + 1);
+			      push(
+			        merged[0].start,
+			        merged[merged.length - 1].end,
+			        seq.slice(merged[0].start - 1, merged[merged.length - 1].end),
+			        m,
+			      );
+			    }
+			  }
+			  peptides.sort((a, b) => a.start - b.start || a.end - b.end);
+			  return { enzyme, missed_cleavages: missed, mass_type: massType, peptides };
+			}
+
+			// ── codon optimization ──────────────────────────────────────────────────────
+
+			/** Preferred codons per host (published high-frequency tables; heuristic). */
+			const CODON_USAGE = {
+			  e_coli: {
+			    A: ['GCG', 'GCT', 'GCC'], R: ['CGT', 'CGC', 'CGG'], N: ['AAC', 'AAT'],
+			    D: ['GAC', 'GAT'], C: ['TGC', 'TGT'], Q: ['CAG', 'CAA'], E: ['GAA', 'GAG'],
+			    G: ['GGC', 'GGT', 'GGG'], H: ['CAC', 'CAT'], I: ['ATC', 'ATT'],
+			    L: ['CTG', 'CTC', 'CTT'], K: ['AAA', 'AAG'], M: ['ATG'],
+			    F: ['TTC', 'TTT'], P: ['CCG', 'CCT', 'CCC'], S: ['AGC', 'TCT', 'TCC'],
+			    T: ['ACC', 'ACT', 'ACG'], W: ['TGG'], Y: ['TAC', 'TAT'], V: ['GTG', 'GTT', 'GTC'],
+			  },
+			  yeast: {
+			    A: ['GCT', 'GCC'], R: ['AGA', 'CGT'], N: ['AAC', 'AAT'],
+			    D: ['GAC', 'GAT'], C: ['TGT', 'TGC'], Q: ['CAA', 'CAG'], E: ['GAA', 'GAG'],
+			    G: ['GGT', 'GGC'], H: ['CAC', 'CAT'], I: ['ATC', 'ATT'],
+			    L: ['TTG', 'TTA', 'CTG'], K: ['AAG', 'AAA'], M: ['ATG'],
+			    F: ['TTC', 'TTT'], P: ['CCA', 'CCT'], S: ['TCT', 'TCC', 'AGC'],
+			    T: ['ACT', 'ACC', 'ACA'], W: ['TGG'], Y: ['TAC', 'TAT'], V: ['GTT', 'GTC', 'GTG'],
+			  },
+			  human: {
+			    A: ['GCC', 'GCT'], R: ['CGG', 'CGC', 'AGG'], N: ['AAC', 'AAT'],
+			    D: ['GAC', 'GAT'], C: ['TGC', 'TGT'], Q: ['CAG', 'CAA'], E: ['GAG', 'GAA'],
+			    G: ['GGC', 'GGA', 'GGT'], H: ['CAC', 'CAT'], I: ['ATC', 'ATT'],
+			    L: ['CTG', 'CTC', 'CTT'], K: ['AAG', 'AAA'], M: ['ATG'],
+			    F: ['TTC', 'TTT'], P: ['CCC', 'CCT', 'CCA'], S: ['AGC', 'TCC', 'TCT'],
+			    T: ['ACC', 'ACA', 'ACT'], W: ['TGG'], Y: ['TAC', 'TAT'], V: ['GTG', 'GTC', 'GTT'],
+			  },
+			};
+
+			const CODON_HOSTS = Object.keys(CODON_USAGE);
+
+			/**
+			 * Codon-optimize a protein for a host. Deterministic: the first choice per
+			 * amino acid is the preferred codon; synonymous swaps are used only to remove
+			 * avoided restriction sites (bounded, deterministic).
+			 */
+			function codonOptimize(raw, { host = 'e_coli', avoidEnzymes = [] } = {}) {
+			  const seq = normalizeProtein(raw);
+			  const usage = CODON_USAGE[host];
+			  if (usage === undefined) throw new MolbioInputError(`unknown host ${JSON.stringify(host)}; available: ${CODON_HOSTS.join(', ')}`);
+			  if (!Array.isArray(avoidEnzymes) || avoidEnzymes.length > 20) throw new MolbioInputError('avoid_enzymes must be an array of at most 20 enzyme names');
+
+			  const dna = seq.split('').map((aa) => usage[aa][0]).join('');
+			  const avoidedSites = [];
+			  for (const name of avoidEnzymes) {
+			    const site = avoidSitePattern(name);
+			    for (const start of findSitePositions(dna, site)) {
+			      avoidedSites.push({ enzyme: name, start: start + 1, sequence: dna.slice(start, start + site.length) });
+			    }
+			  }
+
+			  // Synonym swap away from avoided sites: replace the overlapping codons with
+			  // the next alternative and re-scan, bounded passes.
+			  let working = dna;
+			  const notes = [];
+			  if (avoidedSites.length > 0) {
+			    let changed = true;
+			    let guard = 0;
+			    while (changed && guard < 10) {
+			      guard++;
+			      changed = false;
+			      for (const name of avoidEnzymes) {
+			        const site = avoidSitePattern(name);
+			        for (const start of findSitePositions(working, site)) {
+			          const codonStart = Math.floor(start / 3) * 3;
+			          const aaIndex = codonStart / 3;
+			          const aa = seq[aaIndex];
+			          const alternatives = usage[aa];
+			          const current = working.slice(codonStart, codonStart + 3);
+			          const next = alternatives[(alternatives.indexOf(current) + 1) % alternatives.length];
+			          if (next !== undefined && next !== current) {
+			            working = working.slice(0, codonStart) + next + working.slice(codonStart + 3);
+			            changed = true;
+			            notes.push(`${name} site removed by swapping codon ${aaIndex + 1} (${aa}) from ${current} to ${next}`);
+			            break;
+			          }
+			        }
+			        if (changed) break;
+			      }
+			    }
+			  }
+
+			  let remaining = 0;
+			  for (const name of avoidEnzymes) {
+			    remaining += findSitePositions(working, avoidSitePattern(name)).length;
+			  }
+
+			  const { gc, at } = (() => {
+			    let g = 0;
+			    let a = 0;
+			    for (const base of working) {
+			      if (base === 'G' || base === 'C') g++;
+			      else a++;
+			    }
+			    return { gc: g, at: a };
+			  })();
+
+			  return {
+			    host,
+			    dna_sequence: working,
+			    length: working.length,
+			    gc_percent: Math.round((gc / (gc + at)) * 1000) / 10,
+			    avoided_sites_remaining: remaining,
+			    notes,
+			  };
+			}
+
+			function avoidSitePattern(name) {
+			  // Avoid-site checks use the built-in enzyme table; unknown names error.
+			  const sites = {
+			    EcoRI: 'GAATTC', HindIII: 'AAGCTT', BamHI: 'GGATCC', XhoI: 'CTCGAG',
+			    XbaI: 'TCTAGA', NotI: 'GCGGCCGC', NcoI: 'CCATGG', NdeI: 'CATATG',
+			    PstI: 'CTGCAG', SacI: 'GAGCTC', SalI: 'GTCGAC', SpeI: 'ACTAGT',
+			    SphI: 'GCATGC', KpnI: 'GGTACC', SmaI: 'CCCGGG', XmaI: 'CCCGGG',
+			    BglII: 'AGATCT', EcoRV: 'GATATC', PvuII: 'CAGCTG', ClaI: 'ATCGAT',
+			    ApaI: 'GGGCCC', NheI: 'GCTAGC', MfeI: 'CAATTG', NsiI: 'ATGCAT',
+			    PacI: 'TTAATTAA', SbfI: 'CCTGCAGG', AscI: 'GGCGCGCC', FseI: 'GGCCGGCC',
+			    AgeI: 'ACCGGT', AvrII: 'CCTAGG', BclI: 'TGATCA', BstEII: 'GGTNACC',
+			    Bsu36I: 'CCTNAGG', DraI: 'TTTAAA', EagI: 'CGGCCG', HpaI: 'GTTAAC',
+			    MluI: 'ACGCGT', NruI: 'TCGCGA', PmeI: 'GTTTAAAC', PmlI: 'CACGTG',
+			    PspOMI: 'GGGCCC', RsrII: 'CGGWCCG', SacII: 'CCGCGG', ScaI: 'AGTACT',
+			    SexAI: 'ACCWGGT', StuI: 'AGGCCT', XmnI: 'GAANNNNTTC',
+			    AatII: 'GACGTC', Acc65I: 'GGTACC', AflII: 'CTTAAG', AseI: 'ATTAAT',
+			    BsrGI: 'TGTACA', BssHII: 'GCGCGC', KasI: 'GGCGCC', MscI: 'TGGCCA',
+			    NaeI: 'GCCGGC', NarI: 'GGCGCC', NgoMIV: 'GCCGGC', PciI: 'ACATGT',
+			    PvuI: 'CGATCG', SnaBI: 'TACGTA', SspI: 'AATATT', SrfI: 'GCCCGGGC',
+			    ZraI: 'GACGTC', HincII: 'GTYRAC', PpuMI: 'RGGWCCY', BsaAI: 'YACGTR',
+			    BsaI: 'GGTCTC', BsmBI: 'CGTCTC', Esp3I: 'CGTCTC', BbsI: 'GAAGAC',
+			    BspQI: 'GCTCTTC', SapI: 'GCTCTTC', LguI: 'GCTCTTC', PaqCI: 'CACCTGC',
+			    AarI: 'CACCTGC', BfuAI: 'ACCTGC', BveI: 'ACCTGC', BtgZI: 'GCGATG',
+			    BsmFI: 'GGGAC', FokI: 'GGATG',
+			  };
+			  if (!Object.hasOwn(sites, name)) {
+			    throw new MolbioInputError(`avoid_enzymes contains an unknown enzyme ${JSON.stringify(name)}; use names from the built-in table (e.g. EcoRI, HindIII, NotI)`);
+			  }
+			  return sites[name];
+			}
+
+			const AMBIGUITY = {
+			  R: 'AG', Y: 'CT', S: 'CG', K: 'GT', M: 'AC', W: 'AT',
+			  B: 'CGT', D: 'AGT', H: 'ACT', V: 'ACG', N: 'ACGT',
+			};
+
+			function findSitePositions(seq, pattern) {
+			  const out = [];
+			  for (let start = 0; start + pattern.length <= seq.length; start++) {
+			    let match = true;
+			    for (let i = 0; i < pattern.length; i++) {
+			      const allowed = AMBIGUITY[pattern[i]] ?? pattern[i];
+			      if (!allowed.includes(seq[start + i])) {
+			        match = false;
+			        break;
+			      }
+			    }
+			    if (match) out.push(start);
+			  }
+			  return out;
+			}
+
+			exports.normalizeProtein = normalizeProtein;
+			exports.isoelectricPoint = isoelectricPoint;
+			exports.proteinProperties = proteinProperties;
+			exports.peptideDigest = peptideDigest;
+			exports.CODON_HOSTS = CODON_HOSTS;
+			exports.codonOptimize = codonOptimize;
+			return exports;
+		};
+		__molbio_modules["protein-structure.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/protein-structure.mjs
+			 *
+			 * Protein sequence features that are read as PICTURES in every cloning/expression
+			 * notebook, computed here so the model never has to draw them by hand:
+			 *
+			 *   - the helical wheel (Schiffer-Edmundson projection) with the Eisenberg
+			 *     hydrophobic-moment analysis that goes with it, and
+			 *   - the Kyte-Doolittle hydropathy plot, with the classic 1.6 window-average
+			 *     threshold used to flag candidate membrane-spanning stretches.
+			 *
+			 * All values are ESTIMATES from published scales (Kyte & Doolittle 1982,
+			 * Eisenberg et al. 1984). They describe sequence propensity, not structure.
+			 */
+
+			const { MolbioInputError } = __molbio_require("lib.mjs");
+			const { normalizeProtein } = __molbio_require("protein.mjs");
+			/** Kyte-Doolittle hydropathy scale (same numbers protein.mjs uses for GRAVY). */
+			const KYTE_DOOLITTLE = {
+			  A: 1.8, R: -4.5, N: -3.5, D: -3.5, C: 2.5, Q: -3.5, E: -3.5, G: -0.4,
+			  H: -3.2, I: 4.5, L: 3.8, K: -3.9, M: 1.9, F: 2.8, P: -1.6, S: -0.8,
+			  T: -0.7, W: -0.9, Y: -1.3, V: 4.2,
+			};
+
+			/** Eisenberg consensus hydrophobicity scale (used for the hydrophobic moment). */
+			const EISENBERG = {
+			  A: 0.62, R: -2.53, N: -0.78, D: -0.90, C: 0.29, Q: -0.85, E: -0.74, G: 0.48,
+			  H: -0.40, I: 1.38, L: 1.06, K: -1.50, M: 0.64, F: 1.19, P: 0.12, S: -0.18,
+			  T: -0.05, W: 0.81, Y: 0.26, V: 1.08,
+			};
+
+			/** Residue classes used for the wheel's colouring and the legend. */
+			const RESIDUE_CLASSES = {
+			  hydrophobic: { label: 'hydrophobic (A V I L M F W Y P G)', color: '#f2c14e' },
+			  polar: { label: 'polar (S T N Q C)', color: '#7fb3d5' },
+			  acidic: { label: 'acidic (D E)', color: '#e07a5f' },
+			  basic: { label: 'basic (K R H)', color: '#81b29a' },
+			};
+
+			const CLASS_OF = {
+			  A: 'hydrophobic', V: 'hydrophobic', I: 'hydrophobic', L: 'hydrophobic', M: 'hydrophobic',
+			  F: 'hydrophobic', W: 'hydrophobic', Y: 'hydrophobic', P: 'hydrophobic', G: 'hydrophobic',
+			  S: 'polar', T: 'polar', N: 'polar', Q: 'polar', C: 'polar',
+			  D: 'acidic', E: 'acidic',
+			  K: 'basic', R: 'basic', H: 'basic',
+			};
+
+			const round2 = (value) => Math.round(value * 100) / 100;
+			const round3 = (value) => Math.round(value * 1000) / 1000;
+
+			function escapeXml(text) {
+			  return String(text)
+			    .replaceAll('&', '&amp;')
+			    .replaceAll('<', '&lt;')
+			    .replaceAll('>', '&gt;')
+			    .replaceAll('"', '&quot;')
+			    .replaceAll("'", '&apos;');
+			}
+
+			/** Residue class of one one-letter code, defaulting to polar for anything odd. */
+			function residueClass(aminoAcid) {
+			  return CLASS_OF[aminoAcid] ?? 'polar';
+			}
+
+			// ── helical wheel ───────────────────────────────────────────────────────────
+
+			/**
+			 * Helical-wheel analysis of a peptide stretch.
+			 *
+			 * Residues are placed on a circle 100° apart (the 3.6-residues-per-turn
+			 * geometry of an ideal α-helix), which is the Schiffer-Edmundson projection:
+			 * an amphipathic helix shows one face hydrophobic and the opposite face polar.
+			 * The hydrophobic moment μH is computed from the Eisenberg consensus scale over
+			 * the whole peptide; its maximum over every window of `moment_window` residues
+			 * (Eisenberg's standard 11-residue window is the default) is reported too.
+			 *
+			 * @param {string} rawSequence peptide, one-letter codes.
+			 * @param {{start?: number, residuesPerTurn?: number, momentWindow?: number, rotations?: number}} [options]
+			 */
+			function helicalWheel(rawSequence, options = {}) {
+			  const sequence = normalizeProtein(rawSequence);
+			  const start = options.start ?? 1;
+			  if (!Number.isInteger(start) || start < 1 || start > sequence.length) {
+			    throw new MolbioInputError(`start must be an integer between 1 and the sequence length (${sequence.length})`);
+			  }
+			  const residuesPerTurn = options.residuesPerTurn ?? 3.6;
+			  if (!(typeof residuesPerTurn === 'number') || residuesPerTurn < 2 || residuesPerTurn > 6) {
+			    throw new MolbioInputError('residues_per_turn must be a number between 2 and 6 (3.6 for an ideal alpha-helix)');
+			  }
+			  const momentWindow = options.momentWindow ?? 11;
+			  if (!Number.isInteger(momentWindow) || momentWindow < 2 || momentWindow > 40) {
+			    throw new MolbioInputError('moment_window must be an integer between 2 and 40');
+			  }
+			  const rotations = options.rotations ?? 4;
+			  if (!Number.isInteger(rotations) || rotations < 1 || rotations > 6) {
+			    throw new MolbioInputError('rotations must be an integer between 1 and 6 (how many turns to draw; 4 covers a 14-residue peptide at 3.6 residues/turn)');
+			  }
+			  const span = Math.min(sequence.length - start + 1, Math.round(residuesPerTurn * rotations));
+			  const window = sequence.slice(start - 1, start - 1 + span);
+			  const turn = 360 / residuesPerTurn;
+
+			  const residues = [...window].map((aminoAcid, index) => {
+			    // Standard wheel convention: residue 1 sits at the top and the helix is
+			    // drawn clockwise (the 100° step is subtracted).
+			    const angle = 90 - index * turn;
+			    const radians = (angle * Math.PI) / 180;
+			    return {
+			      position: start + index,
+			      amino_acid: aminoAcid,
+			      class: residueClass(aminoAcid),
+			      angle_degrees: round2(((angle % 360) + 360) % 360),
+			      x: round3(Math.cos(radians)),
+			      y: round3(-Math.sin(radians)),
+			      hydropathy: KYTE_DOOLITTLE[aminoAcid],
+			      hydrophobicity: EISENBERG[aminoAcid],
+			    };
+			  });
+
+			  // Hydrophobic moment of the whole stretch and of each sliding window.
+			  const momentOf = (slice) => {
+			    let sin = 0;
+			    let cos = 0;
+			    for (let i = 0; i < slice.length; i++) {
+			      const theta = (i * 100 * Math.PI) / 180;
+			      const h = EISENBERG[slice[i]];
+			      sin += h * Math.sin(theta);
+			      cos += h * Math.cos(theta);
+			    }
+			    return Math.sqrt(sin * sin + cos * cos) / slice.length;
+			  };
+			  const moment = momentOf(window);
+			  let bestMoment = moment;
+			  let bestWindowStart = start;
+			  if (window.length >= momentWindow) {
+			    for (let i = 0; i + momentWindow <= window.length; i++) {
+			      const candidate = momentOf(window.slice(i, i + momentWindow));
+			      if (candidate > bestMoment) {
+			        bestMoment = candidate;
+			        bestWindowStart = start + i;
+			      }
+			    }
+			  }
+
+			  const classCounts = {};
+			  for (const residue of residues) classCounts[residue.class] = (classCounts[residue.class] ?? 0) + 1;
+			  const hydrophobicFraction = round3((classCounts.hydrophobic ?? 0) / residues.length);
+			  const notes = [];
+			  if (residues.length < Math.round(residuesPerTurn)) {
+			    notes.push(`only ${residues.length} residue(s) shown (${rotations} turn(s) at ${residuesPerTurn}/turn) — a wheel needs at least one full turn to show a face`);
+			  }
+			  if (bestMoment >= 0.5) notes.push(`hydrophobic moment ${round3(bestMoment)} over ${momentWindow} residues is high — candidate amphipathic helix`);
+			  if (hydrophobicFraction >= 0.6 && bestMoment < 0.3) notes.push('one face is very hydrophobic without a strong moment — candidate transmembrane or signal segment');
+
+			  return {
+			    sequence,
+			    start,
+			    end: start + residues.length - 1,
+			    window,
+			    residues_shown: residues.length,
+			    residues_per_turn: residuesPerTurn,
+			    degrees_per_residue: round2(turn),
+			    moment_window: momentWindow,
+			    hydrophobic_moment: round3(moment),
+			    mean_hydrophobicity: round3(window.split('').reduce((sum, aa) => sum + EISENBERG[aa], 0) / window.length),
+			    maximum_window_moment: round3(bestMoment),
+			    maximum_window_start: bestWindowStart,
+			    hydrophobic_fraction: hydrophobicFraction,
+			    class_counts: classCounts,
+			    residues,
+			    notes,
+			  };
+			}
+
+			/** Vertical extent of the wheel drawing (unit circle -> pixels). */
+			const WHEEL_SIZE = 520;
+			const WHEEL_RADIUS = 190;
+			const RESIDUE_RADIUS = 17;
+
+			/**
+			 * Draw a {@link helicalWheel} result as a standalone SVG.
+			 *
+			 * The letters are placed with an absolute font size and a `textLength`, so a
+			 * glyph can never overflow its residue circle (the logo renderer learned this
+			 * the hard way — see CHANGELOG 0.6.0).
+			 */
+			function renderHelicalWheel(wheel, { title = 'Helical wheel' } = {}) {
+			  const center = WHEEL_SIZE / 2;
+			  const parts = [];
+			  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHEEL_SIZE} ${WHEEL_SIZE}" font-family="system-ui, sans-serif" role="img">`);
+			  parts.push(`<title>${escapeXml(`${title}: residues ${wheel.start}-${wheel.end}, hydrophobic moment ${wheel.hydrophobic_moment}`)}</title>`);
+			  parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
+			  parts.push(`<text x="${center}" y="26" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);
+			  parts.push(`<text x="${center}" y="46" font-size="11" fill="#57606a" text-anchor="middle">${escapeXml(`residues ${wheel.start}-${wheel.end} · ${wheel.degrees_per_residue}°/residue · μH ${wheel.hydrophobic_moment} (max ${wheel.maximum_window_moment} @ ${wheel.maximum_window_start})`)}</text>`);
+			  // back circle + the hydrophobic face wedge is implied by the residue colours
+			  parts.push(`<circle cx="${center}" cy="${center}" r="${WHEEL_RADIUS}" fill="none" stroke="#d0d7de" stroke-width="1.5"/>`);
+			  parts.push(`<line x1="${center - WHEEL_RADIUS}" y1="${center}" x2="${center + WHEEL_RADIUS}" y2="${center}" stroke="#eaeef2" stroke-width="1"/>`);
+			  parts.push(`<line x1="${center}" y1="${center - WHEEL_RADIUS}" x2="${center}" y2="${center + WHEEL_RADIUS}" stroke="#eaeef2" stroke-width="1"/>`);
+			  // sequence order is the 1..n spiral from the centre outward, as in a printed wheel
+			  for (let index = 0; index < wheel.residues.length; index++) {
+			    const residue = wheel.residues[index];
+			    const x = center + residue.x * WHEEL_RADIUS;
+			    const y = center - residue.y * WHEEL_RADIUS; // SVG y grows downward, the plot y grows upward
+			    const color = RESIDUE_CLASSES[residue.class].color;
+			    parts.push(`<line x1="${center}" y1="${center}" x2="${x.toFixed(2)}" y2="${y.toFixed(2)}" stroke="#eaeef2" stroke-width="1"/>`);
+			    parts.push(`<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${RESIDUE_RADIUS}" fill="${color}" stroke="#1f2328" stroke-width="1"/>`);
+			    parts.push(`<text x="${x.toFixed(2)}" y="${(y + 4).toFixed(2)}" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle" textLength="14" lengthAdjust="spacingAndGlyphs">${escapeXml(residue.amino_acid)}</text>`);
+			    // position label further out along the same radius
+			    const labelX = center + residue.x * (WHEEL_RADIUS + 30);
+			    const labelY = center - residue.y * (WHEEL_RADIUS + 30);
+			    parts.push(`<text x="${labelX.toFixed(2)}" y="${(labelY + 3).toFixed(2)}" font-size="9" fill="#57606a" text-anchor="middle">${residue.position}</text>`);
+			  }
+			  // legend
+			  let legendY = WHEEL_SIZE - 74;
+			  parts.push(`<text x="18" y="${legendY}" font-size="11" font-weight="700" fill="#1f2328">Residue classes</text>`);
+			  legendY += 16;
+			  for (const [key, entry] of Object.entries(RESIDUE_CLASSES)) {
+			    const count = wheel.class_counts[key] ?? 0;
+			    parts.push(`<rect x="18" y="${legendY - 9}" width="11" height="11" rx="2" fill="${entry.color}" stroke="#1f2328" stroke-width="0.8"/>`);
+			    parts.push(`<text x="36" y="${legendY}" font-size="10" fill="#1f2328">${escapeXml(`${entry.label} — ${count} of ${wheel.residues_shown}`)}</text>`);
+			    legendY += 15;
+			  }
+			  parts.push('</svg>');
+			  return parts.join('\n');
+			}
+
+			// ── Kyte-Doolittle hydropathy plot ──────────────────────────────────────────
+
+			/** Classic window sizes: 7-9 for exposed loops, 19-21 for transmembrane spans. */
+			const HYDROPATHY_DEFAULTS = {
+			  window: 9,
+			  threshold: 1.6,
+			  maxSequenceLength: 20000,
+			};
+
+			/** Sliding-window Kyte-Doolittle hydropathy profile (centred windows). */
+			function hydropathyProfile(rawSequence, options = {}) {
+			  const sequence = normalizeProtein(rawSequence);
+			  const window = options.window ?? HYDROPATHY_DEFAULTS.window;
+			  const threshold = options.threshold ?? HYDROPATHY_DEFAULTS.threshold;
+			  if (!Number.isInteger(window) || window < 3 || window > 51) throw new MolbioInputError('window must be an integer between 3 and 51 (an odd number centres the window on a residue)');
+			  if (!(typeof threshold === 'number') || threshold < -4.5 || threshold > 4.5) throw new MolbioInputError('threshold must be a number between -4.5 and 4.5 (the Kyte-Doolittle range)');
+			  if (sequence.length > HYDROPATHY_DEFAULTS.maxSequenceLength) {
+			    throw new MolbioInputError(`the protein is ${sequence.length} residues; the limit is ${HYDROPATHY_DEFAULTS.maxSequenceLength} per plot`);
+			  }
+			  const half = Math.floor(window / 2);
+			  const points = [];
+			  for (let index = 0; index < sequence.length; index++) {
+			    const from = Math.max(0, index - half);
+			    const to = Math.min(sequence.length, index + half + 1);
+			    let sum = 0;
+			    for (let i = from; i < to; i++) sum += KYTE_DOOLITTLE[sequence[i]];
+			    points.push({
+			      position: index + 1,
+			      amino_acid: sequence[index],
+			      hydropathy: round3(sum / (to - from)),
+			      window: [from + 1, to],
+			    });
+			  }
+			  // Peaks: maximal runs whose centred value reaches the threshold.
+			  const peaks = [];
+			  let current = null;
+			  for (const point of points) {
+			    if (point.hydropathy >= threshold) {
+			      if (current === null) current = { start: point.position, end: point.position, maximum: point.hydropathy, maximum_position: point.position };
+			      else {
+			        current.end = point.position;
+			        if (point.hydropathy > current.maximum) {
+			          current.maximum = point.hydropathy;
+			          current.maximum_position = point.position;
+			        }
+			      }
+			    } else if (current !== null) {
+			      peaks.push(current);
+			      current = null;
+			    }
+			  }
+			  if (current !== null) peaks.push(current);
+			  const total = points.reduce((sum, point) => sum + point.hydropathy, 0);
+			  return {
+			    length: sequence.length,
+			    window,
+			    threshold,
+			    gravy: sequence.length === 0 ? 0 : round2([...sequence].reduce((sum, aa) => sum + KYTE_DOOLITTLE[aa], 0) / sequence.length),
+			    mean_profile: round3(total / points.length),
+			    minimum_hydropathy: round3(Math.min(...points.map((point) => point.hydropathy))),
+			    maximum_hydropathy: round3(Math.max(...points.map((point) => point.hydropathy))),
+			    peaks: peaks.map((peak) => ({ ...peak, maximum: round3(peak.maximum), length: peak.end - peak.start + 1 })),
+			    points,
+			  };
+			}
+
+			/** Width/height of the hydropathy chart (one x step per residue, bounded). */
+			const PLOT_WIDTH = 820;
+			const PLOT_HEIGHT = 300;
+			const PLOT_MARGIN = { top: 58, right: 24, bottom: 40, left: 56 };
+
+			/** Draw a {@link hydropathyProfile} result as a standalone SVG line plot. */
+			function renderHydropathyPlot(profile, { title = 'Kyte-Doolittle hydropathy' } = {}) {
+			  const { points, window, threshold, length } = profile;
+			  const plotWidth = PLOT_WIDTH - PLOT_MARGIN.left - PLOT_MARGIN.right;
+			  const plotHeight = PLOT_HEIGHT - PLOT_MARGIN.top - PLOT_MARGIN.bottom;
+			  const min = -4.5;
+			  const max = 4.5;
+			  const xOf = (position) => PLOT_MARGIN.left + (length <= 1 ? plotWidth / 2 : ((position - 1) / (length - 1)) * plotWidth);
+			  const yOf = (value) => PLOT_MARGIN.top + ((max - value) / (max - min)) * plotHeight;
+			  const parts = [];
+			  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}" font-family="system-ui, sans-serif" role="img">`);
+			  parts.push(`<title>${escapeXml(`${title}: ${length} residues, window ${window}, ${profile.peaks.length} peak(s) above ${threshold}`)}</title>`);
+			  parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
+			  parts.push(`<text x="${PLOT_WIDTH / 2}" y="26" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);
+			  parts.push(`<text x="${PLOT_WIDTH / 2}" y="44" font-size="11" fill="#57606a" text-anchor="middle">${escapeXml(`${length} aa · window ${window} · threshold ${threshold} · GRAVY ${profile.gravy} · ${profile.peaks.length} peak(s)`)}</text>`);
+			  // horizontal grid + y ticks
+			  for (let value = min; value <= max + 1e-9; value += 1.5) {
+			    const y = yOf(value);
+			    parts.push(`<line x1="${PLOT_MARGIN.left}" y1="${y.toFixed(2)}" x2="${PLOT_WIDTH - PLOT_MARGIN.right}" y2="${y.toFixed(2)}" stroke="#eaeef2" stroke-width="1"/>`);
+			    parts.push(`<text x="${PLOT_MARGIN.left - 8}" y="${(y + 3).toFixed(2)}" font-size="10" fill="#57606a" text-anchor="end">${value.toFixed(1)}</text>`);
+			  }
+			  parts.push(`<line x1="${PLOT_MARGIN.left}" y1="${yOf(0).toFixed(2)}" x2="${PLOT_WIDTH - PLOT_MARGIN.right}" y2="${yOf(0).toFixed(2)}" stroke="#8c959f" stroke-width="1.2"/>`);
+			  if (threshold <= max) {
+			    parts.push(`<line x1="${PLOT_MARGIN.left}" y1="${yOf(threshold).toFixed(2)}" x2="${PLOT_WIDTH - PLOT_MARGIN.right}" y2="${yOf(threshold).toFixed(2)}" stroke="#e07a5f" stroke-width="1.2" stroke-dasharray="5 4"/>`);
+			    parts.push(`<text x="${PLOT_WIDTH - PLOT_MARGIN.right}" y="${(yOf(threshold) - 5).toFixed(2)}" font-size="10" fill="#e07a5f" text-anchor="end">threshold ${threshold}</text>`);
+			  }
+			  // the profile as a filled area around zero plus the line
+			  const line = points.map((point) => `${xOf(point.position).toFixed(2)},${yOf(point.hydropathy).toFixed(2)}`).join(' ');
+			  const area = `${xOf(1).toFixed(2)},${yOf(0).toFixed(2)} ${line} ${xOf(length).toFixed(2)},${yOf(0).toFixed(2)}`;
+			  parts.push(`<polygon points="${area}" fill="#7fb3d5" fill-opacity="0.35"/>`);
+			  parts.push(`<polyline points="${line}" fill="none" stroke="#2f6690" stroke-width="1.8"/>`);
+			  // peak markers + residue letters above the ticks
+			  for (const peak of profile.peaks) {
+			    const x = xOf(peak.maximum_position);
+			    parts.push(`<circle cx="${x.toFixed(2)}" cy="${yOf(peak.maximum).toFixed(2)}" r="3.2" fill="#e07a5f"/>`);
+			    parts.push(`<text x="${x.toFixed(2)}" y="${(yOf(peak.maximum) - 7).toFixed(2)}" font-size="10" fill="#a4240b" text-anchor="middle">${peak.start}-${peak.end}</text>`);
+			  }
+			  // x ticks every ~10% of the sequence
+			  const step = Math.max(1, Math.round(length / 10));
+			  for (let position = 1; position <= length; position += step) {
+			    const x = xOf(position);
+			    parts.push(`<line x1="${x.toFixed(2)}" y1="${PLOT_HEIGHT - PLOT_MARGIN.bottom}" x2="${x.toFixed(2)}" y2="${PLOT_HEIGHT - PLOT_MARGIN.bottom + 5}" stroke="#1f2328" stroke-width="1"/>`);
+			    parts.push(`<text x="${x.toFixed(2)}" y="${PLOT_HEIGHT - PLOT_MARGIN.bottom + 17}" font-size="10" fill="#57606a" text-anchor="middle">${position}</text>`);
+			  }
+			  parts.push(`<text x="${PLOT_WIDTH / 2}" y="${PLOT_HEIGHT - 6}" font-size="11" fill="#1f2328" text-anchor="middle">residue position</text>`);
+			  parts.push('</svg>');
+			  return parts.join('\n');
+			}
+
+			exports.KYTE_DOOLITTLE = KYTE_DOOLITTLE;
+			exports.EISENBERG = EISENBERG;
+			exports.RESIDUE_CLASSES = RESIDUE_CLASSES;
+			exports.residueClass = residueClass;
+			exports.helicalWheel = helicalWheel;
+			exports.renderHelicalWheel = renderHelicalWheel;
+			exports.HYDROPATHY_DEFAULTS = HYDROPATHY_DEFAULTS;
+			exports.hydropathyProfile = hydropathyProfile;
+			exports.renderHydropathyPlot = renderHydropathyPlot;
+			return exports;
+		};
+		__molbio_modules["methylation.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/methylation.mjs
+			 *
+			 * Methylation-aware restriction analysis and double-digest planning (v17):
+			 *
+			 *   1. which enzymes a Dam/Dcm-methylated template actually blocks — the classic
+			 *      "my digest does not cut and the enzyme is fine" failure, where the DNA was
+			 *      prepared from a dam+/dcm+ E. coli host;
+			 *   2. a double digest with two enzymes, including whether the two share a
+			 *      reaction buffer.
+			 *
+			 * Both parts lean on the reference tables in lib.mjs (METHYLATION_SENSITIVITY,
+			 * ENZYME_BUFFERS). Those tables are a hand-transcribed quick reference — every
+			 * result carries that note, and the numbers must be confirmed against the
+			 * supplier's current table before an experiment depends on them.
+			 */
+
+			const { BUFFER_DATA_NOTE, BUFFERS, ENZYME_NAMES, METHYLATION_DATA_NOTE, METHYLATION_SENSITIVITY, MolbioInputError, doubleDigest, enzymeCuts, enzymePattern, enzymesMissingBufferData, methylationImpact, methylationSites, normalizeSequence, sharedBuffers } = __molbio_require("lib.mjs");
+			/**
+			 * The default enzyme selection: everything in the methylation table that the
+			 * digest table can actually cut with. The methylation literature names enzymes
+			 * the digest table does not carry (AvaII, MboI, EcoRII, PspGI, TaqI, HphI,
+			 * BstNI), and reporting those as "0 sites" would be a lie of omission — they are
+			 * simply out of scope until they are added to the digest table.
+			 */
+			const METHYLATION_ENZYMES = Object.keys(METHYLATION_SENSITIVITY)
+			  .filter((name) => ENZYME_NAMES.includes(name))
+			  .sort();
+
+			/**
+			 * Resolve an enzyme selection: `undefined`/`null` means "the enzymes the
+			 * methylation table knows about" (the question this tool exists to answer),
+			 * `['common']` means every enzyme in the built-in digest table, and anything
+			 * else is validated against that table.
+			 */
+			function resolveEnzymeSelection(enzymes) {
+			  if (enzymes === undefined || enzymes === null || (Array.isArray(enzymes) && enzymes.length === 0)) {
+			    return [...METHYLATION_ENZYMES];
+			  }
+			  if (!Array.isArray(enzymes)) throw new MolbioInputError('enzymes must be an array of enzyme names (or omit it for the methylation-aware set)');
+			  if (enzymes.length === 1 && enzymes[0] === 'common') return [...ENZYME_NAMES];
+			  if (enzymes.length > 60) throw new MolbioInputError(`enzymes has ${enzymes.length} entries; the limit is 60 per call (pass ["common"] for the whole table)`);
+			  for (const name of enzymes) {
+			    if (typeof name !== 'string' || enzymePattern(name) === undefined) {
+			      throw new MolbioInputError(`unknown enzyme ${JSON.stringify(name)}; available: ${ENZYME_NAMES.join(', ')}`);
+			    }
+			  }
+			  return [...new Set(enzymes)];
+			}
+
+			/**
+			 * Report the methylation marks in a sequence and what they do to a digest.
+			 *
+			 * @param {string} rawSequence template sequence.
+			 * @param {{enzymes?: string[], marks?: string[], circular?: boolean}} [rawOptions]
+			 */
+			function analyzeMethylation(rawSequence, rawOptions = {}) {
+			  const sequence = normalizeSequence(rawSequence);
+			  const marks = rawOptions.marks ?? ['dam', 'dcm'];
+			  if (!Array.isArray(marks) || marks.length === 0) throw new MolbioInputError('marks must be a non-empty array containing "dam" and/or "dcm"');
+			  const enabled = resolveEnzymeSelection(rawOptions.enzymes);
+			  const circular = rawOptions.circular === true;
+
+			  const impact = methylationImpact(sequence, enabled, { marks });
+			  const sites = methylationSites(sequence, marks);
+			  const byMark = {};
+			  for (const mark of marks) byMark[mark] = sites.filter((site) => site.mark === mark).length;
+
+			  // Per-enzyme view: does it cut at all, and is any cut blocked/impaired?
+			  const blockedMap = new Map(impact.blocked.map((entry) => [entry.enzyme, entry.marks]));
+			  const impairedMap = new Map(impact.impaired.map((entry) => [entry.enzyme, entry.marks]));
+			  const perEnzyme = enabled.map((name) => {
+			    const cuts = enzymeCuts(sequence, name);
+			    const blocked = blockedMap.get(name);
+			    const impaired = impairedMap.get(name);
+			    const status = blocked !== undefined ? 'blocked' : impaired !== undefined ? 'impaired' : cuts.length === 0 ? 'no_site' : 'cuts';
+			    return {
+			      enzyme: name,
+			      site: enzymePattern(name).display,
+			      sites: cuts.length,
+			      cut_positions: cuts.map((cut) => cut.cut_position + 1),
+			      status,
+			      blocked_by: blocked ?? [],
+			      impaired_by: impaired ?? [],
+			      in_methylation_table: blocked !== undefined || impaired !== undefined || METHYLATION_ENZYMES.includes(name),
+			    };
+			  });
+			  perEnzyme.sort((a, b) => {
+			    const rank = { cuts: 0, impaired: 1, blocked: 2, no_site: 3 };
+			    return rank[a.status] - rank[b.status] || a.enzyme.localeCompare(b.enzyme);
+			  });
+
+			  // The practical question: which enzymes cut this template and are NOT blocked?
+			  const usable = perEnzyme.filter((entry) => entry.status === 'cuts').map((entry) => entry.enzyme);
+			  const risky = perEnzyme.filter((entry) => entry.status === 'blocked' || entry.status === 'impaired').map((entry) => entry.enzyme);
+			  const recommended = perEnzyme
+			    .filter((entry) => entry.status === 'cuts')
+			    .map((entry) => ({
+			      enzyme: entry.enzyme,
+			      cut_positions: entry.cut_positions,
+			      fragments: enzymeFragmentSizes(sequence, entry.enzyme, circular),
+			    }));
+
+			  const advice = [];
+			  const blockedCutting = perEnzyme.filter((entry) => entry.status === 'blocked' && entry.sites > 0);
+			  for (const entry of blockedCutting.slice(0, 8)) {
+			    advice.push(`${entry.enzyme} has ${entry.sites} site(s) but is BLOCKED by ${entry.blocked_by.join('/')} methylation — use a dam-/dcm- host, or choose ${usable.slice(0, 3).join(', ') || 'another enzyme'}`);
+			  }
+			  if (sites.length === 0) advice.push('no Dam/Dcm site was found in this sequence, so methylation-sensitive enzymes are not affected by these marks here');
+			  const perEnzymeBlockedWithoutSite = perEnzyme.filter((entry) => entry.status === 'blocked' && entry.sites === 0).length;
+			  if (perEnzymeBlockedWithoutSite > 0 && blockedCutting.length === 0) {
+			    advice.push(`no enzyme in the selection both cuts this template and is blocked by its methylation (${perEnzymeBlockedWithoutSite} methylation-sensitive enzyme(s) have no site here)`);
+			  }
+
+			  return {
+			    length: sequence.length,
+			    circular,
+			    marks_checked: marks,
+			    methylation_sites: sites,
+			    sites_by_mark: byMark,
+			    enzymes_checked: enabled.length,
+			    blocked: perEnzyme.filter((entry) => entry.status === 'blocked').map((entry) => ({ enzyme: entry.enzyme, by: entry.blocked_by, sites: entry.sites })),
+			    impaired: perEnzyme.filter((entry) => entry.status === 'impaired').map((entry) => ({ enzyme: entry.enzyme, by: entry.impaired_by, sites: entry.sites })),
+			    usable,
+			    risky,
+			    recommended,
+			    per_enzyme: perEnzyme,
+			    advice,
+			    notes: [
+			      METHYLATION_DATA_NOTE,
+			      'Dam (GATC) and Dcm (CCWGG) are the marks a standard E. coli cloning host adds; CpG methylation (mammalian DNA) is not modelled.',
+			      'A site count of 0 with status "no_site" means the enzyme cannot be used on this template at all, independent of methylation.',
+			    ],
+			  };
+			}
+
+			/** Fragment sizes for one enzyme's cut set (linear or circular topology). */
+			function enzymeFragmentSizes(sequence, name, circular) {
+			  const positions = [...new Set(enzymeCuts(sequence, name).map((cut) => cut.cut_position))].sort((a, b) => a - b);
+			  const length = sequence.length;
+			  if (positions.length === 0) return [length];
+			  if (circular) {
+			    if (positions.length === 1) return [length];
+			    const fragments = [];
+			    for (let i = 0; i < positions.length; i++) {
+			      const a = positions[i];
+			      const b = positions[(i + 1) % positions.length];
+			      fragments.push(i === positions.length - 1 ? length - a + b : b - a);
+			    }
+			    return fragments.sort((a, b) => b - a);
+			  }
+			  const fragments = [positions[0]];
+			  for (let i = 1; i < positions.length; i++) fragments.push(positions[i] - positions[i - 1]);
+			  fragments.push(length - positions[positions.length - 1]);
+			  return fragments.filter((size) => size > 0).sort((a, b) => b - a);
+			}
+
+			/** Buffer compatibility of a set of enzymes. */
+			function bufferReport(enzymes, { includeMissingData = true } = {}) {
+			  const names = resolveEnzymeSelection(enzymes);
+			  const shared = sharedBuffers(names);
+			  const missing = enzymesMissingBufferData(names);
+			  const perEnzyme = names.map((name) => {
+			    const buffers = sharedBuffers([name]);
+			    return {
+			      enzyme: name,
+			      buffers: buffers.map((key) => BUFFERS[key].label),
+			      universal: buffers.length === Object.keys(BUFFERS).length,
+			      in_table: !missing.includes(name),
+			    };
+			  });
+			  const describe = (key) => ({ key, label: BUFFERS[key].label, nacl_mm: BUFFERS[key].nacl_mm, legacy: BUFFERS[key].legacy === true });
+			  return {
+			    enzymes: names,
+			    shared_buffers: shared.map(describe),
+			    // The current buffer set only: recommending a legacy buffer to someone who
+			    // has the colour-coded one on the shelf is noise.
+			    recommended_buffers: shared.filter((key) => BUFFERS[key].legacy !== true).map(describe),
+			    compatible: shared.length > 0,
+			    missing_data: includeMissingData ? missing : [],
+			    per_enzyme: perEnzyme,
+			    note: BUFFER_DATA_NOTE,
+			  };
+			}
+
+			/**
+			 * Plan a double digest: each enzyme alone, the combination, and whether the two
+			 * can share a buffer in one tube (or need a sequential digest / a compatible
+			 * buffer from another supplier).
+			 */
+			function planDoubleDigest(rawSequence, first, second, { circular = false, enzymes } = {}) {
+			  const sequence = normalizeSequence(rawSequence);
+			  for (const name of [first, second]) {
+			    if (typeof name !== 'string' || enzymePattern(name) === undefined) {
+			      throw new MolbioInputError(`unknown enzyme ${JSON.stringify(name)}; available: ${ENZYME_NAMES.join(', ')}`);
+			    }
+			  }
+			  if (first === second) throw new MolbioInputError('a double digest needs two different enzymes; use molbio_restriction_sites for a single enzyme');
+			  const digest = doubleDigest(sequence, first, second, circular);
+			  const buffers = bufferReport(enzymes === undefined ? [first, second] : [...enzymes, first, second]);
+			  const together = buffers.recommended_buffers.length > 0 ? buffers.recommended_buffers : buffers.shared_buffers;
+			  const advice = [];
+			  if (together.length > 0) {
+			    advice.push(`${first} + ${second} can be digested together in ${together.map((buffer) => buffer.label).join(' or ')}`);
+			  } else {
+			    const firstBuffers = buffers.per_enzyme.find((entry) => entry.enzyme === first)?.buffers ?? [];
+			    const secondBuffers = buffers.per_enzyme.find((entry) => entry.enzyme === second)?.buffers ?? [];
+			    advice.push(`${first} (${firstBuffers.join(', ') || 'buffer data missing'}) and ${second} (${secondBuffers.join(', ') || 'buffer data missing'}) share no buffer in the reference table — run the digest sequentially (cut with one, purify, then the other) or use a manufacturer's double-digest buffer`);
+			  }
+			  if (digest.first.cut_positions.length === 0) {
+			    advice.push(`${first} has no site on this template — the "double" digest is really a single digest with ${second}`);
+			  }
+			  if (digest.second.cut_positions.length === 0) {
+			    advice.push(`${second} has no site on this template — the "double" digest is really a single digest with ${first}`);
+			  }
+			  if (digest.first.cut_positions.length > 0 && digest.second.cut_positions.length > 0 && digest.combined_cut_positions.length < digest.first.cut_positions.length + digest.second.cut_positions.length) {
+			    advice.push(`${first} and ${second} share at least one cut position on this template — check whether the double digest resolves the fragments you expect`);
+			  }
+			  return {
+			    first: digest.first,
+			    second: digest.second,
+			    combined_cut_positions: digest.combined_cut_positions,
+			    combined_fragments: digest.combined_fragments,
+			    buffers: together,
+			    all_shared_buffers: buffers.shared_buffers,
+			    sequential_required: together.length === 0,
+			    advice,
+			    notes: [BUFFER_DATA_NOTE],
+			  };
+			}
+
+			exports.METHYLATION_ENZYMES = METHYLATION_ENZYMES;
+			exports.resolveEnzymeSelection = resolveEnzymeSelection;
+			exports.analyzeMethylation = analyzeMethylation;
+			exports.bufferReport = bufferReport;
+			exports.planDoubleDigest = planDoubleDigest;
+			return exports;
+		};
 		__molbio_modules["build/browser-api.mjs"] = () => {
 			const exports = {};
 			/**
@@ -3441,6 +6502,15 @@ window.__ModuleLoader__.load({
 
 
 
+
+
+
+
+
+			// v17 data + renderers that are pure computation and need no host services:
+			// the methylation/buffer reference tables, the probe/multiplex analysers, and
+			// the protein plot renderers. Exported so the browser half CAN use them; the
+			// panels themselves are unchanged in v17.
 
 
 
@@ -3478,6 +6548,23 @@ window.__ModuleLoader__.load({
 			exports.entryStats = __molbio_require("seqio.mjs").undefined;
 			exports.parseFasta = __molbio_require("seqio.mjs").undefined;
 			exports.digest = __molbio_require("lib.mjs").undefined;
+			exports.BUFFERS = __molbio_require("lib.mjs").undefined;
+			exports.METHYLATION_SENSITIVITY = __molbio_require("lib.mjs").undefined;
+			exports.METHYLATION_SITES = __molbio_require("lib.mjs").undefined;
+			exports.methylationImpact = __molbio_require("lib.mjs").undefined;
+			exports.methylationSites = __molbio_require("lib.mjs").undefined;
+			exports.sharedBuffers = __molbio_require("lib.mjs").undefined;
+			exports.designTaqmanProbes = __molbio_require("taqman.mjs").undefined;
+			exports.evaluateProbe = __molbio_require("taqman.mjs").undefined;
+			exports.probeCandidates = __molbio_require("taqman.mjs").undefined;
+			exports.checkMultiplex = __molbio_require("multiplex.mjs").undefined;
+			exports.helicalWheel = __molbio_require("protein-structure.mjs").undefined;
+			exports.hydropathyProfile = __molbio_require("protein-structure.mjs").undefined;
+			exports.renderHelicalWheel = __molbio_require("protein-structure.mjs").undefined;
+			exports.renderHydropathyPlot = __molbio_require("protein-structure.mjs").undefined;
+			exports.analyzeMethylation = __molbio_require("methylation.mjs").undefined;
+			exports.bufferReport = __molbio_require("methylation.mjs").undefined;
+			exports.planDoubleDigest = __molbio_require("methylation.mjs").undefined;
 			return exports;
 		};
 		__molbio_modules["build/panel-core.mjs"] = () => {

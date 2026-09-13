@@ -7,7 +7,101 @@
   每次插件代码变更**必须新建目录**（见 [README 的版本目录规则](README.md#插件更新版本目录规则)）。
   它只增不减，且与 semver 不同步。
 
-版本目录当前指向 v16（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+版本目录当前指向 v17（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+
+## [0.9.0] — 2026-09-13（v17：TaqMan 探针、多重 PCR、甲基化/双酶切、蛋白结构图；工具 46 → 52）
+
+**路线图 v17 方向的第一批：五个新工具 + 一个新的 preset 版本目录**。全部为 v11–v13 引擎
+之上的确定性纯计算，零依赖不变。
+
+### 新增
+
+- **`taqman.mjs` + `molbio_design_taqman`**：TaqMan（水解探针）测定设计。先用标准引物
+  引擎设计 qPCR 尺寸的扩增子（**默认 70–200 bp**，可用 `primer_options` 覆盖），再在
+  扩增子内的缺口里放探针并施加探针规则：**5' 端不得为 G**（淬灭）、探针 Tm 至少高出较热
+  引物 `min_tm_delta`（默认 5 °C）、无单碱基重复/串联重复、自互补有界、且与两条引物都
+  不形成稳定二聚体。每条候选给出探针序列/坐标/方向/Tm 边距/引物 3' 端距离与**逐项公开的
+  排序罚分**。几何采用「扩增子两个缺口」模型：`orientation: "forward"` 从正向引物 3' 端
+  向外读（标准设计），`"reverse"` 从反向引物 3' 端向外读并报反向互补——一个缺口放不下探针
+  时自动回退到另一个，并在 `notes` 里说明。`primer_options` 的 snake_case 键经显式映射
+  转成引擎的 camelCase（**0.9.0 开发中抓到并修掉的真 bug：不映射时用户传的窗口会被静默
+  忽略而落到默认值**）。
+- **`multiplex.mjs` + `molbio_multiplex_check`**：多重 PCR 互扰检查。报告（1）面板内**所有**
+  引物对的 any/3'-anchored 二聚体 Tm，超过阈值（默认 47 °C）的标为 conflict；（2）每条引物
+  3' 尾的**非预期退火**——自身模板上的脱靶位点（允许配置错配）与**其他模板上的完全匹配**
+  （多重交叉反应；**模板序列相同的 target 视为同一个模板**，否则每条引物都会"交叉"到自己的
+  扩增子）；（3）扩增子大小**是否可在胶上分辨**（<20 bp 判为 indistinguishable、<40 bp 判为
+  close），以及可执行的重设计建议。
+- **`protein-structure.mjs` + `molbio_helical_wheel` / `molbio_hydropathy_plot`**：
+  - 螺旋轮（Schiffer-Edmundson 投影）：残基按 3.6 残基/圈（100°/残基）落在圆周上，按
+    疏水/极性/酸性/碱性着色并生成 SVG；同时给出整段与**滑动窗口（默认 11 残基，Eisenberg
+    标准）**的最大疏水矩 μH（Eisenberg 共识标度）、疏水残基比例与提示。字形用绝对字号 +
+    `textLength` 定位，逐字形断言不超残基圆（沿用餐 0.6.0 序列标识图的教训）。
+  - Kyte-Doolittle 疏水性图：滑动窗口（默认 9；跨膜段建议 19–21）、GRAVY、**达到阈值
+    （默认 1.6，经典跨膜判据）的峰**及逐残基 profile，写成 SVG 并自动打开。
+- **`methylation.mjs` + `molbio_methylation_check` / `molbio_double_digest`** 与
+  `lib.mjs` 的两张参考表（`METHYLATION_SENSITIVITY`、`ENZYME_BUFFERS`/`BUFFERS`）：
+  - **甲基化检查**：找出序列中每个 Dam（GATC）与 Dcm（CCWGG，双链向）位点，报告哪些酶的
+    识别位点与之重叠，并把每个酶分类为 `cuts` / `impaired` / `blocked` / `no_site`——这正是
+    "酶没问题、但用 dam⁺/dcm⁺ 宿主提的质粒切不动"的经典场景。默认检查对象是甲基化表覆盖且
+    **消化酶表里确实存在**的 21 个酶（表里的 AvaII/MboI/EcoRII/PspGI/TaqI/HphI/BstNI 不在
+    消化表中，报 0 位点是误导），也可传 `["common"]` 查全表。
+  - **双酶切**：两个酶各自的切点/片段、合并切点与合并片段（线性/环状），以及**两者是否共用
+    buffer**（标准 NEB 系列；无共用 buffer 时明确给出"顺序酶切/换用厂商双酶切 buffer"的建议），
+    并标出某酶在本模板上无位点、或两酶切在同一磷酸二酯键的情形。
+  - **两张表都是手工转录的速查数据**，每个结果都随附 `METHYLATION_DATA_NOTE` /
+    `BUFFER_DATA_NOTE`，要求对照厂商当前表格复核后才可作为实验依据。
+- **客户端半**：`build/browser-api.mjs` 把 v17 的纯计算面（甲基化/buffer 表、探针与多重
+  分析、蛋白图渲染器）一并再导出，**面板本身在 v17 未改动**；产物重建（184.9 KB →
+  332.9 KB），`npm run build:client` 与所有客户端测试已同步。
+
+### 修复（实现过程中发现并修掉的真实缺陷）
+
+- **探针几何（三次纠正，最终为"缺口模型"）**：初版把引物名字当成了模板坐标顺序，导致
+  探针窗口在多数扩增子上为空；第二版把"正向引物 3' 端 + 上游引物 3' 端"混用，产出**与引物
+  重叠的探针**；第三版才落到"扩增子物理缺口 + 从开缺口的引物向外读"这一条规则，并由
+  smoke 对**每一条返回的测定**断言：探针等于模板切片（或反向互补）、不与任一引物重叠、
+  距离正是从开缺口引物 3' 端量起、5' 端非 G、无 run、Tm/GC 在窗口内。
+- **`primer_options` 全表静默失效**：见上（snake_case → camelCase 映射）。
+- **几何之外的静默数据问题**：`amplicon.length` 未给坐标时序列化为 `undefined`（非 lossless
+  JSON，被 harness 的输出校验拒绝）——改为字段整体缺省；`methylation` 的 `in_methylation_table`
+  字段未进 schema——补齐。
+- **`test/contract.mjs` 的新鲜度断言在受限沙箱下误导**：`spawnSync` 被沙箱拒绝（EPERM）时
+  原来打印"the bundler runs cleanly"，容易误读成打包器崩了；现在把 spawn 失败与打包器失败
+  分开报告，并给出人工核对命令。
+
+### preset 与分发
+
+- **新建 `preset/molbio-lab/plugins/dsh-molbio-tools-v17/`**（版本目录规则：插件 `.mjs` 有
+  改动，必须新建目录），`agent.cordis.yml` 的 `tool-molbio` 行指向 v17，`preset.yml` 描述
+  同步到 52 个工具。
+- **`package.json` 版本 0.8.0 → 0.9.0**；`files` 白名单覆盖新增 `.mjs`（`files` 用的是包根
+  相对路径，`.mjs` 逐个列出——`taqman.mjs` / `multiplex.mjs` / `protein-structure.mjs` /
+  `methylation.mjs` 已加入）。
+- **测试脚本跨平台化**：原来的 `"test": "node a && node b && …"` 依赖 npm 的 shell，在
+  Windows 的 cmd/PowerShell 下 `npm test` 直接失败（`&&` 不是 node 的语法）。改成
+  `test:unit` / `test:client:node` 子脚本 + `node --run` 串联，`npm test` 现在在
+  cmd/PowerShell/git-bash 下行为一致；`docs/maintainer.md` 的预检说明同步。
+
+### 测试
+
+`test/smoke.mjs` 新增 v17 段（工具 46 → **52** 个注册，逐工具输出 schema 校验）：
+
+- **TaqMan**：pUC118[1200,1800) 上 7 条测定；对每条断言几何与探针规则的不变式；钉住排第一
+  的测定（序列/坐标/Tm 61.71 °C/边距 0.81/Tm 边距距离 6）与一条"缺口在反向引物一侧"的测定
+  （距离 67 从反向引物 3' 端量起）；探针 Tm 与 `lib.primerTm` 同源；5 条 Tm 边距不足的
+  amplicon 逐条上报；四条选项错误路径（含嵌套 `primer_options`）。
+- **多重 PCR**：4 个真实引物对的固定面板——24 条引物对交互、3 条跨 target 二聚体（69.1 /
+  66.03 / 61.23 °C）、大小冲突 164 vs 168 bp（indistinguishable）与 103 vs 83 bp（close）；
+  相同模板不交叉、不同模板共享 3' 尾（完全匹配仅 8 bp 尾）判为交叉反应；无坐标不产生大小
+  冲突；四条错误路径。
+- **蛋白图**：14 残基两亲性肽的手算值（μH 0.353、窗口最大 0.584 @3、疏水 10/极性 1/碱性 3、
+  首残基 90°/单位圆坐标）；69 残基蛋白的疏水图手算值（GRAVY −0.13、峰 4-10/23-27/52-59、
+  首窗口 = 残基 1-5 均值、窗口 21 平滑后 2 峰）；SVG 逐字形/逐顶点断言；四条错误路径。
+- **甲基化/双酶切**：手工夹具（3 个 ClaI 位点被 Dam **blocked**、BamHI **impaired**、EcoRI/
+  HindIII/XbaI 可用、Dcm 位点不与选择中的酶重叠）；pUC118 全质粒（dam 15 / dcm 5、8 个可用
+  酶）；EcoRI+HindIII 环状双酶切（切点 927/876 → 3111+51 bp，CutSmart 等 4 个共用 buffer）；
+  无共用 buffer 的 BstXI+SmaI；无位点与共享切点两条建议；错误路径。
 
 ## [0.8.0] — 2026-09-12（安装渠道 B：把 preset 注册进 profile，升级不再需要复制）
 

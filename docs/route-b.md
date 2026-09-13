@@ -6,7 +6,7 @@ harness 实测过，实测方法见文末。
 
 ## 为什么需要它
 
-`dsh plugin --profile <p> add dsh-molbio-tools` 会把包装进 profile，并让 **46 个工具**在该
+`dsh plugin --profile <p> add dsh-molbio-tools` 会把包装进 profile，并让 **52 个工具**在该
 profile 的所有会话里可用。但它**不会**让 preset 出现在模式选择器里：
 
 - `dsh plugin` 管理的是 **profile bundle**（它只是 `pnpm` 的转发器，见 `dsh/lib/plugin-*.js`）；
