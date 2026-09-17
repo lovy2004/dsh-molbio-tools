@@ -7,7 +7,99 @@
   每次插件代码变更**必须新建目录**（见 [README 的版本目录规则](README.md#插件更新版本目录规则)）。
   它只增不减，且与 semver 不同步。
 
-版本目录当前指向 v17（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+版本目录当前指向 v18（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+
+## [0.10.0] — 2026-09-17（v18：让模型"看见"自己产出的图；工具仍 52）
+
+**这一版解决的是"图给谁看"。** 之前 11 个画图工具只写 SVG：人看得见（还会自动打开），
+**模型看不见**——它只能读路径和数值。harness 自带模型可见的 `read_image`（PNG/JPEG/WebP/GIF），
+但不收 SVG，所以"让模型自查凝胶条带/图谱"一直差这一步。
+
+### 关键设计决定：为什么不是 `png_path`（**原计划不可实现**）
+
+原方案是加 `png_path` 参数、在工作区写一个 PNG 文件。**在 DSH 0.1.6-alpha.1 上这条路走不通**，
+三层证据（都来自本机安装的 harness）：
+
+1. `dsh-fs/README.md`：**"Text-only mutations by contract** — … binary-safe mutations remain
+   deferred"；
+2. `dsh-fs-local/lib/index.js`：`writeText → writeFileAtomic` 把调用方的**字符串按 UTF-8 落盘**
+   （想用 latin-1 夹带字节会被 UTF-8 编码器替换而损坏），文本读取还会
+   `subarray(0, 8192).includes(0)` 拒收 NUL——**连读回来都做不到**；
+3. 全树检索**没有任何 `writeBytes`**，`FsErrorCode` 里只有 `FS_NOT_TEXT`。
+
+绕开它只能直接 `node:fs` 或用 `ctx.get('subprocess')` 起进程写盘，两者都逃出"所有写入经 `ctx.fs`
+并携带会话 `sandboxPolicy`"这条纪律，**明确拒绝**。于是改用 harness 提供的二进制安全通路：
+`ctx.attachments.saveImage()` + 工具结果里的 **image content block**——这正是它自己 `read_image`
+的实现方式（`dsh-llm` 的 `ImageBlock = { type: 'image', attachment: ImageAttachmentRef }`）。
+`test/contract.mjs` 现在把这条链路的每一环都钉住，并**专门断言 fs 缝仍然没有二进制写入**：
+哪天上游补上了，这条断言会失败，提醒维护者回头补当年的 `png_path`。
+
+### 新增
+
+- **`svgpng.mjs` — 零依赖 SVG→PNG 光栅化器**（宿主侧专用，`client` 产物不含它）。只覆盖本包
+  会生成的 SVG 子集，**不是通用渲染器**：`rect`（含 `rx`、`width="100%"`）、`line`、`circle`、
+  `polygon`、`polyline`、`path`（M/L/H/V/C/S/Q/T/A/Z，绝对与相对）、`text`（font-size/anchor/
+  dominant-baseline/textLength/lengthAdjust/`rotate`）、hex 颜色、`fill-opacity`、`stroke-width`、
+  `stroke-dasharray`、`stroke-linecap`，2× 超采样后盒式降采样。PNG 编码自写
+  （IHDR/IDAT/IEND + 自算 CRC32，deflate 用内置 `node:zlib`）。**文字用内置折线字体**
+  （6×7 网格、矢量描边、随字号缩放，无字体文件）：覆盖可打印 ASCII 与 `· ° ± — – … ≈ μ α ─`，
+  **非 ASCII（例如中文标题）不会被画出来**，且会记进 `missing_glyphs` 而不是画成乱码。
+  **不支持的构造一律计数上报**（未知元素、`<g>` 的 transform、`url(#gradient)` 这类画法），
+  绝不静默丢弃——`test/svgpng.mjs` 断言四个真实渲染器的八份产物 `unsupported` 与
+  `missing_glyphs` **都必须为空**，因此以后新增 SVG 构造会在这里失败，而不是从图里消失。
+- **11 个画图工具的可选 `attach_image: true`**：`plasmid_map` / `plasmid_map_file` /
+  `clone_simulate` / `golden_gate` / `grna_design` / `qpcr_efficiency` / `plot` /
+  `virtual_gel` / `sequence_logo` / `helical_wheel` / `hydropathy_plot`。打开后工具把同一张图
+  光栅化并提交为附件，结果里多一个 `image` 对象（`attachment_id`/`media_type`/`bytes`/
+  `width`/`height`），`output.render` 在文本旁多返回一个 **image block**，模型**当场看到图**，
+  不需要再走一次 `read_image`。**默认关**：不传参的调用**一个字节都不提交、结果形状完全不变**。
+  报告工具（序列分析、引物设计等 41 个）**一个都没动**。
+- 三条实现纪律与随之而来的测试：
+  - **能力门照抄 harness 的规则**：`exec.agent.session.requestHeader().config` → provider/model →
+    `ctx.get('llm').resolveModelInfo()` → 检查 `inputModalities.includes('image')`，与
+    `read_image` 的 `assertImageCapableRoute` 同源（`contract.mjs` 盯着这条规则本身）；
+  - **永不失败**：无附件服务 / 文本路由 / 路由解析不出 / 渲染不了 / 存储拒收，全部降级为纯文本，
+    并在 `image_note` 里**点名原因**；SVG 照写、`auto_view` 照旧、调用照成功；
+  - **`smoke.mjs` 覆盖 9 条**：不传参数时零提交且仍是单 text block；传了以后提交的确实是 PNG
+    （签名 + IHDR 尺寸与凝胶画布手算值一致）；结果字段与第二个 block 的 `attachment` 逐字段一致；
+    11 个工具逐个断言参数与输出字段、且总数恰好 11；四条降级路径各自不改成功性；附加图片时
+    `render` 仍产出文本。
+
+### 修复
+
+- **线性质粒图谱一直被裁掉 3' 端**（真 bug，被这次的"图"暴露）：`renderPlasmidMap` 无论拓扑都写
+  `viewBox="0 0 840 840"`，而 `renderLinear` 画布是 960×260、内容一直画到 x≈900——**浏览器里同样
+  裁掉**（最后一个 ruler 标注与骨架末端）。现在按拓扑选画布（线性 960×260 / 环形 840×840），
+  并删掉 `renderLinear` 里重复的白底矩形。`test/svgpng.mjs` 新增回归：线性图的栅格必须是 960×260
+  且 **x≥880 必须有墨迹**。客户端产物已同批重建（`plasmid.mjs` 在浏览器半里也用）。
+
+### 测试与验证方式（这一版是第一次能"看着自己的产物"验证）
+
+- **`test/svgpng.mjs`（新套件，17 项）**：用**与编码器不同实现**的 CRC（无表位运算）与裸
+  `inflate` 把字节解回像素，再做手算几何断言——rect 的四个边界像素、圆心/半径外、描边居中与
+  dash 空档、`fill-opacity` 混合到中灰、`fill="none"` 不填充、`text-anchor` 三个锚点的墨迹框、
+  cap height ≈0.7 em、`dominant-baseline` 居中、`textLength` 压到指定宽度、`rotate(-90)` 把基线
+  转到旋转点左侧；外加确定性（同输入两次字节相同）、错误路径（非 SVG / 无尺寸 / 非零 viewBox
+  原点 / 超像素上限 / CJK 缺字上报 / `encodePng` 参数校验）、以及"光栅化器不得进入客户端产物"。
+  还带两个开发用出口：`--sheet <png>` 导出整张字形表、`--preview <dir>` 导出每种图各一张
+  ——**改字形后必须这样人眼复核一遍**。
+- **`test/smoke.mjs` 的 v18 段**（见上）与 **`test/contract.mjs` 的两个新 check**（图片交接链路
+  的每一环；以及"fs 缝仍然是纯文本"这条反向守卫）。`npm test` 从 8 个套件变为 9 个。
+- **人眼复核**：八份真实产物（环形/线性质粒图谱、凝胶、logo、螺旋轮、疏水性图、柱状、散点）
+  与字形表都经 harness 自己的图像解码器（`read_image`）读回**逐张看过**；过程中修掉两处：
+  `@` 字形画成了 `a`（螺旋轮副标题里的 `max 0.15 @ 2` 就是证据），以及上面那个线性图谱裁剪。
+
+### 发版要点
+
+- **工具仍 52 个**，README 的工具表不变；新增的是可选参数与一个模块。
+- **必须新建 preset 目录**（插件 `.mjs` 有改动）：`preset/molbio-lab/plugins/dsh-molbio-tools-v18/`
+  （v17 的 22 个模块里 `index.mjs`/`plasmid.mjs` 更新，**新增 `svgpng.mjs`**，其余逐字节相同），
+  `tool-molbio` 行已指向 v18；`node test/preset-health.mjs` 报 `OK`。
+- `package.json`：`files` 白名单**必须**含 `svgpng.mjs`（漏了就是"装完却没有这个功能"的静默失败），
+  新增 `test:svgpng` 脚本并接入 `test:unit`。
+- route-B 用户重启 profile 即可；复制渠道用户请重拷 `agent.cordis.yml` 与新的 v18 目录。
+- 升级说明一句话：**"画图工具现在可以把图直接交给模型看（调用时加 `attach_image: true`）；
+  工具数量与用法不变，另修掉了线性质粒图谱右端被裁掉的问题"**。
 
 ## [0.9.1] — 2026-09-17（DSH 0.1.6-alpha.1 漂移修复：**preset 曾无法挂载**；工具仍为 52）
 

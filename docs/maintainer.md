@@ -44,6 +44,7 @@ seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关�
 
 ```bash
 node test/smoke.mjs         # 插件：mock 注册表跑全部 52 个工具 + 输出 schema 校验
+node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
 node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
 node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
 node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
@@ -53,16 +54,16 @@ node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness �
 node test/client-mount.mjs --profile web --dsh <harness 根目录>
 ```
 
-`npm test` 依次跑这三组（`test:unit` = smoke + 四个客户端套件，再 `contract`、`drift-probe`、
-`preset-health`）。
+`npm test` 依次跑这三组（`test:unit` = smoke + svgpng + 四个客户端套件，再 `contract`、
+`drift-probe`、`preset-health`）。
 脚本用 `node --run` 串联而不是裸 `&&`——`&&` 是 npm 的 shell 语法、不是 node 的，在 Windows
-的 cmd/PowerShell 下 `npm test` 会失败。只想跑一半时：`node --run test:smoke` / `node --run test:client`。
+的 cmd/PowerShell 下 `npm test` 会失败。只想跑一半时：`node --run test:smoke` /
+`node --run test:svgpng` / `node --run test:client`。
 
 三个检查回答的是**不同**的问题，发布前都要跑：
 
 - `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 52 个工具，并用 harness 自身的
-`assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
-覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
+`assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
 SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
 比对、蛋白 MW/pI/消光系数手算值、酶切规则（P 前不切）、100% 效率标准曲线、FASTA/FASTQ
 统计与转换、pUC118 特征提取、efetch XML 解析、BibTeX 转义、协议/实验记录往返、文献库
@@ -96,7 +97,20 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **2 错配脱靶的互查**（正向两次调用互相指认，mismatch_positions [4, 7]）、脱靶扣分
 （92 vs 无搜索时的 100）、种子末端不错配约束、GC/poly-T/C-run 过滤与「放宽 gc_max 才能
 救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
-排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）。
+排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）、v18 图片交接（未传 `attach_image` 时**一个字节都不提交**、结果仍是单个 text block；传了以后提交的确实是 PNG（签名 + IHDR 尺寸与凝胶画布手算值一致）、结果多出 `image` 字段与第二个 image block；10 个画图工具逐个断言"有参数、有输出字段"，总数恰好 11；四条降级路径——文本路由、无附件服务、路由解析不出、存储拒收——都**不改结果成功性**、只在 `image_note` 里点名原因；`render` 在附加图片时仍产出文本）。
+
+- `svgpng.mjs` 回答的是第三个正交问题：**工具算对了、但模型看到的图是不是对的**。纯文本正确
+  而 PNG 空白/错位/无法解码，是唯一一类"其它套件全绿"的真故障，所以这层必须自己站住：
+  测试用**与编码器不同实现**的 CRC（无表位运算）与裸 inflate 把字节解回像素，再做**手算几何**
+  断言（rect 的四个边界像素、圆心与半径外、描边居中与 dash 空档、`fill-opacity` 混合到中灰、
+  `fill="none"` 不填充、`text-anchor` start/middle/end 的墨迹框、cap height≈0.7 em、
+  `dominant-baseline` 居中、`textLength` 压缩到指定宽度、`rotate(-90)` 把基线转到旋转点左侧
+  并把运行变竖）；再对**四个真实渲染器的八份产物**断言 `unsupported` 与 `missing_glyphs`
+  都为空、且有实质墨迹——新增 SVG 构造会在这里失败，而不是从图里静默消失。另有两个回归守卫：
+  **线性质粒图谱**必须是 960×260 且 x≥880 有墨迹（v18 之前根 viewBox 固定 840×840，把 3' 端
+  裁掉了——正是"给模型看图"这件事把该 bug 暴露出来），以及**光栅化器不得进入客户端产物**
+  （它 import `node:zlib`，进 bundle 就会在浏览器里炸）。`--sheet <png>` 导出整张字形表、
+  `--preview <dir>` 导出每种图各一张，供人眼复核字体（改字形后**必须**这样看一遍）。
 
 - `client.mjs` / `panel-render.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面
   两者正交的第三个问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在
@@ -111,6 +125,16 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
   产物的 `require` 全部有答案。**没验证到的**：运行时才回答的三件事（插槽注入的
   `sessionId`/`useSessions`、guide 胶囊、`workspaceFiles` 的 wire 形状），见
   `docs/client-panel.md` 第 5 节。
+
+- **v18 图片交接"没验证到"的那一环**（诚实清单）：已证明的是——附件服务能收下我们自己编码的
+  PNG（`contract.mjs` 直接调 harness 的 `validateImageFile`/`prepareImageFile`，同一套生产
+  解码/归一化代码，并且**故意损坏的 PNG 会被拒**，证明这道检查有效）；harness 自己的
+  `read_image` 能把附件投影成模型可见的图片块（八份真实产物就是这么逐张人眼复核的，用的就是
+  本机这条链路）。**尚未在真实会话里验证的**只有一步：本插件的工具结果数组被 harness 的
+  工具层接收并落进会话事件（即"注册期之后就没人跑过"的那一步），它需要的条件是一次真实模型
+  调用 + 分子生物学模式会话 + 图像输入模型。验证方法很直接：在 "Molecular Biology Lab" 模式里
+  对 `molbio_virtual_gel(lanes=[...], attach_image=true)` 提一次，然后看会话事件里是否出现
+  `{ type: 'image' }` 块、`image.attachment_id` 与附件目录里的对象是否对得上。
 
 - `preset-health.mjs` 证明**组合**可挂载：它刻意与冒烟测试正交——preset 是 DSH
   **自己那些包**的组合，DSH 升级后如果某个包的 `Config` 契约变了（0.1.5-alpha.2 就
@@ -140,8 +164,8 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **任何**要 push 或打 tag 的版本，先跑完这三步，缺一步都不算发布完成：
 
 ```bash
-npm test                     # 8 个套件（= test:unit + contract + drift-probe + preset-health）；
-                             # 客户端半或 preset 组合的改动必须全绿
+npm test                     # 9 个套件（= test:unit(smoke+svgpng+4 客户端) + contract + drift-probe + preset-health）；
+                             # 客户端半、光栅化器或 preset 组合的改动必须全绿
 node build/client-bundle.mjs # 产物与源同一批构建（`--check` 只报告陈旧、不落盘）
 git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
 ```
@@ -284,16 +308,18 @@ DSH 后：
 
 ## 路线图
 
-- **先清障（已完成，见 CHANGELOG "未发布"）**：DSH `0.1.6-alpha.1` 漂移修复——preset 组合
+- **先清障（已完成，包 0.9.1）**：DSH `0.1.6-alpha.1` 漂移修复——preset 组合
   指向不存在的 `workflow-worker-thread`（**预设挂不上**）已改为上游 `workflow-ptc`、
   `tool-ralph` 按上游 `disabled`、组合与上游逐行对齐；`preset-health` 的漂移检查升级为
   逐行结构比对并**阻断发布**；新增 `drift-probe.mjs` 证明该守卫会失败；`contract.mjs` 的
   hook-prop 断言不再绑定 minify 形态；产物新鲜度检查不再依赖 `spawnSync`（沙箱 EPERM 下
-  也能验证），生成逻辑抽到 `build/client-bundle-core.mjs`。包版本与 preset 目录**未变**
-  （工具仍 52 / 目录仍 v17）。
-- **v18（功能候选池，按需挑选）**：Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）；多重 PCR 的温度梯度/引物浓度配平建议；TaqMan 的 MGB/双标记探针变体与探针订购 CSV 直出。
+  也能验证），生成逻辑抽到 `build/client-bundle-core.mjs`。工具与 preset 目录未变
+  （仍 52 / v17）。
+- **v19（功能候选池，按需挑选）**：Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）；多重 PCR 的温度梯度/引物浓度配平建议；TaqMan 的 MGB/双标记探针变体与探针订购 CSV 直出。
   更宽的候选池与"为什么不做"的否定清单见 **[docs/capability-gap-survey.md](capability-gap-survey.md)**
-  （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）。
+  （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）；
+  另有一个被 v18 明确留下的技术债候选：**若上游给 fs 缝加上二进制写入**（`contract.mjs` 里有一条
+  断言专门盯着这件事），就补齐当年的 `png_path`（工作区 PNG 文件），见 README 的 `attach_image` 一节。
 - **浏览器面板的候选（客户端半，不动 preset 目录）**：给 `molbio_sequence_logo` /
   `molbio_grna_design` 等工具加调用卡（同一套 `presentationMeta` + 卡片模式，上线前先跑
   `test/client.mjs` 的抢座位顺序那一层）；文献库写回需先定并发契约。
@@ -319,15 +345,43 @@ guide order 20；本包 `id = 'dsh-molbio-tools'` / `'dsh-molbio-tools/papers'`�
 用户因此今天就能在工作区里手跑 BLAST+/samtools/mafft/primer3/conda/`Rscript -e`，而 molbio 的产物
 就在同一目录。
 
-**v18 候选 1——让模型"看见"自己产出的图（推荐，最小改动、无新依赖）。**
+**v18 候选 1——让模型"看见"自己产出的图（已落地，但**换了机制**：附件而非 `png_path`）。**
 `dsh-tool-fs` 自带模型可见的 **`read_image`** 工具（PNG/JPEG/WebP/GIF，按文件签名识别、可降采样）；
 注册条件是挂了持久 `ctx.attachments` **且**当前路由模型的精确 id 声明了图像输入，否则该工具不注册。
-本包所有绘图工具**只写 SVG**，而 `read_image` 不接受 SVG——所以"让模型看图谱/凝胶/logo"目前**差一步**。
-做法：给 `molbio_plasmid_map(_file)` / `virtual_gel` / `sequence_logo` / `helical_wheel` /
-`hydropathy_plot` / `grna_design(map)` / 克隆与 qPCR 曲线等绘图路径增加**可选 PNG 输出**
-（新增参数如 `png_path`，或 SVG 旁同名 `.png`，由绘图器直接光栅化或复用现有 SVG 渲染路径），
-结果里回传路径，模型再自行调用 `read_image`。**不需要视觉模型，不需要 computer use。**
-落地要同时补：`test/smoke.mjs` 的产物断言、README 的"输出文件"表、以及 `files` 白名单若有新模块。
+本包所有绘图工具只写 SVG，而 `read_image` 不接受 SVG——这一步确实缺。
+
+**但"新增 `png_path` 参数写一个 PNG 文件"这条路在本版 harness 上不可实现**，三层证据：
+`dsh-fs/README.md` 写明 "*Text-only mutations by contract* — … **binary-safe mutations remain
+deferred**"；`dsh-fs-local` 的 `writeText → writeFileAtomic` 把调用方的**字符串按 UTF-8 落盘**
+（用 latin-1 夹带字节会被 UTF-8 编码器替换而损坏），文本读取还会以 `subarray(0, 8192).includes(0)`
+拒收 NUL，**连读回都做不到**；全树检索**没有任何 `writeBytes`**，`FsErrorCode` 里只有 `FS_NOT_TEXT`。
+绕开它有两条路，都**明确拒绝**：直接 `node:fs` 写、或用 `ctx.get('subprocess')` 起进程写盘——两者
+都逃出"所有写入经 `ctx.fs` 并携带会话 sandboxPolicy"这条本包全程遵守的纪律（与文档里已记录的
+MCP stdio server 不受沙箱约束是同一类问题）。
+
+**落地的机制**：`ctx.attachments.saveImage({ data, mediaType })` 是 harness 提供的**二进制安全**
+通路，而工具结果的 `output.render` 可以返回 **image content block**（`dsh-llm` 的 `ImageBlock =
+{ type: 'image', attachment: ImageAttachmentRef }`）——这正是 `read_image` 自己用的那条路。于是
+v18 给 11 个画图工具加了**可选** `attach_image: true`：工具把同一张图当场光栅化成 PNG（新模块
+`svgpng.mjs`，零 npm 依赖、`node:zlib` 是内置模块）并提交为附件，结果里回一个 `image` 对象，模型
+**直接看见图**，连一次 `read_image` 往返都不用。默认关（不传就没有任何行为变化）。
+
+三条实现纪律：**能力门照抄 harness 的规则**（`exec.agent.session.requestHeader().config` →
+provider/model → `ctx.get('llm').resolveModelInfo()` → `inputModalities.includes('image')`，与
+`read_image` 的 `assertImageCapableRoute` 同源，`contract.mjs` 盯着它）；**永不失败**（图片是额外
+好处：无附件服务/文本路由/渲染不了/存储拒收都降级为纯文本 + `image_note` 说明原因，SVG 照写、
+调用照成功）；**渲染不了的要上报**（`unsupported`/`missing_glyphs` 计数，测试断言真实渲染器的
+产物必须落在支持子集内）。
+
+### v18 已完成（2026-09-17，包 0.10.0 / preset 目录 v18）
+
+图片交接：`svgpng.mjs`（SVG 子集 → 光栅化 → 自写 PNG 编码：IHDR/IDAT/IEND + 自算 CRC32，
+deflate 用内置 `node:zlib`；内置**折线字体**覆盖 ASCII 与 `· ° ± — – … ≈ μ α ─`；不支持的元素/
+命令/画法一律**计数上报**）+ 11 个画图工具的 `attach_image`。顺带修掉一个真 bug：**线性质粒图谱
+的根 viewBox 固定 `0 0 840 840`**，而 `renderLinear` 画到 x≈900——3' 端一直被裁掉（浏览器里同样
+裁）；现在按拓扑选画布（960×260 / 840×840），`test/svgpng.mjs` 盯着 x≥880 必须有墨迹。工具仍
+52 个。验证方式：像素用**独立实现**的 CRC + 裸 inflate 解回后手算断言；八份真实产物再经 harness
+自己的图像解码器（`read_image`）**逐张人眼复核**（这是本项目第一次能"看着自己的产物"验证）。
 
 **v18 候选 2——结构文件的浏览器内预览（客户端半）。**
 `ctx.documentPreviews.register({ id, extensions, binaryExtensions?, priority, title, loading, wrap? })`
@@ -385,6 +439,10 @@ CLI 流程；但 **Windows 上交互式 REPL 不可靠**（stdin 等待判定是
 
 ## 已完成的方向（历史）
 
+- **v18（2026-09-17，包 0.10.0 / preset 目录 v18）**：把画出来的图**交给模型看**——`svgpng.mjs`
+  （零依赖 SVG 子集光栅化 + 自写 PNG 编码 + 内置折线字体）+ 11 个画图工具的可选 `attach_image`
+  （附件而非文件：`ctx.attachments.saveImage` + 结果里的 image block，理由见上文三层证据）。
+  工具仍 52。顺带修掉线性质粒图谱被根 viewBox 裁掉 3' 端的真 bug。
 - **v17（2026-09-13，包 0.9.0 / preset 目录 v17）**：TaqMan 水解探针设计、多重 PCR 互扰检查、甲基化敏感位点与双酶切 buffer 兼容、螺旋轮与疏水性图。工具 46 → 52。
 - **v16（2026-09-10，包 0.6.0 / preset 目录 v16）**：Sequence logo SVG（`logo.mjs` + `molbio_sequence_logo`，信息量 scaling 含小样本校正）+ CRISPR gRNA 设计（`crispr.mjs` + `molbio_grna_design`，双链 PAM 扫描、逐项公开的排序启发式、复用 v12 mispriming 的 k-mer 索引做错配容差脱靶搜索）。工具 44 → 46。
 - **v15（2026-08-22，包 0.5.0 / preset 目录 v15）**：多序列比对（渐进仿射缺口 NW + UPGMA）与保守性分析。

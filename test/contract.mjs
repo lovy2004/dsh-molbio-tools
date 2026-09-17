@@ -19,7 +19,13 @@
  *      same seats — `sessionId`, `useSessions`, `ctx.remote.workspaceFiles`;
  *   3. the `workspaceFiles` methods the panel calls, in BOTH the host Remote and
  *      the client-side call sites;
- *   4. this package's own bundle: the exact registrations and calls it makes.
+ *   4. this package's own bundle: the exact registrations and calls it makes;
+ *   5. the image hand-off (v18): `ImageBlock`/`ImageAttachmentRef`, the store's
+ *      `saveImage`, the route rule `read_image` gates on — plus the harness's own
+ *      image admission decoding the PNG our rasterizer writes, and refusing a
+ *      corrupt one. The companion check pins the REASON for that design: the fs
+ *      seam is text-only, so a `png_path` file cannot exist. If DSH grows a
+ *      binary write, that check fails on purpose.
  *
  * A failure here means "DSH moved something the panel depends on", and the fix
  * is a panel change — not a test change. Assertions therefore look for the
@@ -358,6 +364,103 @@ check('the committed client artifact is what the current sources build (no stale
   // The check is only meaningful if the generator actually ran: a graph of zero
   // modules would compare two identical empty strings.
   assert.ok(generator.order.length > 0, 'the generator walked a non-empty module graph');
+});
+
+// ── 11. the image hand-off contract (v18) ───────────────────────────────────
+
+check('a tool may show the model a picture the way read_image does', () => {
+  // Our output.render builds `{ type: 'image', attachment: {...} }`; that shape
+  // must stay the harness's own ImageBlock, and the reference fields must stay
+  // the ones our output value mirrors.
+  const llmTypes = readFileSync(join(packageDir('@deepseek-ai/dsh-llm'), 'lib', 'types', 'types.d.ts'), 'utf8');
+  const imageBlock = /interface ImageBlock \{[\s\S]*?\n\}/.exec(llmTypes)?.[0] ?? '';
+  assert.match(imageBlock, /type: 'image'/, 'ImageBlock still declares type "image"');
+  assert.match(imageBlock, /attachment: ImageAttachmentRef/, 'and still carries a durable attachment reference');
+
+  const attachmentTypes = readFileSync(join(packageDir('@deepseek-ai/dsh-attachment'), 'lib', 'types', 'types.d.ts'), 'utf8');
+  const ref = /interface ImageAttachmentRef \{[\s\S]*?\n\}/.exec(attachmentTypes)?.[0] ?? '';
+  for (const field of ['attachmentId', 'mediaType', 'bytes', 'width', 'height']) {
+    assert.ok(ref.includes(`${field}:`), `ImageAttachmentRef still carries ${field}`);
+  }
+
+  // The commit call, and that this deployment accepts what we encode.
+  const attachmentIndex = readFileSync(join(packageDir('@deepseek-ai/dsh-attachment'), 'lib', 'types', 'index.d.ts'), 'utf8');
+  assert.match(attachmentIndex, /saveImage\(input: SaveImageAttachment\): Promise<ImageAttachmentRef>/, 'the store still exposes saveImage');
+  const attachmentLocal = readFileSync(join(packageDir('@deepseek-ai/dsh-attachment-local'), 'lib', 'index.js'), 'utf8');
+  assert.ok(attachmentLocal.includes('"image/png"'), 'this deployment still accepts image/png');
+
+  // The route rule we mirror, quoted from the tool that owns it.
+  const toolFs = readFileSync(join(packageDir('@deepseek-ai/dsh-tool-fs'), 'lib', 'index.js'), 'utf8');
+  assert.ok(/inputModalities[^\n]*includes\("image"\)/.test(toolFs), 'read_image still gates on the route declaring image input');
+  assert.ok(toolFs.includes('no attachment service is mounted'), 'and still needs the attachment service');
+
+  // Our own side: every picture tool carries the opt-in parameter and the field.
+  const index = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
+  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 11, 'all 11 picture tools declare the image output field');
+  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 11, 'and offer the opt-in attach_image parameter');
+  assert.ok(/output\.render/.test(index) || index.includes('imageBlockFor(value)'), 'the block builder is wired into define()');
+});
+
+check('the workspace still cannot hold a binary file (the reason the picture rides an attachment)', () => {
+  // v18 ships the picture as an attachment INSTEAD of a `png_path` file because
+  // the filesystem seam is text-only. If DSH grows a binary write, this check
+  // fails on purpose: revisit the design (png_path becomes possible) rather
+  // than silently keeping the workaround.
+  const fsTypes = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'lib', 'types', 'types.d.ts'), 'utf8');
+  assert.ok(fsTypes.includes('FS_NOT_TEXT'), 'the filesystem seam still types FS_NOT_TEXT');
+  const fsReadme = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'README.md'), 'utf8');
+  assert.match(fsReadme, /binary-safe mutations remain deferred/i, 'and still documents binary mutations as deferred');
+  const fsIndex = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'lib', 'index.js'), 'utf8');
+  assert.ok(!/\bwriteBytes\b/.test(fsIndex), 'no binary write primitive appeared on the fs seam');
+});
+
+check('the harness decodes the PNG our rasterizer produces (and refuses a corrupt one)', async () => {
+  // The strongest end-to-end check available without a model route: the pure
+  // admission functions `LocalAttachmentStore.saveImage` calls in production
+  // (`validateImageFile` / `prepareImageFile`) run against OUR encoder's bytes.
+  // A malformed PNG (bit depth, colour type, CRC, broken deflate stream) is
+  // refused here instead of in a user's session, and the second half proves
+  // this check has teeth rather than trusting a file signature.
+  const attachmentLocal = await import(pathToFileURL(join(packageDir('@deepseek-ai/dsh-attachment-local'), 'lib', 'index.js')).href);
+  const { renderSvgToPng } = await import(pathToFileURL(join(packageRoot, 'svgpng.mjs')).href);
+  const { renderPlasmidMap } = await import(pathToFileURL(join(packageRoot, 'plasmid.mjs')).href);
+
+  const svg = renderPlasmidMap({
+    name: 'contract check',
+    length: 1200,
+    circular: true,
+    features: [{ label: 'AmpR', type: 'CDS', start: 10, end: 400, strand: -1 }],
+    enzymes: [],
+  });
+  const raster = renderSvgToPng(svg);
+  assert.ok(raster.data.length > 0 && raster.width === 840, 'the rasterizer produced an 840 px map');
+
+  // Deployment defaults, transcribed from LocalAttachmentStore's constructor.
+  const limits = {
+    maxImageBytes: 20_971_520,
+    maxImagesPerMessage: 20,
+    maxMessageImageBytes: 209_715_200,
+    maxImagePixels: 64_000_000,
+    maxImageDimension: 8192,
+    mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+  };
+  const policy = { maxPixels: 4_194_304, maxDimension: 8192, maxBytes: 4_194_304 };
+  const input = { data: raster.data, mediaType: 'image/png', name: 'contract.png' };
+
+  await attachmentLocal.validateImageFile(input, limits, policy);
+  const prepared = await attachmentLocal.prepareImageFile(input, limits, policy);
+  assert.equal(prepared.ref.mediaType, 'image/png', 'the harness reports the media type it decoded');
+  assert.equal(prepared.ref.width, raster.width, 'and the width our rasterizer drew');
+  assert.equal(prepared.ref.height, raster.height, 'and the height');
+  assert.ok(typeof prepared.ref.attachmentId === 'string' && prepared.ref.attachmentId.length > 0, 'with a content-addressed id');
+  assert.ok(prepared.data.length > 0, 'and normalized bytes ready to publish');
+
+  const corrupt = Uint8Array.from(raster.data);
+  corrupt[corrupt.length - 20] ^= 0xff;
+  await assert.rejects(
+    () => attachmentLocal.validateImageFile({ ...input, data: corrupt }, limits, policy),
+    'a corrupted PNG must be refused (otherwise this check proves nothing)',
+  );
 });
 
 // ── run ─────────────────────────────────────────────────────────────────────

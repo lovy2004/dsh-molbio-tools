@@ -79,12 +79,16 @@ const mockWeb = {
   },
 };
 
+// Services a specific check mounts on demand (v18: attachments + llm for the
+// opt-in picture hand-off). Absent by default, like a bare composition.
+const extraServices = new Map();
+
 const mockCtx = {
   systemPrompt: { section(_opts) {} },
   get(name) {
     if (name === 'fs') return memFs;
     if (name === 'web') return mockWeb;
-    return undefined; // sandboxPolicy absent → unconditional writes, like a bare fs backend
+    return extraServices.get(name);
   },
   tools: {
     register(definition) {
@@ -2159,6 +2163,145 @@ function splicedToGenomic(splicedPos, exons) {
   assert.ok(single.advice.some((line) => line.includes('has no site on this template')), 'an enzyme with no site is called out');
   await assert.rejects(() => run('molbio_double_digest', { sequence: puc118.sequence, first: 'EcoRI', second: 'EcoRI' }), /needs two different enzymes/);
   await assert.rejects(() => run('molbio_double_digest', { sequence: puc118.sequence, first: 'EcoRI', second: 'NopeI' }), /unknown enzyme "NopeI"/);
+}
+
+// ── v18: the opt-in picture hand-off ────────────────────────────────────────
+//
+// The workspace cannot hold the PNG (the harness fs seam is text-only by
+// contract), so a picture reaches the model as an image content block backed by
+// ctx.attachments.saveImage(). These checks cover the wiring: what we commit,
+// what the result carries, and every reason the picture may be missing — the
+// SVG must still be written and the call must still succeed in all of them.
+
+{
+  const committed = [];
+  let modalities = ['text', 'image'];
+  extraServices.set('attachments', {
+    async saveImage({ data, mediaType, name }) {
+      committed.push({ data, mediaType, name });
+      // Mirrors the harness's ImageAttachmentRef (brand is type-level only).
+      return { attachmentId: `att-${committed.length}`, mediaType, bytes: data.length, width: 42, height: 43, name };
+    },
+  });
+  extraServices.set('llm', {
+    async resolveModelInfo() {
+      return { inputModalities: modalities };
+    },
+  });
+  const routedExec = {
+    agent: {
+      session: { header: { cwd: 'C:/tmp' }, requestHeader: () => ({ config: { provider: 'deepseek-official', model: 'deepseek-flash' } }) },
+      options: {},
+    },
+  };
+  const toolByName = (toolName) => registered.find((t) => t.name === toolName);
+  const runWith = async (toolName, args, exec) => {
+    const tool = toolByName(toolName);
+    const value = await tool.execute(args, exec);
+    assert.deepEqual(validateJsonSchemaValue(tool.output.schema, value, 'value'), [], `${toolName} output violates its schema with attach_image`);
+    return { value, blocks: tool.output.render(args, value) };
+  };
+
+  // 1. Not asked → nothing changes for existing callers.
+  committed.length = 0;
+  const plain = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [1000] }] }, routedExec);
+  assert.equal(plain.value.image, undefined, 'no image without attach_image');
+  assert.equal(plain.value.image_note, undefined, 'and no note either');
+  assert.equal(committed.length, 0, 'nothing was committed to the attachment store');
+  assert.equal(plain.blocks.length, 1, 'the result stays a single text block');
+
+  // 2. Asked on an image-capable route → a real PNG is committed and attached.
+  const gel = await runWith('molbio_virtual_gel', {
+    lanes: [{ label: '1', fragments: [3000, 1000] }, { label: '2', fragments: [1500] }],
+    attach_image: true,
+    output_path: 'C:/tmp/gel.svg',
+  }, routedExec);
+  assert.equal(committed.length, 1, 'exactly one image was committed');
+  const [png] = committed;
+  assert.equal(png.mediaType, 'image/png');
+  assert.equal(png.name, 'gel.png', 'the attachment is named after the written file');
+  assert.deepEqual([...png.data.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'the committed bytes are a PNG');
+  const header = new DataView(png.data.buffer, png.data.byteOffset, png.data.byteLength);
+  // The gel canvas is LEFT_GUTTER 70 + (lanes + the ladder) x LANE_WIDTH 70 +
+  // RIGHT_GUTTER 20, and TOP_MARGIN 60 + RUN_LENGTH 600 + BOTTOM_MARGIN 40.
+  assert.equal(header.getUint32(16), 70 + 3 * 70 + 20, 'IHDR width matches the gel canvas');
+  assert.equal(header.getUint32(20), 700, 'IHDR height matches the gel canvas');
+  assert.deepEqual(gel.value.image, { attachment_id: 'att-1', media_type: 'image/png', bytes: png.data.length, width: 42, height: 43, name: 'gel.png' });
+  assert.equal(gel.blocks.length, 2, 'the render carries the picture beside the text');
+  assert.equal(gel.blocks[1].type, 'image');
+  assert.deepEqual(gel.blocks[1].attachment, { attachmentId: 'att-1', mediaType: 'image/png', bytes: png.data.length, width: 42, height: 43, name: 'gel.png' });
+  assert.ok(gel.blocks[0].text.includes('The rendered PNG is attached'), 'the text tells the model the picture is there');
+  assert.ok(memFs.files.get('C:/tmp/gel.svg').includes('<svg'), 'the SVG is still written');
+
+  // 3. The direct map path (not writeSvgFile) is wired too.
+  committed.length = 0;
+  const map = await runWith('molbio_plasmid_map', { sequence: 'ATGCATGCATGCATGCATGC', name: 'tiny', attach_image: true }, routedExec);
+  assert.equal(committed.length, 1, 'the map tool reaches the same attachment path');
+  assert.equal(map.value.image.attachment_id, 'att-1');
+  assert.equal(map.blocks[1].type, 'image');
+
+  // 4. A text-only route degrades to text that names the reason.
+  modalities = ['text'];
+  committed.length = 0;
+  const textOnly = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [500] }], attach_image: true }, routedExec);
+  assert.equal(textOnly.value.image, undefined);
+  assert.match(textOnly.value.image_note, /does not declare image input/);
+  assert.equal(textOnly.blocks.length, 1, 'and no image block is produced');
+  assert.match(textOnly.blocks[0].text, /no image was attached/);
+  assert.equal(committed.length, 0, 'nothing is committed for a route that cannot see it');
+  modalities = ['text', 'image'];
+
+  // 5. No attachment service mounted (a bare composition).
+  extraServices.delete('attachments');
+  const noStore = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [500] }], attach_image: true, output_path: 'C:/tmp/gel.svg' }, routedExec);
+  assert.match(noStore.value.image_note, /mounts no attachment service/);
+  assert.equal(noStore.value.svg_path, 'C:/tmp/gel.svg', 'the SVG is still written and reported');
+  extraServices.set('attachments', {
+    async saveImage({ data, mediaType, name }) {
+      committed.push({ data, mediaType, name });
+      return { attachmentId: `att-${committed.length}`, mediaType, bytes: data.length, width: 42, height: 43, name };
+    },
+  });
+
+  // 6. An unresolvable route is a degradation, not a failure.
+  const noRoute = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [500] }], attach_image: true }, fakeExec);
+  assert.match(noRoute.value.image_note, /route could not be resolved/);
+
+  // 7. A refusing store is a degradation too.
+  extraServices.set('attachments', {
+    async saveImage() {
+      throw new Error('store is full');
+    },
+  });
+  const refused = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [500] }], attach_image: true }, routedExec);
+  assert.match(refused.value.image_note, /attachment store refused the image: store is full/);
+  assert.equal(refused.value.image, undefined);
+  extraServices.set('attachments', {
+    async saveImage({ data, mediaType, name }) {
+      committed.push({ data, mediaType, name });
+      return { attachmentId: `att-${committed.length}`, mediaType, bytes: data.length, width: 42, height: 43, name };
+    },
+  });
+
+  // 8. Every picture tool carries the parameter and the output field.
+  const pictureTools = [
+    'molbio_plasmid_map', 'molbio_plasmid_map_file', 'molbio_clone_simulate', 'molbio_golden_gate',
+    'molbio_grna_design', 'molbio_qpcr_efficiency', 'molbio_plot', 'molbio_virtual_gel',
+    'molbio_sequence_logo', 'molbio_helical_wheel', 'molbio_hydropathy_plot',
+  ];
+  for (const toolName of pictureTools) {
+    const tool = toolByName(toolName);
+    assert.ok(Object.hasOwn(tool.parameters.properties, 'attach_image'), `${toolName} offers attach_image`);
+    assert.ok(Object.hasOwn(tool.output.schema.properties, 'image'), `${toolName} can report the attached image`);
+    assert.ok(Object.hasOwn(tool.output.schema.properties, 'image_note'), `${toolName} can explain a missing image`);
+  }
+  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 11, 'exactly the 11 picture tools — the analysis tools are untouched');
+
+  // 9. Rendering text alone still works (the attachment must not break render).
+  const logo = await runWith('molbio_sequence_logo', { alignment: ['ACGTACGT', 'ACGTTCGT'], attach_image: true }, routedExec);
+  assert.equal(logo.blocks[0].type, 'text');
+  assert.ok(logo.blocks[0].text.includes('sequence logo written to'));
+  assert.equal(logo.blocks[1].type, 'image');
 }
 
 // ── plugin surface ──────────────────────────────────────────────────────────

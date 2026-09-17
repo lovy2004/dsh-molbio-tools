@@ -20,6 +20,9 @@
 "验证这个 .ab1 测序结果和参考质粒是否一致"
 ```
 
+想要它**自己看一眼**画出来的图（比如核对凝胶条带位置），在调用时加 `attach_image: true`：
+图会作为图片附件直接挂到结果上（见[让模型自己看图](#让模型自己看图attach_image可选默认关)）。
+
 > 这是个实验台助手，不是数据库：**它做计算、写文件、画图，不替你判断生物学结论。** 所有 Tm、
 > 效率、评分都是可复核的估算值（每节都写明用的是哪套模型），最终实验设计仍要你自己把关。
 
@@ -232,11 +235,36 @@ SVG 文件**并在结果里返回路径：
 | `molbio_helical_wheel` / `molbio_hydropathy_plot` | 螺旋轮、疏水性图 |
 | `molbio_fasta_fastq` / `molbio_extract_region` / `molbio_paper_export_bibtex` | FASTA / `.bib` |
 
-> **图是给"你"看的，不是给模型看的**：产物默认是 **SVG**，模型自己并不"看"这些图（它读的是
-> 路径和数值）。若想让模型直接看图（例如自查凝胶条带或质粒图谱），目前需要用 `read` 类工具读
-> 别的格式或自己转 PNG——**绘图工具输出 PNG 已在 v18 路线图候选里**（见
-> [docs/maintainer.md](docs/maintainer.md) 的"DSH 0.1.6 新能力的可用性勘察"，该能力对应
-> harness 自带的 `read_image` 工具）。
+### 让模型自己看图：`attach_image`（可选，默认关）
+
+上面这些**画图工具**（共 11 个）都接受一个可选参数 **`attach_image: true`**。打开后，工具会把
+同一张图**当场光栅化成 PNG 并作为图片附件挂到这次调用的结果上**——模型因此能直接"看见"凝胶
+条带、质粒图谱、logo、螺旋轮、曲线，而不是只能读数值。传了就会在结果里回一个 `image` 对象
+（附件的 id/尺寸/字节数），文本里也会写明"图已附上"。
+
+```text
+molbio_virtual_gel(lanes=[...], attach_image=true)   # 模型看得见这张胶
+molbio_plasmid_map_file(path="pUC118.dna", attach_image=true)
+```
+
+为什么是"附件"而不是写出一个 `.png` 文件？**harness 的文件系统接口按契约只写文本**
+（`dsh-fs` 对二进制返回 `FS_NOT_TEXT`，其写入路径把字符串按 UTF-8 落盘，"binary-safe
+mutations remain deferred"）。所以插件无法在工作区里合法地落一个 PNG 文件——绕开它就只能
+直接 `node:fs` 或用子进程写盘，那会逃出会话沙箱政策，本包不做。附件是 harness 自己提供的
+**二进制安全**通路（`ctx.attachments.saveImage` + 工具结果里的 image block，也是它自带
+`read_image` 工具用的同一条路）。
+
+想拿 PNG 文件的话，SVG 仍然是标准产物（照写、照自动打开），可以在本地转一次格式。
+
+**降级而不是报错**：这一步是"额外好处"，任何一环不满足都会静默退回纯文本，并在结果里用
+`image_note` **说明原因**——没有挂附件服务、当前路由的模型不声明图像输入（例如纯文本模型）、
+绘图器渲染不了这份文档、附件存储拒收。**图没附上时工具依然成功、SVG 依然写好**；调用本身
+永远不会因为图片失败。
+
+关于 PNG 本身的诚实边界：它由本包内置的**折线字体**绘制（无字体文件、无外部依赖），字形是
+矢量描边、随字号缩放；可绘制 ASCII 与 `· ° ± — – … ≈ μ α ─`，**中文/其它非 ASCII 字符不会
+画出来**（图谱标题若是中文，PNG 里就缺这行字，SVG 里仍有）。渲染器不支持的 SVG 构造会被
+**计数上报**而不是悄悄丢弃（`unsupported`），相关测试盯着"真实渲染器的产物必须在支持子集内"。
 
 ### 自动打开（auto-view）
 
@@ -409,6 +437,11 @@ SVG 文件**并在结果里返回路径：
 看结果里的 `auto_viewed`：`false` 通常意味着无桌面环境（headless）、被 `MOLBIO_AUTO_VIEW=0`
 关掉、或本次调用传了 `auto_view: false`。文件本身总是写好了，路径在 `svg_path`/`plot_path` 里。
 
+**传了 `attach_image: true`，但结果里只有 `image_note`？**
+那一行就是原因：最常见是**当前模型不声明图像输入**（纯文本路由），其次是当前组合没挂附件服务。
+换成支持看图的模型即可；工具与 SVG 都不受影响。另外注意 **PNG 里的文字由内置折线字体绘制，
+只覆盖 ASCII 与 `· ° ± — – … ≈ μ α ─`**——中文标题不会出现在 PNG 里（SVG 里照旧）。
+
 **引物/探针一个候选都没有？**
 工具会返回 `notes` 说明放宽哪个约束（Tm 窗口、GC 窗口、扩增子长度、探针长度…）。通常是把
 `amplicon_min/max` 或 `tm_min/max` 放宽一点即可。
@@ -462,11 +495,12 @@ dsh-molbio-tools/
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储
 ├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开
+├── svgpng.mjs       # SVG→PNG 光栅化器（内置折线字体 + 自写 PNG 编码；仅宿主侧用）
 ├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 推荐安装渠道：专属模式 preset（vN 版本目录）
-├── test/            # 冒烟测试 + 客户端/组合检查（含 preset 漂移守卫 drift-probe.mjs）
+├── test/            # 冒烟测试 + 光栅化器 + 客户端/组合检查（含 preset 漂移守卫 drift-probe.mjs）
 ├── docs/            # 维护者与实现文档
 └── cordis.patch.yml # bundle 渠道补丁层
 ```
