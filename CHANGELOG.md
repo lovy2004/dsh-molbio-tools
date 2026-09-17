@@ -9,6 +9,109 @@
 
 版本目录当前指向 v17（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
 
+## [0.9.1] — 2026-09-17（DSH 0.1.6-alpha.1 漂移修复：**preset 曾无法挂载**；工具仍为 52）
+
+**背景**：本仓库在 DSH `0.1.5-alpha.2` 上发布，随后机器上的 DSH 升到 `0.1.6-alpha.1`。
+升级后 `npm test` 挂了 **2 项**，其中一项不是测试问题，而是**用户可见的故障**：
+`Molecular Biology Lab` 预设**根本挂不上**。包版本与 preset 版本目录**均不变**（无插件 `.mjs` 改动，
+工具仍 52 个）——但修复必须发出，因为现有安装会照抄包内这份组合文件。
+
+### 修复（真实故障；`test/preset-health.mjs` 抓到，但当时只打印"drift note"并退出 0）
+
+- **preset 引用了不存在的 provider 包**：组合里的 `workflow-worker-thread` 行指向
+  `@deepseek-ai/dsh-workflow-worker-thread`，而**没有任何已发布的 DSH 安装这个包**
+  （本机 `0.1.6-alpha.1` 只有 `@deepseek-ai/dsh-workflow-ptc`）。该行 `unresolvable`，
+  预设 mount 失败，选择器里点开就是加载错误。已改为上游 `standard` 的
+  `workflow-ptc`（`config: { provider: spawn }`，与本组合原意一致）。
+- **静默的行为偏差**：`tool-ralph` 在包内组合里是**启用**的，而上游 `standard` 明确
+  `disabled: true`（工具描述把 `ralph` 限制在"人明确要求"的运行，且完成判定是 worker
+  自报而非独立评估）。已按上游改回 `disabled: true`。想用的话按上游注释复制一份 preset 并去掉
+  `disabled`，不要在这里偷偷打开。
+- **组合文件与上游逐行对齐**：吸收 `0.1.6-alpha.1` 的上游文本（`persona` 的 `suffix`/`prefix`
+  顺序、`delegation` 注释、fork 注释、`present` 说明），并删掉上游已移除的
+  `tool-subagent-report` 段落。现在 `git diff --no-index` 对比安装的 `standard` 只剩**一个 hunk**：
+  末尾的 `tool-molbio` 行（加上文首新增的"维护契约"注释）。这本身就是漂移审计手段。
+
+### 加固（这一版真正的"清障"成果）
+
+- **`test/preset-health.mjs` 的漂移检查从"只比 id"升级为"比行"**：逐行比对**行序**、
+  `name`、`disabled`、`isolate`、`config`，并把**漂移从 note 提升为 FAILURE**
+  （v17 的 `worker-thread` 就是被"note + 退出 0"放过去的）。`tool-molbio` 是唯一允许的额外行，
+  允许清单在文件顶部显式声明。
+- **`test/drift-probe.mjs`（新增）**：没人见过失败的守卫不算守卫。用**变异组合**驱动
+  `compositionDrift`——幻影 provider 行、被丢掉的 `disabled`、改名、改 config、改 isolate、
+  丢行、多余行、行序错乱——断言每一种都被抓到，且对**当前这份组合零噪音**。
+  `preset-health.mjs` 因此改为 `if (import.meta.main) await main()` 并导出该函数（Node ≥ 22，
+  `package.json` 已加 `engines`）。
+- **`test/contract.mjs` 的 hook-prop 规则断言不再绑定 minify 形态**：`0.1.6-alpha.1` 把
+  `standardHookPropName` 从 `function $c(t){…}` 编成了**类方法** `$c(t){…}`，原来的
+  "整个函数体"正则因此失败（面板本身没问题）。现在断言的是**契约**：稳定导出名
+  `standardHookPropName: <symbol>` + 该符号仍实现 `use${首字母大写}${其余}` 这条规则
+  （允许 `slice`/`substring`、可选括号、箭头/方法/函数三种写法）。
+- **产物新鲜度检查不再依赖 `spawnSync`**：受限沙箱拒绝管道 stdio（EPERM），原检查只能
+  "无法验证"——恰好是自动化发版处最需要它的时候。打包器的生成逻辑已抽到
+  **`build/client-bundle-core.mjs`**（`createGenerator({ entry, baseDir }) → { order, ids, renderBundle }`），
+  `build/client-bundle.mjs` 变成薄 CLI（新增 `--check`：只报告陈旧、不落盘），
+  `test/contract.mjs` **在进程内**重算期望产物并与已提交文件逐字节比较。
+  字节级等价已实测：重构后重跑打包器，`git status lib packages` 为空。
+
+### 分发注意
+
+- **route-B（已注册 preset 根，推荐渠道）用户**：组合文件是每次挂载重新读取的，
+  升级包后**重启 profile 即可**，不需要重新 `add`。
+- **复制渠道用户**（把 `preset/molbio-lab/` 拷到 `~/.dsh/.agent-presets/`）：请重新复制这份
+  `agent.cordis.yml`（`plugins/` 目录若还在 v16/v17 可不动；组合文件的模块缓存规则不适用）。
+- 本机 `~/.dsh/.agent-presets/molbio-lab/` 还留着一份 **v16 的老副本**，同样带
+  `workflow-worker-thread`；route-B 生效时它不参与，但若曾用复制渠道请按上面重拷。
+
+### 发版记录
+
+- **工具与 preset 目录不动**：无插件 `.mjs` 改动，**没有新建 `v18` 目录**，`tool-molbio`
+  行仍指向 `dsh-molbio-tools-v17`；`package.json` 的 `version` **0.9.0 → 0.9.1**（修复版），
+  tag `v0.9.1`。
+- 发版前按 `docs/maintainer.md` 的三步预检：`npm test`（8 套件全绿）→
+  `node build/client-bundle.mjs --check`（两个产物均报 up to date）→ `git status --short` 干净。
+- 升级说明一句话：**"修复在 DSH 0.1.6-alpha.1 上 Molecular Biology Lab 预设无法挂载的问题
+  （工具数量与用法不变）"**。
+
+### 仅文档：v18 路线图补入 DSH 0.1.6 新能力的可用性勘察
+
+**不改代码、不改 preset 目录、不改包版本**，只更新 `docs/maintainer.md` 的路线图，把
+0.1.6-alpha.1 的"面板内终端 / computer use"逐包核对结果写成 v18 的输入（含证据、门槛与
+"不要再重复勘察"的否定清单）：
+
+- **面板内终端：已经在用，零改动。** 浏览器终端（`ctx.terminalController` + xterm.js 标签页）随
+  `dsh-web-app` 出厂即启用，与本包右栏面板**同座位共存**（靠 tab `id`/`kind`/guide order 区分，
+  `id` 重复会抛异常）。它与 agent 侧的 `ctx.terminals` 是**两套互不相通的实现**，且面板
+  **不把终端输出送给模型**。
+- **v18 候选 1（推荐）**：给绘图工具增加**可选 PNG 输出**，让模型能自己调用 `dsh-tool-fs` 的
+  `read_image` 看图谱/凝胶/logo。现状是"只写 SVG、`read_image` 不收 SVG"，所以差这一步；
+  不需要视觉模型、不需要 computer use。
+- **v18 候选 2**：用 `ctx.documentPreviews.register({ id, extensions, loading: 'bytes-complete' })`
+  + `sidebar.right.tab.document` 座位把 `.pdb/.cif/.sdf/.mol` 放进本包自己的标签页。**范围要说清**：
+  这是容器（座位/注册表/字节加载），不是现成 3D 查看器。
+- **v18 候选 3（需先验证）**：持久 shell 进 preset。要加 `dsh-terminal` + `dsh-terminal-bash` +
+  `dsh-tool-pwsh-persistent`；`sandbox`/`subprocess` 已在 `dsh-base`。两个硬约束：**工具名冲突**
+  （`pwsh`/`bash` 与一次性工具重名，必须禁用一次性行，并同步 `preset-health` 的允许清单与组合头部）
+  与**唯一待验证点**——从 preset 发布 `ctx.terminals` 需要 `isolate: { terminals: true }` 分组，
+  shipped preset 有同类先例但没有 terminal 的先例。
+- **明确不在本版**：computer use 的 agent 侧能力（无截图/鼠标/键盘工具、无 OCR、无辅助功能树；
+  全树 `screenshot` 只出现一次且是否定句）；agent 驱动浏览器终端（无 `dsh-tool-terminal`）。
+  同批勘察的 MCP（`dsh-mcp-client` 未被任何 shipped bundle 挂载；stdio server **不受文件沙箱约束**）
+  与 hooks（兼容适配器，不是插件扩展点）作为备选记录在案，不进路线图主线。
+
+### 仅文档：新增 `docs/capability-gap-survey.md`（v18 的选型依据）
+
+不改代码、不改 preset 目录、不改工具数量的第二份规划文档：把"52 个已发布工具相对主流生信
+生态缺什么"逐项过筛——九个来源家族（商业质粒/克隆套件、实验台网页计算器、Biopython/EMBOSS/
+SeqKit、标准序列统计、微生物组、群体遗传、蛋白预测、比对后处理、测序 QC），每条候选都要同时
+通过「(a) 对实验台真的有用于 (b) 能用几百行无依赖、无外部数据/二进制/网络/参考库的确定性算法
+实现」两道筛。产出：**40 条排序候选**（含 ext?/纯 JS?/规模/价值四列）、**必做 top-5**、
+**"想做但不可行"清单（每条点名确切阻断原因：二进制格式 / 参考数据库 / 模型权重 / 网络 /
+算力规模）**，以及全部依赖的 URL 出处（并标注了哪些论断因 403/无正文而只算部分核实）。
+它的价值不只是候选池：§3 的否定清单可以直接搬进 README 的"不做什么"，让用户不再要求本工具
+做 BLAST/BAM/ML 树。
+
 ## [0.9.0] — 2026-09-13（v17：TaqMan 探针、多重 PCR、甲基化/双酶切、蛋白结构图；工具 46 → 52）
 
 **路线图 v17 方向的第一批：五个新工具 + 一个新的 preset 版本目录**。全部为 v11–v13 引擎

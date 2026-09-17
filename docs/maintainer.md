@@ -48,11 +48,13 @@ node test/client.mjs        # 客户端产物：按加载器方式执行 + 面�
 node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
 node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
 node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
+node test/drift-probe.mjs   # 组合漂移守卫：用变异组合证明 preset-health 的比对会失败
 node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness 根目录>
 node test/client-mount.mjs --profile web --dsh <harness 根目录>
 ```
 
-`npm test` 依次跑这三组（`test:unit` = smoke + 四个客户端套件，再 `contract`、`preset-health`）。
+`npm test` 依次跑这三组（`test:unit` = smoke + 四个客户端套件，再 `contract`、`drift-probe`、
+`preset-health`）。
 脚本用 `node --run` 串联而不是裸 `&&`——`&&` 是 npm 的 shell 语法、不是 node 的，在 Windows
 的 cmd/PowerShell 下 `npm test` 会失败。只想跑一半时：`node --run test:smoke` / `node --run test:client`。
 
@@ -119,6 +121,17 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
   目录解析，与 Loader 改写 `baseUrl` 的行为一致）、行集合与官方 `standard` 预设的差异
   （缺行 = 悄悄丢能力，多行 = 本插件的 tool-molbio）。`disabled:` 行与 `!!js` 条件行按
   Loader 的规则跳过。退出码非 0 即发布阻断。
+- **漂移检查是"逐行结构比对"，不是"比 id"**：`compositionDrift`（`preset-health.mjs` 导出）
+  按**行序**比对 `id`、`name`、`disabled`、`isolate`、`config`，任何差异都是**发布阻断**。
+  0.1.6-alpha.1 那次的教训是两件事同时发生而检查全瞎：组合里有一行指向
+  **没有 DSH 发布的 `@deepseek-ai/dsh-workflow-worker-thread`**（preset 直接挂不上），
+  以及 `tool-ralph` 被**悄悄启用**（上游 `standard` 是 `disabled: true`）。只比 id
+  的旧检查只打印 "drift note" 并退出 0。允许清单只有 `ALLOWED_EXTRA_ROWS = {tool-molbio}`
+  与（当前为空的）`ALLOWED_DISABLED_ROWS`，写在文件顶部。
+- `drift-probe.mjs` 证明**上面那个守卫会响**：用变异组合（幻影 provider 行、丢掉的
+  `disabled`、改名、改 config、改 isolate、丢行、多余行、行序错乱）驱动 `compositionDrift`，
+  断言每一种都被抓到，并且对当前组合**零噪音**。"没人见过失败的守卫不算守卫"——旧检查
+  之所以放过真故障，正是因为它从没被证明会失败。
 
 ## 发布与更新流程
 
@@ -127,12 +140,18 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **任何**要 push 或打 tag 的版本，先跑完这三步，缺一步都不算发布完成：
 
 ```bash
-npm test                     # 7 个套件（= test:unit + contract + preset-health）；客户端半的改动必须全绿
-                             # 受限沙箱下 contract 的"产物新鲜度"一项会因 spawn 被拒而失败：
-                             # 那是环境限制，按提示手动 `node build/client-bundle.mjs && git diff --stat lib packages`
-node build/client-bundle.mjs # 产物与源同一批构建
+npm test                     # 8 个套件（= test:unit + contract + drift-probe + preset-health）；
+                             # 客户端半或 preset 组合的改动必须全绿
+node build/client-bundle.mjs # 产物与源同一批构建（`--check` 只报告陈旧、不落盘）
 git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
 ```
+
+**preset 组合的改动**（`preset/molbio-lab/*`）额外一条：`node test/preset-health.mjs` 必须
+报 `OK`，且 `git diff --no-index <安装的 standard> preset/molbio-lab/agent.cordis.yml` 只应剩
+**末尾 `tool-molbio` 那一个 hunk**（加上文首"维护契约"注释）。吸收 DSH 升级时照抄上游文本
+（含注释与 key 顺序），不要手写"看起来等价"的行——0.1.6-alpha.1 的
+`workflow-worker-thread` 就是这么进去的。组合文件本身**不吃模块缓存**（每次挂载重读），
+所以只改组合**不需要**新建 `vN` 目录。
 
 客户端半的改动还有两条**专门针对"会弄坏 GUI"**的确认：
 
@@ -239,23 +258,126 @@ preset 渠道（受 ESM 模块缓存约束）：
 ### preset 组合的维护（DSH 升级后必做）
 
 `preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的副本 + 末尾一行
-`tool-molbio`。它不会自动跟随 DSH 升级，因此每次升级 DSH 后：
+`tool-molbio`（当前基线：**dsh 0.1.6-alpha.1**）。它不会自动跟随 DSH 升级，因此每次升级
+DSH 后：
 
 1. 取新版的 shipped `standard`：
    `<harness>/node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml`；
 2. 与 `preset/molbio-lab/agent.cordis.yml` 做 `git diff --no-index`，**逐行吸收上游改动**
-   （新增/删除的行、配置契约变化），只保留 `tool-molbio` 这一处有意差异与头部注释；
-3. 跑 `node test/preset-health.mjs` 直到全部 `ok`（drift 里只应剩
-   `extra row "tool-molbio"`）；
-4. 把新组合复制到用户的 `~/.dsh/.agent-presets/molbio-lab/`（组合文件可直接覆盖）。
+   （新增/删除的行、注释、key 顺序、配置契约变化），只保留 `tool-molbio` 这一处有意差异
+   与头部注释。**照抄上游文本，不要手写"看起来等价"的行**——"注释也要抄"这条纪律的价值
+   就是让上面这条 diff 恒为**一个 hunk**，从而能当漂移审计用；
+3. 跑 `node test/preset-health.mjs` 直到 `OK`（它现在把任何结构差异当**发布阻断**，
+   不只是打印 note）；
+4. 更新组合头部"Baseline: …"那行里的 DSH 版本号；
+5. **route-B（推荐渠道）用户不需要做任何事**：组合文件每次挂载重新读取，重启 profile 即可。
+   仅"复制渠道"用户需要把新组合复制到 `~/.dsh/.agent-presets/molbio-lab/`
+   （组合文件可直接覆盖，`plugins/` 里的 `vN` 目录不受影响）。
 
-偏差的历史教训：0.1.2 → 0.1.5 期间遗漏了 `persona` 的 `text → prefix/suffix` 契约变更，
-组合在 0.1.5-alpha.2 上直接挂载失败；`present` 行也在同一时期丢失。两处都已修复，
-并由 `preset-health.mjs` 看守。
+偏差的历史教训：
+
+- 0.1.2 → 0.1.5 期间遗漏了 `persona` 的 `text → prefix/suffix` 契约变更，组合在
+  0.1.5-alpha.2 上直接挂载失败；`present` 行也在同一时期丢失。
+- 0.1.6-alpha.1：组合里的 `workflow-worker-thread` 指向**没有 DSH 发布过的包**，preset
+  完全挂不上；同时 `tool-ralph` 被悄悄启用。两者都被旧版"只比 id"的 drift 检查放过
+  （只打印 note、退出 0）。现已由**逐行结构比对（失败即阻断）** + `drift-probe.mjs` 看守。
 
 ## 路线图
 
-- **v18（候选池，按需挑选）**：Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）；多重 PCR 的温度梯度/引物浓度配平建议；TaqMan 的 MGB/双标记探针变体与探针订购 CSV 直出。
+- **先清障（已完成，见 CHANGELOG "未发布"）**：DSH `0.1.6-alpha.1` 漂移修复——preset 组合
+  指向不存在的 `workflow-worker-thread`（**预设挂不上**）已改为上游 `workflow-ptc`、
+  `tool-ralph` 按上游 `disabled`、组合与上游逐行对齐；`preset-health` 的漂移检查升级为
+  逐行结构比对并**阻断发布**；新增 `drift-probe.mjs` 证明该守卫会失败；`contract.mjs` 的
+  hook-prop 断言不再绑定 minify 形态；产物新鲜度检查不再依赖 `spawnSync`（沙箱 EPERM 下
+  也能验证），生成逻辑抽到 `build/client-bundle-core.mjs`。包版本与 preset 目录**未变**
+  （工具仍 52 / 目录仍 v17）。
+- **v18（功能候选池，按需挑选）**：Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）；多重 PCR 的温度梯度/引物浓度配平建议；TaqMan 的 MGB/双标记探针变体与探针订购 CSV 直出。
+  更宽的候选池与"为什么不做"的否定清单见 **[docs/capability-gap-survey.md](capability-gap-survey.md)**
+  （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）。
+- **浏览器面板的候选（客户端半，不动 preset 目录）**：给 `molbio_sequence_logo` /
+  `molbio_grna_design` 等工具加调用卡（同一套 `presentationMeta` + 卡片模式，上线前先跑
+  `test/client.mjs` 的抢座位顺序那一层）；文献库写回需先定并发契约。
+
+### DSH 0.1.6 新能力的可用性勘察（2026-09-16，只读；基线 dsh 0.1.6-alpha.1）
+
+用户侧报告 0.1.6 带来"面板内终端"与"computer use"。逐包核对（README + `lib/types/*.d.ts` +
+shipped bundle 的 `cordis.patch.yml` + 活动 profile 的 patch）后的结论，作为 v18 的输入：
+
+| 能力 | 本版实际状态 | 对 molbio 的可复用性 |
+| --- | --- | --- |
+| 面板内终端（浏览器半：`dsh-api-terminal-controller` 的 `ctx.terminalController` + `dsh-client-ui-sidebar-terminal`） | **随 `dsh-web-app` 出厂即启用** | ✅ **已经在用，零改动**（见下） |
+| 持久 shell（agent 半：`ctx.terminals` + `dsh-terminal-bash` + `dsh-tool-bash-persistent` / `dsh-tool-pwsh-persistent`） | 包已安装，**未被任何 web/standard 组合挂载** | ⚠️ 需要组合改动（见下） |
+| Computer Use / Browser Use | **本版没有实现**：只有 `dsh-tool-cordis` 生成目录里的 `ctx.computerUse`/`ctx.browserUse` 接口描述、`dsh-system-prompt` 里无人消费的 `TOOL_COMPUTER_USE: 3000`、以及 `dsh-mcp-client` README 提到的未安装 "Cua Driver provider" | ❌ 不进预设（见下） |
+
+**面板内终端与 molbio 面板已经共存，无需任何改动。** 两套东西同名不同源：浏览器终端是
+**会话级、用户专用**的 Typert remote（`remote.terminal`：`environment/shells/list/create/
+follow/write/resize/rename/close`，上限 8 个终端、scrollback 1000 行，**终端输出永不进入
+agent 上下文**）；`ctx.terminals` 是**按 agent 做 owner 隔离**的持久 PTY。共存靠公开的
+tab 注册 API：终端 `id = '@deepseek-ai/dsh-client-ui-sidebar-terminal'`、`kind: 'terminal'`、
+guide order 20；本包 `id = 'dsh-molbio-tools'` / `'dsh-molbio-tools/papers'`、guide order 40/41。
+**tab `id` 重复会抛异常**（本包那两个 id 的唯一性由 `test/client.mjs` 看守），因此不要改自己的 id。
+用户因此今天就能在工作区里手跑 BLAST+/samtools/mafft/primer3/conda/`Rscript -e`，而 molbio 的产物
+就在同一目录。
+
+**v18 候选 1——让模型"看见"自己产出的图（推荐，最小改动、无新依赖）。**
+`dsh-tool-fs` 自带模型可见的 **`read_image`** 工具（PNG/JPEG/WebP/GIF，按文件签名识别、可降采样）；
+注册条件是挂了持久 `ctx.attachments` **且**当前路由模型的精确 id 声明了图像输入，否则该工具不注册。
+本包所有绘图工具**只写 SVG**，而 `read_image` 不接受 SVG——所以"让模型看图谱/凝胶/logo"目前**差一步**。
+做法：给 `molbio_plasmid_map(_file)` / `virtual_gel` / `sequence_logo` / `helical_wheel` /
+`hydropathy_plot` / `grna_design(map)` / 克隆与 qPCR 曲线等绘图路径增加**可选 PNG 输出**
+（新增参数如 `png_path`，或 SVG 旁同名 `.png`，由绘图器直接光栅化或复用现有 SVG 渲染路径），
+结果里回传路径，模型再自行调用 `read_image`。**不需要视觉模型，不需要 computer use。**
+落地要同时补：`test/smoke.mjs` 的产物断言、README 的"输出文件"表、以及 `files` 白名单若有新模块。
+
+**v18 候选 2——结构文件的浏览器内预览（客户端半）。**
+`ctx.documentPreviews.register({ id, extensions, binaryExtensions?, priority, title, loading, wrap? })`
++ keyed `sidebar.right.tab.document` 座位，允许本包按**扩展名**注册自己的渲染器（`loading:
+'bytes-complete'` 拿完整字节）。现有 Molbio 面板只处理 `.dna/.gb/.gbk/.fa/.fasta`；可以让
+`.pdb/.cif/.sdf/.mol` 在工作区里点开就进本包自己的标签页。**必须诚实界定范围**：这里提供的是
+**容器（座位 + 注册表 + 字节加载 + 渲染器选择）**，不是现成的 3D 查看器——v18 要么只做 2D 投影
+（如 Cα 轨迹/二级结构条带），要么把"真正的 3D"单独估工并决定是否值得。座位与 `documentPreviews`
+都走 `ctx.slots.inject`（0.7.1 的抢座位事故就是教训）。
+
+**v18 候选 3——持久 shell 进 preset（收益有限、风险明确，需先验证）。**
+要加的行：`@deepseek-ai/dsh-terminal` + `@deepseek-ai/dsh-terminal-bash` +
+`@deepseek-ai/dsh-tool-pwsh-persistent`（Linux 用 `@deepseek-ai/dsh-tool-bash-persistent`）。
+`sandbox` / `sandbox-policy` / `subprocess` **已在 `dsh-base`**，无需新增。两个硬约束：
+
+1. **工具名冲突**：`dsh-tool-pwsh` 与 `dsh-tool-pwsh-persistent` 都注册 `pwsh`（`bash` 同理），
+   必须把一次性那行 `disabled`，否则注册抛 "already registered"；这会让我们偏离上游 `standard`
+   的逐行对齐，需要同步加进 `test/preset-health.mjs` 顶部的 `ALLOWED_DISABLED_ROWS` 并写进组合头部。
+2. **唯一待验证点**：从 **preset**（不是 profile）发布服务需要一个 `isolate: { terminals: true }` 分组。
+   机制在 shipped preset 里有先例（`planning`/`compaction`/`delegation` 都这么写），但**没有任何
+   shipped preset 这样挂过 terminal**。验证方式：复制安装的 `standard`，加该分组与持久工具行、
+   禁用一次性行，跑 `node test/preset-health.mjs`（逐行按安装包的 schema 校验）。
+
+**对实验台的实际收益与边界**：cwd、环境变量、conda 环境、`samtools faidx` 索引跨调用存活，适合多步
+CLI 流程；但 **Windows 上交互式 REPL 不可靠**（stdin 等待判定是启发式，会跑到 300 s 工具超时并
+**重置 shell**），可靠写法是 `python -c` / `Rscript -e` 单行。另外 `ctx.terminals` 只能被**创建它的
+那个 agent** 操作（`FOREIGN_SESSION`），本包的插件工具没有"替用户开终端标签页"的通路。
+
+**明确不在本版、不要再重复勘察的能力（避免 v18 走错方向）**：
+
+- **computer use 的任何 agent 侧能力**：无截图/鼠标/键盘工具，无 OS 辅助功能树读取，无 OCR，
+  未安装 `dsh-computer-use`/`dsh-browser-use`/`cua-*`/`dsh-inspector`；全树 `screenshot` 只出现一次
+  且是**否定句**（web 面提示词声明浏览器不提供 DOM/route/screenshot 上下文）。生态里确实存在
+  官方实验包与社区插件（`ctx.computerUse` seam + `computer_*` 工具，需 `llm-pi-ai` 视觉路由、
+  `attachment`、`credentials`、`user-approval`），但那是**装插件 + 改 profile patch**的用户选择，
+  不进 Molecular Biology Lab 预设：它换不来计算能力，只换来操控网页/桌面（如网页版 Primer-BLAST、
+  IDT 下单界面），却让"浏览器控制"与"实验记录"同处一个会话。
+- **agent 驱动浏览器终端**：无 `dsh-tool-terminal`（该包未安装，故六个 `terminal_*` 工具不存在），
+  且面板明确不把输出转给模型。`ctx.computerUse`/`ctx.browserUse` 这类 seam 只允许**一个** provider
+  注册（重复注册即失败），所以第三方插件即便在未来版本也**不能**自带一个并行实现去抢。
+- **MCP 与 hooks**（同批勘察）：`dsh-mcp-client` **未被任何 shipped bundle 挂载**（只有
+  `dsh-mcp-resources` 在 `dsh-base`），用户要加需在 profile 的 `cordis.patch.yml` 写一行
+  `name: '@deepseek-ai/dsh-mcp-client'`（MCP 工具名形如 `mcp__<server>__<tool>`，图像结果会经附件
+  投影给模型）；宿主插件也可以在自己的 `apply` 里 `ctx.plugin(McpClient, config)` 程序化挂载
+  （对象插件契约，**运行时未实测**）。**安全要点**：stdio MCP server 由 MCP SDK 自己 spawn，
+  **不受 DSH 文件沙箱约束**，只做环境变量清理（`/KEY|PASSWORD|SECRET|TOKEN/i` 与 `DSH_*` 被丢弃）。
+  `dsh-hooks-*` 是给已有 Claude Code / Codex `hooks.json` 的**兼容适配器**，不是插件扩展点——
+  插件应直接监听 `tools/pre-execute` / `tools/post-execute` / `agent/pre-step` / `agent/turn-stopping`
+  这些同名拦截点。这两项都不是 v18 必需，仅作为"若实验台要接外部计算服务"的备选记录在案。
+
 - **v17 已完成（2026-09-13，包 0.9.0 / preset 目录 v17）**：TaqMan 水解探针设计（`taqman.mjs` + `molbio_design_taqman`）、多重 PCR 互扰检查（`multiplex.mjs` + `molbio_multiplex_check`）、甲基化敏感位点检查与双酶切 buffer 兼容（`methylation.mjs` + `molbio_methylation_check` / `molbio_double_digest`，参考表进 `lib.mjs`）、螺旋轮与疏水性图（`protein-structure.mjs` + `molbio_helical_wheel` / `molbio_hydropathy_plot`）。工具 46 → 52。实现过程中三次纠正探针几何、抓到 `primer_options` 全表静默失效与两处非 lossless-JSON 字段，详见 CHANGELOG 0.9.0。
 - 质粒图谱的浏览器内实时面板（**已落地**：bundle 渠道——手写 lazy-CJS 打包器 + 右栏 Molbio 面板 + 图谱调用卡，见 `docs/client-panel.md`；v17 起 `browser-api.mjs` 也再导出 v17 的纯计算面，但面板未改动）
 - 文献库的浏览器端面板（**已落地**：右栏 "Papers" 页）

@@ -42,7 +42,8 @@ SVG 随 meta 传输有上限（256 KB）：真实载体的图谱 20-60 KB，但�
 
 | 文件 | 作用 |
 | --- | --- |
-| `build/client-bundle.mjs` | 零依赖打包器：把浏览器半打成 DSH 客户端加载器要求的 lazy-CJS 产物，**一趟构建产出两个交付包** |
+| `build/client-bundle.mjs` | 零依赖打包器的 **CLI**：把浏览器半打成 DSH 客户端加载器要求的 lazy-CJS 产物，**一趟构建产出两个交付包**（`--check` 只报告陈旧、不落盘） |
+| `build/client-bundle-core.mjs` | 打包器的**生成逻辑**（可 import）：`createGenerator({entry, baseDir})` → 模块图 + `renderBundle(packageName)`；`test/contract.mjs` 在进程内用它重算产物做新鲜度检查（不 spawn，受限沙箱下也能验证） |
 | `build/browser-api.mjs` | 浏览器安全面：从**包根的 `.mjs` 源文件**再导出面板可用的一切（单一事实来源） |
 | `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
 | `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，以及两个 map 工具的调用卡 |

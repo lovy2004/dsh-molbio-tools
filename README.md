@@ -232,6 +232,12 @@ SVG 文件**并在结果里返回路径：
 | `molbio_helical_wheel` / `molbio_hydropathy_plot` | 螺旋轮、疏水性图 |
 | `molbio_fasta_fastq` / `molbio_extract_region` / `molbio_paper_export_bibtex` | FASTA / `.bib` |
 
+> **图是给"你"看的，不是给模型看的**：产物默认是 **SVG**，模型自己并不"看"这些图（它读的是
+> 路径和数值）。若想让模型直接看图（例如自查凝胶条带或质粒图谱），目前需要用 `read` 类工具读
+> 别的格式或自己转 PNG——**绘图工具输出 PNG 已在 v18 路线图候选里**（见
+> [docs/maintainer.md](docs/maintainer.md) 的"DSH 0.1.6 新能力的可用性勘察"，该能力对应
+> harness 自带的 `read_image` 工具）。
+
 ### 自动打开（auto-view）
 
 **所有生成 SVG 的工具写完文件后会自动用系统默认应用打开**（Windows `Invoke-Item`、macOS `open`、
@@ -427,6 +433,7 @@ SVG 文件**并在结果里返回路径：
 | [docs/client-panel.md](docs/client-panel.md) | 浏览器内面板：产物格式、服务契约、上限、验证方式、已知限制 |
 | [docs/route-b.md](docs/route-b.md) | 安装渠道 B（注册包内 preset）：机制、升级 Runbook、取舍 |
 | [docs/client-pipeline-exploration.md](docs/client-pipeline-exploration.md) | 浏览器内面板的可行性与实现路径调研 |
+| [docs/capability-gap-survey.md](docs/capability-gap-survey.md) | 能力缺口调查：40 条排序候选、必做 top-5、以及"想做但不可行"的确切阻断原因 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更日志（包版本 ↔ preset 版本目录对照） |
 
 包内目录结构：
@@ -455,11 +462,11 @@ dsh-molbio-tools/
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储
 ├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开
-├── build/           # 浏览器半源码与零依赖打包器
+├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 推荐安装渠道：专属模式 preset（vN 版本目录）
-├── test/            # 冒烟测试 + 三组客户端/组合检查
+├── test/            # 冒烟测试 + 客户端/组合检查（含 preset 漂移守卫 drift-probe.mjs）
 ├── docs/            # 维护者与实现文档
 └── cordis.patch.yml # bundle 渠道补丁层
 ```

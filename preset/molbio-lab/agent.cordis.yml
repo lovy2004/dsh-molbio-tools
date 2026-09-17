@@ -16,23 +16,47 @@
 # private instance, apart from every other preset's. (A shared label does NOT
 # pool instances — `provide()` throws on the second registration under the
 # same realm symbol; labels join REALMS, and are not what this file needs.)
+#
+# ── How this file is maintained ─────────────────────────────────────────────
+#
+# This composition is a COPY of the DSH-shipped `standard` preset with exactly
+# ONE intentional difference: the trailing `tool-molbio` row. Everything above
+# that row — every comment, every row, every config key, in upstream's ORDER —
+# is upstream text copied verbatim.
+#
+# Baseline: the `standard` preset of dsh 0.1.6-alpha.1 (harness root
+# `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`, file
+# `node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml`).
+#
+# Keeping the text byte-identical above `tool-molbio` is not cosmetic: a preset
+# mounts DSH's OWN packages, so upstream drift here kills the whole preset at
+# mount (the failure mode of 0.1.5-alpha.2, when `dsh-persona` replaced `text:`
+# with `prefix:`/`suffix:` and this composition stopped appearing in the
+# picker). When the diff is exactly one hunk, `git diff --no-index` against the
+# installed baseline IS the drift audit. v17 shipped with
+# `@deepseek-ai/dsh-workflow-worker-thread`, a package no released DSH
+# installs; `test/preset-health.mjs` caught it as an unmountable row.
+#
+# Two rules when absorbing a DSH upgrade:
+#   1. copy upstream changes — including comments and key order — instead of
+#      hand-writing an equivalent-looking row, so the next diff stays one hunk;
+#   2. re-run `node test/preset-health.mjs`, which validates every row's config
+#      against the INSTALLED package's own schema and reports drift; only the
+#      `extra row "tool-molbio"` note may remain.
+#
+# Do NOT "fix" `present` (or any other row) by hand to suit the toolset: if the
+# upstream row is wrong for this preset, fix it upstream, not here.
 
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The preset's own persona, shadowing the deployment default for this agent.
 # `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
-#
-# `prefix`/`suffix` is the current `dsh-persona` contract (0.1.5-alpha.2): the
-# row's Config requires `prefix`, and a leftover `text:` key fails the mount
-# with `$.prefix missing required value` — the preset then never appears in the
-# picker. `test/preset-health.mjs` checks every row's config against the
-# installed package's own schema, which is what catches this class of drift.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
+    suffix: Your working directory is {{cwd}}.
     prefix: >-
       You are a coding agent powered by the {{model}} model.
-    suffix: Your working directory is {{cwd}}.
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
@@ -172,12 +196,6 @@
 # `workflows` is different — nothing outside an agent reads it — so every row
 # that reaches it shares one entry-local realm here, and a consumer left
 # outside would resolve a host registry this preset does not populate.
-#
-# `tool-subagent-report` is host-plane for the same reason as the registry,
-# not because a preset may not want it: it registers a CONTINUABLE SETUP on
-# that singleton rather than a tool this agent calls, and the setup list is
-# not scope-aware — one copy per mounted preset means every child gets
-# `report` registered once per live session, which throws on the second.
 - id: delegation
   name: cordis:group
   group: true
@@ -200,8 +218,8 @@
 
     # Fork omits model selection so provider/model stay equal to the parent and
     # the inherited history remains eligible for KV Cache reuse. This preset
-    # keeps fork continuable and accepts its child-scoped `report` additions invalidating
-    # that prefix; issue #2124 tracks cache-preserving continuable fork.
+    # keeps fork continuable; parent and child inherit the same messaging tool,
+    # while the parent id and return guidance follow the inherited history.
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
@@ -231,16 +249,23 @@
         backgroundMode: one-shot
         maxDepth: provider-managed
 
-    - id: workflow-worker-thread
-      name: '@deepseek-ai/dsh-workflow-worker-thread'
+    - id: workflow-ptc
+      name: '@deepseek-ai/dsh-workflow-ptc'
       config:
         provider: spawn
 
     - id: tool-workflow
       name: '@deepseek-ai/dsh-tool-workflow'
 
+    # Off by default with the base row it mirrors: the tool description
+    # restricts `ralph` to runs the human explicitly asked for, and completion
+    # is a worker self-report, not an independent evaluation. Preset files take
+    # no patches, so a session that wants it duplicates this preset under a new
+    # id and drops `disabled`; the shipped root shadows a copy that reuses this
+    # id.
     - id: tool-ralph
       name: '@deepseek-ai/dsh-tool-ralph'
+      disabled: true
       config:
         subagentProvider: spawn
         maxRounds: 64

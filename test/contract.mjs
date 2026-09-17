@@ -30,7 +30,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, '..');
@@ -97,10 +97,18 @@ check('the shell derives hook props as use<Capitalised(Source)>', () => {
     if (!path.endsWith('.js')) continue;
     const text = readFileSync(path, 'utf8');
     if (!text.includes('standardHookPropName')) continue;
-    // The rule itself, in the shell's minified shape: `use${x[0]?.toUpperCase()??""}${x.slice(1)}`.
-    const rule = /function \w+\((\w)\)\{return`use\$\{\1\[0\]\?\.toUpperCase\(\)\?\?""\}\$\{\1\.slice\(1\)\}`\}/.exec(text);
+    // The rule is still exported under its stable name from the slots module.
+    // 0.1.6-alpha.1 minified it into a CLASS METHOD (`$c(t){return ...}`)
+    // instead of the 0.1.5-alpha.2 `function $c(t){...}`; assert the RULE, not
+    // one minifier spelling of it, so a future bundler change reports the
+    // contract (does the shell still capitalise the hook source?) rather than
+    // its formatting.
+    assert.ok(
+      /standardHookPropName\s*:\s*[A-Za-z_$][\w$]*/.test(text),
+      `the rule is still exported under its stable name in ${path}`,
+    );
+    const rule = /[A-Za-z_$][\w$]*\((\w+)\)\s*\{\s*(?:return\s*)?`use\$\{\1\[0\]\?\.toUpperCase\(\)\?\?""\}\$\{\1(?:\.slice\(1\)|\.substring\(1\))\)?\}`\s*;?\s*\}/.exec(text);
     assert.ok(rule !== null, `the use<Name> rule is still implemented in ${path}`);
-    assert.ok(text.includes('standardHookPropName'), 'the rule is still exported under its stable name');
     found = true;
     break;
   }
@@ -314,35 +322,42 @@ check('every seat claim waits for the declaration (slots.inject, not a bare regi
 });
 
 check('the committed client artifact is what the current sources build (no stale bundle)', async () => {
-  // The trap this closes: edit build/*.mjs, forget `npm run build:client`, and
-  // every test that runs against the artifact passes while users keep loading
-  // the OLD behaviour — or, worse, a source fix that never reached the bundle.
-  // The bundle is deterministic, so rebuild-and-compare IS the check.
-  const { createHash } = await import('node:crypto');
-  const { spawnSync } = await import('node:child_process');
+  // The trap this closes: edit build/*.mjs or a shipped .mjs, forget
+  // `npm run build:client`, and every test that runs against the artifact
+  // passes while users keep loading the OLD behaviour — or, worse, a source fix
+  // that never reached the bundle.
+  //
+  // This used to run the bundler as a child process and compare hashes. A
+  // confined sandbox refuses piped stdio with EPERM, so the check could only
+  // report that it was unable to verify — a release gate that disappears
+  // exactly where releases are automated. The generator is importable now
+  // (`build/client-bundle-core.mjs`), so the expected artifact is recomputed IN
+  // PROCESS: same code path the bundler writes, no child process, and no write
+  // to the committed file.
+  const { createGenerator } = await import(pathToFileURL(join(packageRoot, 'build', 'client-bundle-core.mjs')).href);
+  const generator = await createGenerator({
+    entry: join(packageRoot, 'build', 'client-entry.mjs'),
+    baseDir: packageRoot,
+  });
+
   const artifacts = ['lib/client.js', join('packages', 'molbio-panel', 'lib', 'client.js')]
     .filter((rel) => existsSync(join(packageRoot, rel)));
   assert.ok(artifacts.length > 0, 'at least one client artifact exists');
-  const hashOf = (rel) => createHash('sha256').update(readFileSync(join(packageRoot, rel))).digest('hex');
-  const before = new Map(artifacts.map((rel) => [rel, hashOf(rel)]));
-
-  const build = spawnSync(process.execPath, [join(packageRoot, 'build', 'client-bundle.mjs')], { cwd: packageRoot, encoding: 'utf8' });
-  // A null status with an error means the spawn itself never ran the child (a
-  // confined sandbox refuses piped stdio: EPERM). The generic "the bundler runs
-  // cleanly" message is misleading there — say what actually happened, and how
-  // to verify freshness by hand.
-  if (build.status === null && build.error != null) {
-    assert.fail(`could not spawn the bundler (${build.error.message.split('\n')[0]}); verify freshness by hand: \`node build/client-bundle.mjs && git diff --stat lib packages\``);
-  }
-  assert.equal(build.status, 0, `the bundler runs cleanly (stderr: ${String(build.stderr ?? '').split('\n')[0]})`);
 
   for (const rel of artifacts) {
+    const committed = readFileSync(join(packageRoot, rel), 'utf8');
+    const owner = JSON.parse(readFileSync(join(packageRoot, dirname(rel), '..', 'package.json'), 'utf8'));
+    const { text: expected } = generator.renderBundle(owner.name);
     assert.equal(
-      hashOf(rel),
-      before.get(rel),
+      committed,
+      expected,
       `${rel} is stale: the sources build a different artifact than the committed one — run \`npm run build:client\` and commit the result`,
     );
   }
+
+  // The check is only meaningful if the generator actually ran: a graph of zero
+  // modules would compare two identical empty strings.
+  assert.ok(generator.order.length > 0, 'the generator walked a non-empty module graph');
 });
 
 // ── run ─────────────────────────────────────────────────────────────────────

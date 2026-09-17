@@ -1,9 +1,12 @@
 {
   "name": "dsh-molbio-tools",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Zero-dependency molecular-biology plugin bundle for the DeepSeek Harness: sequence analysis, primer design (incl. cross-intron qPCR primers, TaqMan hydrolysis probes and multiplex compatibility), cloning simulation, SnapGene .dna parsing and plasmid maps, Sanger verification, protein tools (incl. helical wheel and hydropathy plots), methylation-aware restriction analysis with double-digest buffer checks, qPCR analysis and plotting, multiple sequence alignment and conservation analysis, sequence logos, CRISPR gRNA design with off-target search, plus a browser-side right-sidebar panel (plasmid maps and sequence logos drawn in the Web GUI) and a literature/protocol/experiment record system.",
   "type": "module",
   "main": "index.mjs",
+  "engines": {
+    "node": ">=22"
+  },
   "exports": {
     ".": "./index.mjs",
     "./client": {
@@ -12,12 +15,13 @@
   },
   "scripts": {
     "build:client": "node build/client-bundle.mjs",
-    "test": "node --run test:unit && node test/contract.mjs && node test/preset-health.mjs",
+    "test": "node --run test:unit && node test/contract.mjs && node test/drift-probe.mjs && node test/preset-health.mjs",
     "test:unit": "node test/smoke.mjs && node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && node test/client-mount.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:client": "node --run test:client:node",
     "test:client:node": "node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && node test/client-mount.mjs",
     "test:contract": "node test/contract.mjs",
+    "test:drift-probe": "node test/drift-probe.mjs",
     "test:preset": "node test/preset-health.mjs"
   },
   "files": [

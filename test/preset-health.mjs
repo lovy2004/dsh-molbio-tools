@@ -185,17 +185,86 @@ async function checkRow(row, packages, harnessRoot, presetBase) {
   }
 }
 
-/** Row ids of a composition, for the drift comparison. */
-function rowIds(rows) {
-  const ids = new Set();
+/** Rows, in composition order, with nested group children flattened inline. */
+function orderedRows(rows) {
+  const out = [];
   const walk = (list) => {
     for (const row of list) {
-      if (row && typeof row.id === 'string') ids.add(row.id);
-      if (row && row.group === true && Array.isArray(row.config)) walk(row.config);
+      if (row && row.group === true && Array.isArray(row.config)) {
+        out.push(row);
+        walk(row.config);
+        continue;
+      }
+      out.push(row);
     }
   };
   walk(rows);
-  return ids;
+  return out;
+}
+
+/**
+ * Rows this preset is ALLOWED to differ from the shipped `standard` on: the
+ * plugin row it exists to add. Everything else must match upstream, because a
+ * preset mounts DSH's own packages and an upstream drift (a renamed provider,
+ * a config contract change) kills the whole preset at mount.
+ */
+const ALLOWED_EXTRA_ROWS = new Set(['tool-molbio']);
+/** Rows upstream ships ENABLED that this preset intentionally disables. */
+const ALLOWED_DISABLED_ROWS = new Set();
+
+/**
+ * Structural drift against the shipped `standard` preset, row by row and in
+ * order. Comparing ids alone (the v15–v17 behaviour) misses exactly the two
+ * defects that reached a release: a provider package the harness does not
+ * install (`workflow-worker-thread`) and an upstream `disabled: true` that had
+ * been dropped (`tool-ralph`).
+ */
+function compositionDrift(standardRows, mineRows) {
+  const drift = [];
+  const mineById = new Map();
+  for (const row of mineRows) if (row && typeof row.id === 'string') mineById.set(row.id, row);
+  const standardById = new Map();
+  for (const row of standardRows) if (row && typeof row.id === 'string') standardById.set(row.id, row);
+
+  // 1. missing / extra rows, in upstream order.
+  const standardIds = new Set(standardById.keys());
+  const mineIds = new Set(mineById.keys());
+  for (const id of standardIds) if (!mineIds.has(id)) drift.push(`missing row "${id}" (shipped standard has it)`);
+  for (const id of mineIds) {
+    if (!standardIds.has(id) && !ALLOWED_EXTRA_ROWS.has(id)) drift.push(`extra row "${id}" (not in shipped standard)`);
+  }
+
+  // 2. the rows that exist on both sides must be the same row.
+  for (const [id, mine] of mineById) {
+    const standard = standardById.get(id);
+    if (standard === undefined) continue;
+    const differences = [];
+    if (mine.name !== standard.name) differences.push(`name "${standard.name}" -> "${mine.name}"`);
+    if (Boolean(mine.disabled) !== Boolean(standard.disabled)) {
+      if (Boolean(standard.disabled)) differences.push('upstream ships it disabled and this preset enables it');
+      else if (ALLOWED_DISABLED_ROWS.has(id)) differences.push('disabled here (documented deviation)');
+      else differences.push('this preset disables a row upstream ships enabled');
+    }
+    if (JSON.stringify(mine.isolate ?? null) !== JSON.stringify(standard.isolate ?? null)) differences.push('isolate realm differs');
+    if (JSON.stringify(mine.config ?? null) !== JSON.stringify(standard.config ?? null)) differences.push('config differs');
+    for (const difference of differences) drift.push(`row "${id}": ${difference}`);
+  }
+
+  // 3. the rows that exist on both sides must appear in the same order, so the
+  // file stays a copy of upstream plus one trailing row.
+  const myOrder = mineRows
+    .map((row) => row?.id)
+    .filter((id) => typeof id === 'string' && standardIds.has(id));
+  const standardOrder = standardRows
+    .map((row) => row?.id)
+    .filter((id) => typeof id === 'string' && mineIds.has(id));
+  for (let index = 0; index < Math.min(myOrder.length, standardOrder.length); index += 1) {
+    if (myOrder[index] !== standardOrder[index]) {
+      drift.push(`row order: position ${index + 1} is "${myOrder[index]}" here and "${standardOrder[index]}" in the shipped standard`);
+      break;
+    }
+  }
+  return drift;
 }
 
 async function main() {
@@ -264,21 +333,29 @@ async function main() {
     if (result.status !== 'ok' && result.status !== 'disabled' && result.status !== 'skipped') failures.push(result);
   }
 
-  // Drift against the shipped `standard` preset this one is derived from.
+  // Drift against the shipped `standard` preset this one is derived from. The
+  // preset's own charter is "the standard coding agent + the molbio tools", so
+  // anything but the tool-molbio row (and the allowed deviations above) is a
+  // divergence to report — and a FAILURE, not a note: the v17 release shipped
+  // an unmountable provider row while this check printed a drift NOTE and the
+  // suite reported success.
   const standardPath = join(packages, 'dsh-agent-presets', 'presets', 'standard', 'agent.cordis.yml');
   const drift = [];
   if (existsSync(standardPath) && resolve(standardPath) !== composition) {
-    const standardIds = rowIds(await readComposition(standardPath, harnessRoot));
-    const mineIds = rowIds(await readComposition(composition, harnessRoot));
-    for (const id of standardIds) if (!mineIds.has(id)) drift.push(`missing row "${id}" (shipped standard has it)`);
-    for (const id of mineIds) if (!standardIds.has(id)) drift.push(`extra row "${id}" (not in shipped standard)`);
+    drift.push(...compositionDrift(
+      orderedRows(await readComposition(standardPath, harnessRoot)),
+      orderedRows(await readComposition(composition, harnessRoot)),
+    ));
   }
 
   console.log('');
   if (drift.length > 0) {
-    console.log('drift vs shipped standard preset:');
-    for (const line of drift) console.log(`  ! ${line}`);
-    console.log('');
+    console.error('drift vs shipped standard preset:');
+    for (const line of drift) console.error(`  FAIL ${line}`);
+    console.error('');
+    console.error('  Absorb upstream changes verbatim (comments and key order included) so this');
+    console.error('  composition stays `standard` + one trailing tool-molbio row; see the');
+    console.error('  "How this file is maintained" header in preset/molbio-lab/agent.cordis.yml.');
   }
 
   // An unmanaged directory that no `.gitignore` entry covers ships with the repo.
@@ -291,12 +368,24 @@ async function main() {
   }
   if (strays.length > 0) console.log(`version directories present: ${strays.join(', ')}\n`);
 
-  if (failures.length > 0) {
-    console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
-    for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
+  if (failures.length > 0 || drift.length > 0) {
+    if (failures.length > 0) {
+      console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
+      for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
+    }
+    if (drift.length > 0) {
+      console.error(`preset-health FAILED: ${drift.length} structural drift(s) from the shipped standard preset`);
+    }
     process.exit(1);
   }
-  console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}${drift.length ? ` (${drift.length} drift note(s))` : ''}`);
+  console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, and the composition is the shipped standard plus tool-molbio`);
 }
 
-await main();
+// `compositionDrift` is exported for `test/drift-probe.mjs`, which drives it
+// against deliberately mutated compositions: the two defects this guard exists
+// for (a phantom provider row, a dropped upstream `disabled`) must FAIL, and a
+// guard nobody has seen fail is not a guard. `import.meta.main` (Node >= 22)
+// keeps `node test/preset-health.mjs` behaving exactly as before.
+if (import.meta.main) await main();
+
+export { compositionDrift };
