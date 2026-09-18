@@ -368,7 +368,46 @@ async function main() {
   }
   if (strays.length > 0) console.log(`version directories present: ${strays.join(', ')}\n`);
 
-  if (failures.length > 0 || drift.length > 0) {
+  // The version directory the composition points at must MIRROR the package
+  // root module-for-module. The preset travels with the plugin, so a row that
+  // names vN while vN still holds the previous release's file is a silent
+  // "upgrade that changed nothing" — the exact failure the module-cache rule in
+  // the composition header exists to prevent, and one that no mount check can
+  // see (the old module mounts perfectly).
+  const mirrorDrift = [];
+  const activeMatch = /name:\s*'\.\/plugins\/([^/']+)\//.exec(await readFile(composition, 'utf8'));
+  if (activeMatch !== null) {
+    const versionDir = join(pluginsDir, activeMatch[1]);
+    const packageRoot = join(dirname(resolve(composition)), '..', '..');
+    if (!existsSync(versionDir)) {
+      mirrorDrift.push(`the composition points at ${activeMatch[1]}, which does not exist`);
+    } else {
+      const shipped = (await readdir(versionDir)).filter((name) => name.endsWith('.mjs')).sort();
+      for (const name of shipped) {
+        const rootFile = join(packageRoot, name);
+        if (!existsSync(rootFile)) {
+          mirrorDrift.push(`${activeMatch[1]}/${name} has no counterpart at the package root`);
+          continue;
+        }
+        const [inPreset, inRoot] = await Promise.all([readFile(join(versionDir, name)), readFile(rootFile)]);
+        if (!inPreset.equals(inRoot)) mirrorDrift.push(`${activeMatch[1]}/${name} differs from ${name} at the package root`);
+      }
+      const missing = (await readdir(packageRoot))
+        .filter((name) => name.endsWith('.mjs'))
+        .filter((name) => !shipped.includes(name));
+      for (const name of missing) mirrorDrift.push(`${name} exists at the package root but is missing from ${activeMatch[1]}`);
+    }
+  }
+  if (mirrorDrift.length > 0) {
+    console.error('mirror check (the preset version directory vs the package root):');
+    for (const line of mirrorDrift) console.error(`  FAIL ${line}`);
+    console.error('');
+    console.error('  Copy the current modules into the version directory the composition names —');
+    console.error('  never edit a released directory in place (see the module-cache rule in the');
+    console.error('  composition header).');
+  }
+
+  if (failures.length > 0 || drift.length > 0 || mirrorDrift.length > 0) {
     if (failures.length > 0) {
       console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
       for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
@@ -376,9 +415,13 @@ async function main() {
     if (drift.length > 0) {
       console.error(`preset-health FAILED: ${drift.length} structural drift(s) from the shipped standard preset`);
     }
+    if (mirrorDrift.length > 0) {
+      console.error(`preset-health FAILED: ${mirrorDrift.length} file(s) in the active preset version directory are not the current sources`);
+    }
     process.exit(1);
   }
   console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, and the composition is the shipped standard plus tool-molbio`);
+  console.log(`mirror OK: ${activeMatch?.[1] ?? 'no version directory'} matches the package root module-for-module`);
 }
 
 // `compositionDrift` is exported for `test/drift-probe.mjs`, which drives it

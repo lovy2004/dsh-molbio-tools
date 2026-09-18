@@ -132,6 +132,14 @@ window.__ModuleLoader__.load({
 
 			const GENETIC_CODES = Object.keys(CODON_TABLE);
 
+			/**
+			 * The codon→amino-acid maps themselves, keyed by code name (see
+			 * GENETIC_CODES). Exported so other modules can derive amino-acid families
+			 * from ONE table instead of re-typing the standard code (codon.mjs does
+			 * exactly that).
+			 */
+			const CODON_TABLE_BY_NAME = CODON_TABLE;
+
 			function toDna(seq) {
 			  return seq.replaceAll('U', 'T');
 			}
@@ -1441,6 +1449,7 @@ window.__ModuleLoader__.load({
 			exports.baseCounts = baseCounts;
 			exports.CODON_TABLE = CODON_TABLE;
 			exports.GENETIC_CODES = GENETIC_CODES;
+			exports.CODON_TABLE_BY_NAME = CODON_TABLE_BY_NAME;
 			exports.translateFrames = translateFrames;
 			exports.ENZYMES = ENZYMES;
 			exports.ENZYME_NAMES = ENZYME_NAMES;
@@ -5726,7 +5735,16 @@ window.__ModuleLoader__.load({
 
 			// ── codon optimization ──────────────────────────────────────────────────────
 
-			/** Preferred codons per host (published high-frequency tables; heuristic). */
+			/**
+			 * Preferred codons per host, in descending order of how often that host uses
+			 * them (published high-frequency tables; heuristic). Exported so the test suite
+			 * can hold it against codon.mjs's complete frequency table: every codon listed
+			 * here must exist in that table, and the first choice must not be a RARE codon
+			 * for the host (below half the family maximum) — a transcription slip in either
+			 * table then fails the suite instead of producing a plausible-looking wrong CAI.
+			 * The two tables are allowed to disagree about the single most frequent codon,
+			 * because this one encodes OPTIMIZATION preference, which is not the same thing.
+			 */
 			const CODON_USAGE = {
 			  e_coli: {
 			    A: ['GCG', 'GCT', 'GCC'], R: ['CGT', 'CGC', 'CGG'], N: ['AAC', 'AAT'],
@@ -5888,6 +5906,7 @@ window.__ModuleLoader__.load({
 			exports.isoelectricPoint = isoelectricPoint;
 			exports.proteinProperties = proteinProperties;
 			exports.peptideDigest = peptideDigest;
+			exports.CODON_USAGE = CODON_USAGE;
 			exports.CODON_HOSTS = CODON_HOSTS;
 			exports.codonOptimize = codonOptimize;
 			return exports;

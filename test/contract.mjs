@@ -93,6 +93,16 @@ function filesUnder(dir, limit = 400) {
 const checks = [];
 const check = (name, run) => checks.push({ name, run });
 
+/**
+ * The root-hook contribution `@deepseek-ai/dsh-client-ui-session` makes, as
+ * two whitespace-tolerant shapes: the CALL (provideRoot with a `hooks` object)
+ * and the SOURCE NAME (`sessions`, which becomes the `useSessions` prop).
+ * Kept as named regexes so the check below can prove they are neither
+ * format-bound nor vacuous.
+ */
+const PROVIDE_ROOT_HOOKS = /ctx\.slots\.provideRoot\(\s*\{\s*hooks\s*:\s*\{/;
+const PROVIDE_ROOT_SESSIONS = /provideRoot\(\s*\{\s*hooks\s*:\s*\{\s*sessions\s*:/;
+
 // ── 1. the hook-prop naming rule ────────────────────────────────────────────
 
 check('the shell derives hook props as use<Capitalised(Source)>', () => {
@@ -134,10 +144,35 @@ check('a session-scope tab body receives sessionId + useSessions (official prece
 check('the sessions root hook is provided by the session client package', () => {
   const session = clientBundle('@deepseek-ai/dsh-client-ui-session');
   assert.ok(session !== undefined, 'ui-session is installed');
-  assert.ok(session.text.includes('ctx.slots.provideRoot({ hooks: {'), 'it contributes root hooks');
-  assert.ok(/provideRoot\(\{\s*hooks:\s*\{\s*sessions:/.test(session.text), 'the root hook source is named `sessions`');
+  // Whitespace-tolerant on purpose (0.1.6-alpha.2 writes the same call across
+  // four indented lines instead of one; the CONTRACT is "provideRoot with a
+  // hooks object", never one minifier's spacing). Same posture as the line
+  // below, and the reason this file's header says assertions pin rules.
+  assert.ok(PROVIDE_ROOT_HOOKS.test(session.text), 'it contributes root hooks');
+  assert.ok(PROVIDE_ROOT_SESSIONS.test(session.text), 'the root hook source is named `sessions`');
   // `sessions` -> `useSessions` under the rule asserted above.
   assert.ok(session.text.includes('installScope("session"'), 'and installs the session scope those props belong to');
+});
+
+// The two assertions above read a MINIFIED bundle, so they must survive the
+// minifier's choice of line breaks. Prove that on the one hand (four spellings
+// of the same call all pass) and prove they are not vacuous on the other (a
+// renamed hook source still fails) — otherwise "make it whitespace-tolerant"
+// quietly becomes "stop checking anything".
+check('the root-hook assertions accept any spelling but still check the contract', () => {
+  const spellings = [
+    'ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list }, keyedHooks: {} });',
+    'ctx.slots.provideRoot({\n\t\t\thooks: {\n\t\t\t\tsessions: ctx.sessions.list\n\t\t\t}\n\t\t});',
+    'ctx.slots.provideRoot({hooks:{sessions:ctx.sessions.list}});',
+    'ctx.slots.provideRoot( {  hooks : {  sessions : x } } );',
+  ];
+  for (const spelling of spellings) {
+    assert.ok(PROVIDE_ROOT_HOOKS.test(spelling), `accepts: ${spelling.split('\n')[0].slice(0, 40)}`);
+    assert.ok(PROVIDE_ROOT_SESSIONS.test(spelling), `and finds the sessions source in: ${spelling.split('\n')[0].slice(0, 40)}`);
+  }
+  const renamed = 'ctx.slots.provideRoot({\n\t\t\thooks: {\n\t\t\t\thookz: ctx.sessions.list\n\t\t\t}\n\t\t});';
+  assert.ok(PROVIDE_ROOT_HOOKS.test(renamed), 'the call is still a root-hook contribution');
+  assert.ok(!PROVIDE_ROOT_SESSIONS.test(renamed), 'but a renamed hook source is NOT accepted');
 });
 
 // ── 3. the workspaceFiles methods the panel calls ───────────────────────────
@@ -395,9 +430,11 @@ check('a tool may show the model a picture the way read_image does', () => {
   assert.ok(toolFs.includes('no attachment service is mounted'), 'and still needs the attachment service');
 
   // Our own side: every picture tool carries the opt-in parameter and the field.
+  // The count is deliberate: it is what catches a NEW picture tool that forgets
+  // the hand-off (or a report tool that quietly grows it).
   const index = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
-  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 11, 'all 11 picture tools declare the image output field');
-  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 11, 'and offer the opt-in attach_image parameter');
+  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 15, 'all 15 picture tools declare the image output field');
+  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 15, 'and offer the opt-in attach_image parameter');
   assert.ok(/output\.render/.test(index) || index.includes('imageBlockFor(value)'), 'the block builder is wired into define()');
 });
 

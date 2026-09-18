@@ -2288,6 +2288,7 @@ function splicedToGenomic(splicedPos, exons) {
     'molbio_plasmid_map', 'molbio_plasmid_map_file', 'molbio_clone_simulate', 'molbio_golden_gate',
     'molbio_grna_design', 'molbio_qpcr_efficiency', 'molbio_plot', 'molbio_virtual_gel',
     'molbio_sequence_logo', 'molbio_helical_wheel', 'molbio_hydropathy_plot',
+    'molbio_fastq_qc', 'molbio_phylogenetic_tree', 'molbio_pcr_simulate', 'molbio_gc_composition',
   ];
   for (const toolName of pictureTools) {
     const tool = toolByName(toolName);
@@ -2295,7 +2296,7 @@ function splicedToGenomic(splicedPos, exons) {
     assert.ok(Object.hasOwn(tool.output.schema.properties, 'image'), `${toolName} can report the attached image`);
     assert.ok(Object.hasOwn(tool.output.schema.properties, 'image_note'), `${toolName} can explain a missing image`);
   }
-  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 11, 'exactly the 11 picture tools — the analysis tools are untouched');
+  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 15, 'exactly the 15 picture tools — the report-only analysis tools are untouched');
 
   // 9. Rendering text alone still works (the attachment must not break render).
   const logo = await runWith('molbio_sequence_logo', { alignment: ['ACGTACGT', 'ACGTTCGT'], attach_image: true }, routedExec);
@@ -2304,9 +2305,841 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(logo.blocks[1].type, 'image');
 }
 
+// ── v19: read-level FASTQ QC ────────────────────────────────────────────────
+//
+// A hand-built 8-read fixture whose every statistic is worked out by hand
+// below. Quality strings are written Phred+33 (Q=0 -> '!'), which is what the
+// decoder assumes; positions are reported 1-based, as in every other tool.
+{
+  const read = (id, sequence, qualities) => ({ id, sequence, qualities });
+  const fixture = [
+    read('r1', 'ACGT', [30, 30, 30, 10]),
+    read('r2', 'ACGT', [20, 20, 20, 10]),
+    read('r3', 'ACGT', [10, 10, 10, 10]),
+    read('r4', 'ACGTACGTAC', [40, 40, 40, 40, 40, 40, 40, 40, 40, 40]),
+    read('r5', 'AAAAAAAAAA', [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]),
+    read('r6', 'ACGT', [40, 40, 40, 40]),
+    read('r7', 'ACGTACGT', [20, 20, 20, 20, 20, 20, 20, 20]),
+    read('r8', 'ACGTACGTACGTAGATCGGAAGAG', [30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]),
+  ];
+  const qualityString = (qualities) => qualities.map((value) => String.fromCharCode(33 + value)).join('');
+  const fastqText = fixture.map((entry) => `@${entry.id}\n${entry.sequence}\n+\n${qualityString(entry.qualities)}\n`).join('');
+  const totalReads = fixture.length;
+  const totalBases = fixture.reduce((sum, entry) => sum + entry.sequence.length, 0);
+
+  const qc = await run('molbio_fastq_qc', { fastq: fastqText, max_plot_bases: 10 });
+
+  // 1. Headline counts and length statistics.
+  assert.equal(qc.reads, totalReads);
+  assert.equal(qc.reads_total, totalReads);
+  assert.equal(qc.truncated, false);
+  assert.equal(qc.bases, totalBases);
+  assert.deepEqual(
+    [qc.length.min, qc.length.max, qc.length.median, qc.length.n50, qc.length.distinct_lengths],
+    [4, 24, 6, 10, 4],
+    'lengths sorted 4,4,4,4,8,10,10,24 -> max 24 (the adapter read), median (4+8)/2 = 6, N50 10, four distinct values',
+  );
+  assert.equal(qc.length.histogram.reduce((sum, bin) => sum + bin.reads, 0), totalReads, 'the histogram accounts for every read');
+
+  // 2. Per-position quality: mean/median/quartiles are hand-computed.
+  assert.equal(qc.per_base.length, 10, 'the plot cap is honoured even though one read is 24 bp');
+  const position1 = qc.per_base[0];
+  assert.deepEqual(
+    { mean: position1.mean, median: position1.median, lower: position1.lower_quartile, upper: position1.upper_quartile, min: position1.min, max: position1.max, observations: position1.observations },
+    { mean: 25, median: 25, lower: 17.5, upper: 32.5, min: 10, max: 40, observations: 8 },
+    'Q at position 1: 30,20,10,40,10,40,20,30 -> sorted 10,10,20,20,30,30,40,40; quartiles are linearly interpolated',
+  );
+  assert.equal(position1.a_percent, 100, 'every read in this fixture starts with A — said plainly, because a per-base composition that is 100% one base is itself a red flag');
+  assert.equal(position1.c_percent, 0);
+  assert.equal(position1.g_percent, 0);
+  assert.equal(position1.t_percent, 0);
+  const position2 = qc.per_base[1];
+  // Position 2 across the eight reads: C,C,C,C,A,C,C,C -> 87.5% C, 12.5% A.
+  assert.deepEqual(
+    [position2.a_percent, position2.c_percent, position2.g_percent, position2.t_percent],
+    [12.5, 87.5, 0, 0],
+    'the composition tracks the actual base at each position',
+  );
+  const lastPosition = qc.per_base[9];
+  assert.deepEqual(
+    { observations: lastPosition.observations, mean: lastPosition.mean, min: lastPosition.min, max: lastPosition.max },
+    { observations: 3, mean: 26.67, min: 10, max: 40 },
+    'position 10 belongs to the two 10-base reads (Q40, Q10) and the 24-mer (Q30): (40+10+30)/3 = 26.67 — the 8-mer has no base 10',
+  );
+  assert.ok(qc.per_base.every((row, index) => row.position === index + 1), 'positions are 1-based');
+
+  // 3. Q30/Q20 fractions and the quality tail.
+  assert.equal(qc.quality_tail_below_30, 1, 'position 1 already averages 25 < 30');
+  assert.equal(qc.quality_tail_below_20, 0, 'the worst position mean is 22.5, still above Q20');
+  const allQualities = fixture.flatMap((entry) => entry.qualities);
+  const q20 = allQualities.filter((value) => value >= 20).length;
+  const q30 = allQualities.filter((value) => value >= 30).length;
+  assert.equal(qc.quality_q20_percent, Math.round((q20 / allQualities.length) * 10000) / 100);
+  assert.equal(qc.quality_q30_percent, Math.round((q30 / allQualities.length) * 10000) / 100);
+  assert.equal(qc.quality_mean, Math.round((allQualities.reduce((sum, value) => sum + value, 0) / allQualities.length) * 100) / 100);
+
+  // 4. Composition and the per-sequence quality histogram.
+  const gcBases = fixture.reduce((sum, entry) => sum + [...entry.sequence].filter((base) => base === 'G' || base === 'C').length, 0);
+  assert.equal(qc.gc_percent, Math.round((gcBases / totalBases) * 10000) / 100);
+  assert.equal(qc.n_bases, 0);
+  assert.equal(qc.n_percent, 0);
+  assert.equal(qc.per_sequence_quality.histogram.reduce((sum, count) => sum + count, 0), totalReads, 'every read lands in a quality bin');
+  assert.equal(qc.per_sequence_quality.worst, 10, 'the all-Q10 read is the worst');
+  assert.equal(qc.per_sequence_quality.best, 40, 'the all-Q40 read is the best');
+  // A, C and T are equally frequent here but G is rare, so the entropy sits
+  // below the 2 bits of a perfectly even four-letter sequence.
+  assert.equal(qc.content_entropy_bits, 1.918);
+  assert.equal(qc.gc_distribution.measured_percent.length, 101);
+  assert.equal(Math.round(qc.gc_distribution.measured_percent.reduce((sum, value) => sum + value, 0)), 100, 'measured GC distribution is a percentage per read');
+
+  // 5. Duplication: four reads are the same 4-mer (r1, r2, r3, r6).
+  assert.equal(qc.duplication.sampled_reads, totalReads);
+  assert.deepEqual(
+    [qc.duplication.unique_sequences, qc.duplication.duplicate_reads, qc.duplication.duplicate_groups, qc.duplication.duplication_percent, qc.duplication.remaining_percent],
+    [5, 4, 1, 50, 62.5],
+    'five distinct sequences, one repeated group holding all four reads of it',
+  );
+  assert.equal(qc.duplication.top_sequences[0].sequence, 'ACGT');
+  assert.equal(qc.duplication.top_sequences[0].count, 4);
+  assert.equal(qc.duplication.top_sequences[0].percent, 50);
+
+  // 6. Adapter content: exactly one read carries the Illumina universal fragment.
+  assert.deepEqual(qc.adapter.hits.map((hit) => [hit.name, hit.reads, hit.percent]), [['Illumina Universal', 1, 12.5]]);
+  assert.equal(qc.adapter.reads_with_adapter, 1);
+  assert.equal(qc.adapter.per_base_percent.length, 10, 'the adapter curve shares the plot cap');
+  assert.equal(qc.adapter.per_base_percent[0], 0, 'and is zero before the fragment starts at position 13');
+  const adapterUncapped = await run('molbio_fastq_qc', { fastq: fastqText, max_plot_bases: 150, output_path: 'C:/tmp/qc-wide.svg' });
+  assert.equal(adapterUncapped.adapter.per_base_percent[12], 12.5, 'with no cap the fragment shows at 1-based position 13');
+  assert.equal(adapterUncapped.adapter.per_base_percent[23], 12.5, 'through its last base at position 24');
+  assert.equal(adapterUncapped.adapter.per_base_percent[24], 0, 'and stops there');
+
+  // 7. Over-representation names the threshold that produced it — and on a
+  //    sample this small that threshold legitimately yields nothing, because
+  //    the bar is max(20 reads, 0.1% of the sample).
+  assert.equal(qc.overrepresented.sampled_reads, totalReads);
+  assert.equal(qc.overrepresented.minimum_count, 20);
+  assert.deepEqual(qc.overrepresented.rows, [], '8 reads cannot clear a 20-read floor, and the tool says so instead of inventing a hit');
+  assert.ok(qc.overrepresented.basis.includes('exact sequence counts'));
+  // With a sample worth scanning (24 of 30 reads identical) the same analysis
+  // reports the sequence, its share, and the threshold it used. A sequence can
+  // only clear the floor by being duplicated, so these two views agree.
+  const clonal = Array.from({ length: 30 }, (_, index) => {
+    const sequence = index < 24 ? 'ACGTACGT' : `TTTTTTT${'ACGT'[index % 4]}`;
+    return `@c${index}\n${sequence}\n+\n${'I'.repeat(8)}\n`;
+  }).join('');
+  const clonalReport = await run('molbio_fastq_qc', { fastq: clonal, output_path: 'C:/tmp/clonal.qc.svg' });
+  assert.equal(clonalReport.overrepresented.minimum_count, 20);
+  assert.equal(clonalReport.overrepresented.rows.length, 1, 'only the 24-read sequence clears the floor');
+  assert.deepEqual(
+    [clonalReport.overrepresented.rows[0].sequence, clonalReport.overrepresented.rows[0].count, clonalReport.overrepresented.rows[0].percent],
+    ['ACGTACGT', 24, 80],
+  );
+  assert.equal(clonalReport.overrepresented.rows[0].possible_source, 'unknown');
+  // Duplication counts every read that sits in a repeated group, so the three
+  // TTTT variants that each appear twice add to the clonal 24: 28 of 30 reads.
+  assert.deepEqual(
+    [clonalReport.duplication.unique_sequences, clonalReport.duplication.duplicate_reads, clonalReport.duplication.duplicate_groups, clonalReport.duplication.duplication_percent],
+    [5, 28, 3, 93.33],
+    'the clonal group plus TTTTA/TTTTC/TTTTG each appearing twice',
+  );
+
+  // 8. The picture is written and is the same document shape the rasterizer takes.
+  assert.ok(qc.report_path.endsWith('.qc.svg'), `report path looks like a QC report: ${qc.report_path}`);
+  const qcSvg = memFs.files.get(qc.report_path);
+  assert.ok(typeof qcSvg === 'string' && qcSvg.startsWith('<svg'), 'the SVG report reached the workspace');
+  assert.ok(qcSvg.includes('Per-base quality') && qcSvg.includes('Adapter content'), 'and carries the panel titles');
+
+  // 9. Error paths.
+  await assert.rejects(() => run('molbio_fastq_qc', {}), /provide exactly one of path .* or fastq/);
+  await assert.rejects(() => run('molbio_fastq_qc', { path: 'C:/tmp/reads.fq', fastq: fastqText }), /provide exactly one of path .* or fastq/);
+  await assert.rejects(() => run('molbio_fastq_qc', { fastq: '>not-fastq\nACGT\n' }), /looks like FASTA/);
+  await assert.rejects(() => run('molbio_fastq_qc', { fastq: '@r1\nACGT\n+\nIII\n' }), /quality shorter than sequence/);
+  await assert.rejects(() => run('molbio_fastq_qc', { fastq: fastqText, max_reads: 500000 }), /exceeds the supported/);
+  await assert.rejects(() => run('molbio_fastq_qc', { fastq: fastqText, max_reads: -1 }), /max_reads must be a positive integer/);
+
+  // 10. Reading the same fixture from a file gives the identical report.
+  memFs.files.set('C:/tmp/qc.fastq', fastqText);
+  const fromFile = await run('molbio_fastq_qc', { path: 'C:/tmp/qc.fastq', max_plot_bases: 12 });
+  assert.equal(fromFile.quality_mean, qc.quality_mean);
+  assert.equal(fromFile.bases, qc.bases);
+  assert.ok(fromFile.report_path.includes('qc'), 'the default report name follows the input file');
+}
+
+// ── v19: codon usage (CAI / RSCU / Nc) ──────────────────────────────────────
+{
+  const cds = (body) => `ATG${body}TAA`;
+
+  // 1. Every codon at its host optimum gives CAI exactly 1, and the alanine
+  //    family must have FOUR codons — building the families from the partial
+  //    optimization table instead of the frequency table made this 0.4444.
+  const optimal = await run('molbio_codon_usage', { sequence: cds('GCG'.repeat(20)), host: 'e_coli' });
+  assert.equal(optimal.cai, 1);
+  assert.equal(optimal.cai_by_codon.GCG, 1, 'the family maximum has relative adaptiveness 1');
+  assert.equal(optimal.cai_by_codon.GCA, 0.5833, 'GCA is 0.21/0.36 — and it IS in the family, even though the optimization table omits it');
+  assert.equal(optimal.rare_codon_count, 0);
+  assert.equal(optimal.host, 'e_coli');
+  assert.equal(optimal.has_start_codon, true);
+  assert.equal(optimal.has_stop_codon, true);
+  assert.equal(optimal.analysed_codons, 22);
+  assert.equal(optimal.internal_stop_count, 0, 'the terminal TAA is an end, not an internal stop');
+
+  // 2. A suboptimal but non-rare codon sits between: GCT is 0.16/0.36 = 0.4444.
+  const suboptimal = await run('molbio_codon_usage', { sequence: cds('GCT'.repeat(20)), host: 'e_coli' });
+  assert.equal(suboptimal.cai, 0.4444);
+  assert.equal(suboptimal.cai_by_codon.GCG, 1, 'alternatives are reported too, so the comparison is visible');
+  assert.equal(suboptimal.cai_counted_codons.GCT, 20, 'but only the codons actually present enter the geometric mean');
+  assert.equal(suboptimal.cai_counted_codons.GCG, undefined);
+
+  // 3. A balanced alanine CDS: equal thirds, so RSCU is 1 for all four codons,
+  //    GC3 is exactly 50% and the CAI is a hand-computed geometric mean.
+  const balanced = await run('molbio_codon_usage', { sequence: cds('GCA'.repeat(5) + 'GCC'.repeat(5) + 'GCG'.repeat(5) + 'GCT'.repeat(5)), host: 'e_coli' });
+  assert.deepEqual([balanced.rscu.GCA, balanced.rscu.GCC, balanced.rscu.GCG, balanced.rscu.GCT], [1, 1, 1, 1]);
+  assert.equal(balanced.gc3, 50);
+  assert.equal(balanced.cai, 0.664, 'geometric mean over all 20 alanines of (0.5833, 0.75, 1, 0.4444)^5');
+  assert.deepEqual(balanced.gc3_distribution, { A: 6, C: 5, G: 6, T: 5 }, 'the six A are the five GCA plus the stop codon; the six G are the five GCG plus the ATG');
+  assert.equal(balanced.gc123.length, 3);
+  assert.ok(balanced.gc123[0] > balanced.gc123[2], 'position 1 is GC-rich while position 3 is balanced');
+
+  // 4. RSCU is a per-family normalisation: a single-codon usage gives the
+  //    family size, which is how the family sizes are pinned.
+  const leucine = await run('molbio_codon_usage', { sequence: cds('CTG'.repeat(10)), host: 'e_coli' });
+  assert.equal(leucine.rscu.CTG, 6, 'Leu has six codons in E. coli');
+  assert.equal(leucine.rscu.TTA, 0, 'and the unused ones are reported as 0');
+  assert.equal(leucine.cai, 1);
+  assert.equal(leucine.n_codon, 1.03, 'a single-codon CDS is maximally biased; Nc pins the Wright table');
+
+  // 5. The frequency tables must be complete: 61 sense codons per host, each
+  //    amino-acid family summing to 1, and no stop codons.
+  const { CODON_FREQUENCIES } = await import('../codon.mjs');
+  const { CODON_TABLE_BY_NAME } = lib;
+  const code = CODON_TABLE_BY_NAME.standard;
+  const sense = Object.keys(code).filter((codon) => code[codon] !== '*');
+  assert.equal(sense.length, 61);
+  for (const [host, table] of Object.entries(CODON_FREQUENCIES)) {
+    assert.deepEqual(Object.keys(table).sort(), sense.slice().sort(), `${host} lists exactly the 61 sense codons`);
+    const sums = new Map();
+    for (const codon of sense) sums.set(code[codon], (sums.get(code[codon]) ?? 0) + table[codon]);
+    for (const [aminoAcid, sum] of sums) {
+      assert.ok(Math.abs(sum - 1) < 0.011, `${host} ${aminoAcid} frequencies sum to ${sum.toFixed(4)} (within rounding)`);
+    }
+  }
+  // The optimizer's first choice must at least be a reasonably frequent codon.
+  const { CODON_USAGE } = await import('../protein.mjs');
+  for (const [host, families] of Object.entries(CODON_USAGE)) {
+    for (const [aminoAcid, ordered] of Object.entries(families)) {
+      const members = sense.filter((codon) => code[codon] === aminoAcid);
+      const maximum = Math.max(...members.map((codon) => CODON_FREQUENCIES[host][codon]));
+      assert.ok(
+        CODON_FREQUENCIES[host][ordered[0]] >= maximum * 0.5,
+        `${host} ${aminoAcid}: the optimizer's preferred ${ordered[0]} is not a rare codon`,
+      );
+    }
+  }
+
+  // 6. Rare codons and host switching: human GCG has w = 0.08/0.43 = 0.186.
+  const human = await run('molbio_codon_usage', { sequence: cds('GCG'.repeat(20)), host: 'human' });
+  assert.equal(human.cai, 0.186);
+  assert.equal(human.rare_codon_count, 20);
+  assert.equal(human.rare_codons[0].codon, 'GCG');
+  assert.equal(human.rare_codons[0].amino_acid, 'A');
+  assert.equal(human.rare_codons[0].host_frequency, 0.08);
+  assert.equal(human.rare_codons[0].relative_adaptiveness, 0.186);
+  assert.equal(human.rare_codons[0].position, 2, 'position 1 is the ATG');
+  assert.match(human.cai_interpretation, /poorly adapted/);
+  assert.ok(human.warnings.some((warning) => warning.includes('CAI 0.186 is low')));
+
+  // 7. CpG observed/expected, and the reason it is not interpreted for a short CDS.
+  const cpgSequence = cds('GCG'.repeat(10));
+  const cpg = await run('molbio_codon_usage', { sequence: cpgSequence, host: 'e_coli' });
+  // ATG + 10x GCG + TAA is 36 nt with 10 C and 21 G, so the CpG expectation is
+  // C*G/length = 210/36 = 5.83 and this deliberately CpG-rich CDS sits at 1.714.
+  assert.equal(cpg.cpg.observed, 10, 'each GCG contributes a C followed by a G');
+  assert.equal(cpg.cpg.expected, 5.83);
+  assert.equal(cpg.cpg.observed_expected, 1.714);
+  assert.match(cpg.cpg.interpretation, /not interpreted for sequences under 100 nt/);
+
+  // 8. The local CAI profile is a real windowed series: 12 codons (ATG + 10x
+  //    GCG + TAA) in windows of five give starts at codons 1..8.
+  const profiled = await run('molbio_codon_usage', { sequence: cds('GCG'.repeat(10)), host: 'e_coli', region_window: 5 });
+  assert.equal(profiled.cai_profile.length, 8);
+  assert.equal(profiled.cai_profile[0].start_codon, 1);
+  assert.equal(profiled.cai_profile[0].end_codon, 5);
+  assert.equal(profiled.cai_profile[0].cai, 1, 'an all-optimal window is 1 (ATG and TAA carry no weight)');
+  assert.equal(profiled.cai_profile[profiled.cai_profile.length - 1].start_codon, 8);
+  assert.equal(profiled.cai_profile[profiled.cai_profile.length - 1].end_codon, 12, 'the terminal stop codon closes the last window');
+
+  // 9. Warnings, not failures, for a CDS that is merely unusual.
+  const sloppy = await run('molbio_codon_usage', { sequence: 'GCGGCGGCGG', host: 'e_coli' });
+  assert.equal(sloppy.ignored_trailing_bases, 1);
+  assert.ok(sloppy.warnings.some((warning) => warning.includes('not a multiple of 3')));
+  assert.ok(sloppy.warnings.some((warning) => warning.includes('does not start with ATG')));
+  const ambiguous = await run('molbio_codon_usage', { sequence: 'ATGNNNGGGTAA', host: 'e_coli' });
+  assert.ok(ambiguous.warnings.some((warning) => warning.includes('ambiguous bases')));
+  assert.equal(ambiguous.analysed_codons, 3, 'the ambiguous codon is excluded from the counts');
+  const internalStop = await run('molbio_codon_usage', { sequence: 'ATGTAAGGGTAA', host: 'e_coli' });
+  assert.equal(internalStop.internal_stop_count, 1);
+  assert.deepEqual(internalStop.internal_stops, [{ codon: 'TAA', position: 2 }]);
+  assert.ok(internalStop.warnings.some((warning) => warning.includes('internal stop codon')));
+
+  // 10. Error paths. An unknown host is caught by the argument schema (enum),
+  //     and the module's own domain check is exercised separately.
+  const { codonUsageAnalysis } = await import('../codon.mjs');
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'ACGTTT', host: 'mouse' }), /must be one of e_coli, yeast, human/);
+  assert.throws(() => codonUsageAnalysis('ATGGCGTAA', { host: 'mouse' }), /unknown host "mouse"/);
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: '   ' }), /coding sequence is empty/);
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'ACGTXYZ' }), /not IUPAC nucleotides/);
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'GC' }), /shorter than one codon/);
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'ATGGCG', region_window: 2 }), /region_window must be at least 3/);
+  // All-ambiguous and Met/Trp-only CDSs both leave CAI nothing to score.
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'ATGNNNNNN', host: 'e_coli' }), /no codon with synonymous alternatives/);
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'ATGTGGTAA', host: 'e_coli' }), /no codon with synonymous alternatives/);
+  await assert.rejects(() => run('molbio_codon_usage', { sequence: 'NNNNNNNNN', host: 'e_coli' }), /no unambiguous sense codons/);
+}
+
+// ── v19: phylogenetic tree ──────────────────────────────────────────────────
+{
+  const { distanceMatrix, parseNewick, toNewick, kmerDistanceMatrix } = await import('../phylo.mjs');
+
+  // A four-taxon fixture with hand-checkable differences:
+  //   A and B identical; C is A plus one C->T transition; D is C plus one
+  //   G->A transition and one T->G transversion.
+  const fixture = [
+    { id: 'A', sequence: 'ACGTACGTAC' },
+    { id: 'B', sequence: 'ACGTACGTAC' },
+    { id: 'C', sequence: 'ACGTTCGTAC' },
+    { id: 'D', sequence: 'ACGTTCGTAG' },
+  ];
+
+  // 1. p-distance cells (1 difference in 10 = 0.1; 2 in 10 = 0.2).
+  const pd = distanceMatrix(fixture, { model: 'p-distance' });
+  assert.deepEqual(
+    pd.matrix.map((row) => row.map((value) => Math.round(value * 1000) / 1000)),
+    [[0, 0, 0.1, 0.2], [0, 0, 0.1, 0.2], [0.1, 0.1, 0, 0.1], [0.2, 0.2, 0.1, 0]],
+  );
+  assert.equal(pd.compared[0][2], 10, 'all ten sites are comparable in this fixture');
+
+  // 2. Jukes-Cantor: -3/4 ln(1 - 4p/3) with p = 0.1.
+  const jc = distanceMatrix(fixture, { model: 'jukes-cantor' });
+  const jcExpected = (-3 / 4) * Math.log(1 - (4 / 3) * 0.1);
+  assert.equal(jc.matrix[0][2].toFixed(6), jcExpected.toFixed(6), '0.107326 for p = 0.1');
+  assert.equal(jc.matrix[0][1], 0, 'identical sequences are 0 apart');
+  assert.deepEqual(jc.saturated, [], 'nothing is saturated here');
+
+  // 3. Saturation is reported and clamped rather than silently huge.
+  const saturated = distanceMatrix([{ id: 'X', sequence: 'AAAAAAAAAA' }, { id: 'Y', sequence: 'CCCCCCCCCC' }], { model: 'jukes-cantor' });
+  assert.equal(saturated.matrix[0][1], 0.75, 'clamped to the model limit');
+  assert.equal(saturated.saturated.length, 1);
+  assert.deepEqual(saturated.saturated[0].pair, ['X', 'Y']);
+  assert.match(saturated.saturated[0].reason, /limit 0.75/);
+  assert.equal(saturated.saturated[0].clipped_to, 0.75);
+
+  // 4. Gaps and ambiguous bases are skipped per pair.
+  const gapped = distanceMatrix([
+    { id: 'P', sequence: 'ACGTNNNNNN' },
+    { id: 'Q', sequence: 'ACGTACGTAC' },
+  ], { model: 'p-distance' });
+  assert.equal(gapped.matrix[0][1], 0, 'only the four comparable sites count');
+  assert.equal(gapped.compared[0][1], 4);
+
+  // 5. The tree tool end to end: NJ puts A+B together and leaves D outside.
+  const tree = await run('molbio_phylogenetic_tree', {
+    sequences: fixture.map((entry) => entry.sequence),
+    ids: ['A', 'B', 'C', 'D'],
+    method: 'nj',
+    distance_model: 'kimura-2p',
+    bootstrap: 20,
+    seed: 99,
+    consensus: 'majority',
+    layout: 'rectangular',
+    nwk_path: 'C:/tmp/fixture.nwk',
+    svg_path: 'C:/tmp/fixture-tree.svg',
+  });
+  assert.equal(tree.method, 'nj');
+  assert.equal(tree.distance_model, 'kimura-2p');
+  assert.equal(tree.taxa, 4);
+  assert.equal(tree.alignment_columns, 10);
+  assert.equal(tree.aligned_by_tool, false, 'the fixture is already aligned');
+  assert.equal(tree.bootstrap_replicates, 20);
+  assert.equal(tree.bootstrap_seed, 99);
+  const leafNames = (node) => (node.children === undefined ? [node.name] : node.children.flatMap(leafNames));
+  assert.deepEqual(leafNames(tree.tree).sort(), ['A', 'B', 'C', 'D']);
+  // The unrooted four-taxon topology here must be (A,B)|(C,D). NJ roots at the
+  // last join, so the root split can be either {A,B}|{C,D} or {A,B,C}|{D}; what
+  // matters is that the {A,B} clade exists and its counterpart is {C,D}.
+  const clades = (node, out = []) => {
+    if (node.children !== undefined) {
+      out.push(leafNames(node).sort().join(''));
+      for (const child of node.children) clades(child, out);
+    }
+    return out;
+  };
+  const allClades = clades(tree.tree).sort();
+  assert.ok(allClades.includes('AB'), `A and B are identical and must form a clade (got ${allClades.join(', ')})`);
+  // Which edge NJ roots on is an arbitrary choice among the unrooted tree's
+  // edges, so {C,D} need not appear as a clade. The unrooted topology is pinned
+  // instead by the four-point condition on the distance matrix.
+  const [a, b, c, d] = ['A', 'B', 'C', 'D'];
+  const index = (name) => tree.distance_labels.indexOf(name);
+  const pairDistance = (left, right) => tree.distance_matrix[index(left)][index(right)];
+  assert.equal(
+    pairDistance(a, c) + pairDistance(b, d),
+    pairDistance(a, d) + pairDistance(b, c),
+    'the two cross sums agree, which is what an unrooted tree predicts',
+  );
+  assert.ok(
+    pairDistance(a, d) + pairDistance(b, c) > pairDistance(a, b) + pairDistance(c, d),
+    'and they exceed the within-pair sum, so the split is (A,B)|(C,D) and not (A,D)|(B,C)',
+  );
+  assert.ok(tree.newick.endsWith(';'), 'the Newick text is terminated');
+  assert.ok(!/\)\d+(\.\d+)?;/.test(tree.newick), 'the root carries no support label');
+  assert.deepEqual(tree.distance_labels, ['A', 'B', 'C', 'D']);
+  assert.equal(tree.distance_matrix.length, 4);
+  assert.equal(tree.distance_matrix[0][1], 0);
+  // K2P separates transitions from transversions: one transition in ten sites
+  // is P = 0.1, Q = 0, giving -1/2 ln(0.8) - 1/4 ln(1) = 0.111572... /2.
+  const k2pExpected = (-1 / 2) * Math.log(1 - 2 * 0.1) - (1 / 4) * Math.log(1 - 0);
+  assert.equal(tree.distance_matrix[0][2], 0.108466, `K2P for P=0.1, Q=0 (${k2pExpected.toFixed(6)} to more digits)`);
+  assert.notEqual(tree.distance_matrix[0][2], jcExpected, 'and it is NOT the Jukes-Cantor value, which shows the model is really applied');
+  assert.deepEqual(tree.saturated_pairs, []);
+  assert.equal(tree.consensus.mode, 'majority');
+  assert.ok(tree.consensus.newick.endsWith(';'));
+  assert.ok(tree.notes.some((note) => note.includes('not a maximum-likelihood')));
+  assert.ok(tree.notes.some((note) => note.includes('not a p-value')));
+  assert.equal(tree.svg_path, 'C:/tmp/fixture-tree.svg');
+  assert.ok(memFs.files.get('C:/tmp/fixture.nwk').startsWith('('), 'the Newick file reached the workspace');
+  assert.ok(memFs.files.get('C:/tmp/fixture-tree.svg').includes('<svg'));
+
+  // 6. The same seed reproduces the same support and the same file exactly.
+  const again = await run('molbio_phylogenetic_tree', {
+    sequences: fixture.map((entry) => entry.sequence),
+    ids: ['A', 'B', 'C', 'D'],
+    method: 'nj',
+    distance_model: 'kimura-2p',
+    bootstrap: 20,
+    seed: 99,
+    nwk_path: 'C:/tmp/fixture2.nwk',
+    svg_path: 'C:/tmp/fixture-tree2.svg',
+  });
+  assert.equal(again.newick, tree.newick);
+  assert.deepEqual(again.support, tree.support);
+  assert.equal(memFs.files.get('C:/tmp/fixture2.nwk'), memFs.files.get('C:/tmp/fixture.nwk'));
+
+  // 7. UPGMA and NJ are different algorithms, not one renamed.
+  const upgma = await run('molbio_phylogenetic_tree', {
+    sequences: fixture.map((entry) => entry.sequence),
+    ids: ['A', 'B', 'C', 'D'],
+    method: 'upgma',
+    distance_model: 'p-distance',
+    bootstrap: 0,
+    nwk_path: 'C:/tmp/upgma.nwk',
+    svg_path: 'C:/tmp/upgma.svg',
+  });
+  assert.equal(upgma.bootstrap_replicates, 0);
+  assert.deepEqual(upgma.support, []);
+  assert.notEqual(upgma.newick, tree.newick, 'the two methods really are different algorithms');
+  assert.match(upgma.newick, /D:\d/);
+  assert.equal(upgma.bootstrap_seed, 0, 'no bootstrap means no seed is claimed');
+
+  // 8. Newick round trip against the module (the format, not just the tool).
+  assert.equal(toNewick(parseNewick(tree.newick)), tree.newick);
+  const quoted = toNewick({ name: '', children: [{ name: 'sample 1|a', children: [], length: 0 }, { name: 'b', children: [], length: 0.25 }], length: 0 });
+  assert.equal(quoted, "('sample 1|a':0,b:0.25);");
+  assert.equal(parseNewick(quoted).children[0].name, 'sample 1|a');
+  const polytomy = '(a:1,b:2,c:3);';
+  assert.equal(toNewick(parseNewick(polytomy)), polytomy, 'a polytomy round trips too');
+  assert.throws(() => parseNewick('(a:1,b:2'), /expected "," or "\)"/);
+  assert.throws(() => parseNewick('(a:1 b:2);'), /invalid branch length/);
+  assert.throws(() => parseNewick(''), /unexpected end of Newick/);
+  assert.throws(() => parseNewick('(,'), /empty leaf label/);
+  assert.throws(() => parseNewick('(a:x,b:2);'), /invalid branch length/);
+  assert.throws(() => parseNewick('(a:1,b:2);extra'), /unexpected trailing text/);
+
+  // 9. Raw sequences are aligned first, and the k-mer distance is the same
+  //    formula msa.mjs uses for its guide tree.
+  const unaligned = await run('molbio_phylogenetic_tree', {
+    sequences: ['ACGTACGTAC', 'ACGTACGTACG', 'ACGTTCGTAC'],
+    ids: ['u1', 'u2', 'u3'],
+    bootstrap: 0,
+    nwk_path: 'C:/tmp/unaligned.nwk',
+    svg_path: 'C:/tmp/unaligned.svg',
+  });
+  assert.equal(unaligned.aligned_by_tool, true);
+  assert.equal(unaligned.alignment_columns, 10, 'the progressive aligner pads rather than inserting a gap for this pair');
+  assert.ok(unaligned.notes.some((note) => note.includes('progressive aligner')));
+  // KNOWN LIMITATION, surfaced rather than hidden: the progressive aligner can
+  // drop an unplaceable trailing residue (u2 supplied 11 bases, the alignment
+  // kept 10). The tool reports the coverage shortfall in `notes` so a tree is
+  // never built silently from fewer residues than the user supplied. Fixing the
+  // aligner itself is msa.mjs work and is tracked outside this release.
+  assert.ok(
+    unaligned.notes.some((note) => note.includes('WARNING: the alignment did not place every residue')),
+    'the coverage shortfall is reported',
+  );
+  assert.ok(unaligned.notes.some((note) => note.includes('u2 (10 of 11 bases kept)')));
+  // When every residue IS placed, there is no warning.
+  const clean = await run('molbio_phylogenetic_tree', {
+    sequences: ['ACGTACGTAC', 'ACGTTCGTAC', 'ACGTTCGTAA'],
+    ids: ['c1', 'c2', 'c3'],
+    bootstrap: 0,
+    nwk_path: 'C:/tmp/clean.nwk',
+    svg_path: 'C:/tmp/clean.svg',
+  });
+  assert.ok(!clean.notes.some((note) => note.includes('WARNING: the alignment')), 'equal-length input needs no coverage warning');
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGTA'], aligned: false, bootstrap: 0 }), /not all the same length/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGTA'], aligned: true, bootstrap: 0 }), /different lengths/);
+  // The k-mer distance must be the SAME MATRIX msa.mjs derives for its guide
+  // tree, so the duplicated formula cannot drift. Two routes to the numbers:
+  // recompute the shared-feature overlap here, and check the topology the
+  // unaligned tree tool produced matches upgmaTree over that same matrix.
+  const kmer = kmerDistanceMatrix(fixture);
+  const profile = (sequence) => {
+    const map = new Map();
+    for (let index = 0; index + 5 <= sequence.length; index++) {
+      const mer = sequence.slice(index, index + 5);
+      map.set(mer, (map.get(mer) ?? 0) + 1);
+    }
+    return map;
+  };
+  const [pa, , pc] = [profile(fixture[0].sequence), profile(fixture[1].sequence), profile(fixture[2].sequence)];
+  let shared = 0;
+  for (const [mer, count] of pa) shared += Math.min(count, pc.get(mer) ?? 0);
+  assert.equal(kmer[0 * 4 + 1], 0, 'identical sequences have identical k-mer profiles');
+  assert.equal(kmer[0 * 4 + 2].toFixed(6), (1 - (2 * shared) / (6 + 6)).toFixed(6), 'the shared 5-mer overlap formula');
+  const unalignedTree = await run('molbio_phylogenetic_tree', {
+    sequences: fixture.map((entry) => entry.sequence),
+    ids: ['A', 'B', 'C', 'D'],
+    bootstrap: 0,
+    nwk_path: 'C:/tmp/kmer.nwk',
+    svg_path: 'C:/tmp/kmer.svg',
+  });
+  assert.ok(unalignedTree.newick.includes('A') && unalignedTree.newick.includes('B'));
+
+  // 10. FASTA input, duplicate names, and the argument errors.
+  const fromFasta = await run('molbio_phylogenetic_tree', {
+    fasta: '>f1\nACGTACGTAC\n>f2\nACGTTCGTAC\n',
+    bootstrap: 0,
+    nwk_path: 'C:/tmp/fasta.nwk',
+    svg_path: 'C:/tmp/fasta.svg',
+  });
+  assert.deepEqual(fromFasta.distance_labels, ['f1', 'f2']);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGT'], ids: ['same', 'same'], bootstrap: 0 }), /names must be unique/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { bootstrap: 0 }), /provide sequences, fasta or path/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT'], bootstrap: 0 }), /at least 2 sequences/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGA'], method: 'parsimony', bootstrap: 0 }), /must be one of upgma, nj/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGA'], distance_model: 'hky', bootstrap: 0 }), /must be one of p-distance/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGA'], consensus: 'majority', bootstrap: 0 }), /consensus needs bootstrap/);
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGA'], bootstrap: 1001 }), /at most 1000 bootstrap/);
+  // The budget counts replicates x pairs x columns, so 1000 replicates over a
+  // 30-sequence, 1000-column alignment must be refused before it starts.
+  const wide = Array.from({ length: 30 }, (_, index) => ({ id: `w${index}`, sequence: 'ACGT'.repeat(250) }));
+  await assert.rejects(
+    () => run('molbio_phylogenetic_tree', {
+      sequences: wide.map((entry) => entry.sequence),
+      ids: wide.map((entry) => entry.id),
+      bootstrap: 1000,
+      seed: 1,
+      nwk_path: 'C:/tmp/wide.nwk',
+      svg_path: 'C:/tmp/wide.svg',
+    }),
+    /bootstrap budget exceeded/,
+  );
+  await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGA'], bootstrap: 0, layout: 'radial' }), /must be one of rectangular/);
+}
+
+// ── v19: in-silico PCR ──────────────────────────────────────────────────────
+{
+  // A non-repetitive 200 bp template (a random one, so a 20-mer primer has
+  // exactly one binding site — a repetitive template would legitimately produce
+  // dozens of sites and make every assertion about "the" product meaningless).
+  const TEMPLATE = 'TAAGTAAGTAGCTCCGCGCGATGTGCGACTCTGCCGGGATATGGCATTGCCCAAAGTGGCCACCACTCTTGGATAGGTGCTATAACTATTACAAATAAAGCACCTTCGGGTATCGCGGTATGTGAACGTTCACTTCCGTAAAGACTTAGGGTGACGCAACACTCACCATGGAGGATAGTAATAGGTGAGAGAGATTTAGA';
+  assert.equal(TEMPLATE.length, 200);
+  const rc = (sequence) => [...sequence].reverse().map((base) => ({ A: 'T', C: 'G', G: 'C', T: 'A' }[base])).join('');
+  const forward = TEMPLATE.slice(0, 20);
+  const reverse = rc(TEMPLATE.slice(80, 100));
+
+  // 1. Exact match: one 100 bp product spanning 1-100.
+  const exact = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'amp', forward, reverse }],
+    min_size: 50,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-exact.svg',
+  });
+  const amp = exact.pairs[0];
+  assert.equal(amp.verdict, 'specific');
+  assert.equal(amp.amplicon_count, 1);
+  assert.equal(amp.forward_sites.length, 1);
+  assert.equal(amp.reverse_sites.length, 1);
+  assert.equal(amp.amplicons[0].size, 100);
+  assert.deepEqual([amp.amplicons[0].forward_site.start, amp.amplicons[0].forward_site.end], [1, 20]);
+  assert.deepEqual([amp.amplicons[0].reverse_site.start, amp.amplicons[0].reverse_site.end], [81, 100]);
+  assert.equal(amp.amplicons[0].total_mismatches, 0);
+  assert.equal(amp.amplicons[0].wraps_origin, false);
+  assert.equal(amp.amplicons[0].sequence, TEMPLATE.slice(0, 100), 'the product is exactly the top strand from 1 to 100');
+  assert.deepEqual(exact.verdicts, ['specific']);
+  assert.equal(exact.template_length, 200);
+  assert.equal(exact.circular, false);
+  assert.ok(memFs.files.get('C:/tmp/pcr-exact.svg').includes('<svg'), 'the gel reached the workspace');
+
+  // 2. A mismatch in the middle of a primer: refused at 0 mismatches, allowed
+  //    at 1, and the site reports where the mismatch is.
+  const internalBad = forward.slice(0, 9) + (forward[9] === 'A' ? 'C' : 'A') + forward.slice(10);
+  const strict = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'mm', forward: internalBad, reverse }],
+    min_size: 50,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-mm.svg',
+  });
+  assert.equal(strict.pairs[0].verdict, 'no_product');
+  assert.equal(strict.pairs[0].forward_sites.length, 0);
+  const relaxed = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'mm', forward: internalBad, reverse }],
+    max_mismatches: 1,
+    min_size: 50,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-mm.svg',
+  });
+  assert.equal(relaxed.pairs[0].verdict, 'specific_with_mismatches');
+  assert.deepEqual(relaxed.pairs[0].amplicons[0].forward_site.mismatch_positions, [10], '1-based position inside the primer');
+  assert.equal(relaxed.pairs[0].amplicons[0].total_mismatches, 1);
+  assert.equal(relaxed.pairs[0].off_target_count, 1, 'a mismatched product is counted as off-target');
+  assert.equal(relaxed.pairs[0].on_target_count, 0);
+
+  // 3. The 3' end rule, which is the difference between "anneals" and
+  //    "extends": a terminal mismatch is refused even at 1 allowed mismatch,
+  //    unless the 3' anchor requirement is dropped.
+  const threePrimeBad = forward.slice(0, 19) + (forward[19] === 'A' ? 'C' : 'A');
+  const anchorHeld = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'p3', forward: threePrimeBad, reverse }],
+    max_mismatches: 1,
+    min_size: 50,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-3p.svg',
+  });
+  assert.equal(anchorHeld.pairs[0].verdict, 'no_product', "a 3' mismatch is refused with the default 3-base anchor");
+  assert.equal(anchorHeld.settings.three_prime_exact, 3);
+  const anchorOff = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'p3', forward: threePrimeBad, reverse }],
+    max_mismatches: 1,
+    three_prime_exact: 0,
+    min_size: 50,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-3p0.svg',
+  });
+  assert.equal(anchorOff.pairs[0].verdict, 'specific_with_mismatches', 'and accepted once the requirement is dropped');
+  assert.deepEqual(anchorOff.pairs[0].forward_sites[0].mismatch_positions, [20], 'the mismatch is the primer 3\' base');
+  // An internal mismatch survives the 3' rule even at 2 allowed.
+  const twoMismatch = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'p2mm', forward: internalBad, reverse }],
+    max_mismatches: 2,
+    min_size: 50,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-2mm.svg',
+  });
+  assert.equal(twoMismatch.pairs[0].verdict, 'specific_with_mismatches');
+
+  // 4. Mispriming: a second forward site upstream of the reverse site gives a
+  //    second, shorter band — the "why do I see two bands" case.
+  const duplicated = TEMPLATE.slice(0, 40) + forward + TEMPLATE.slice(40);
+  const multi = await run('molbio_pcr_simulate', {
+    template: duplicated,
+    primer_pairs: [{ name: 'multi', forward, reverse }],
+    min_size: 20,
+    max_size: 400,
+    gel_path: 'C:/tmp/pcr-multi.svg',
+  });
+  assert.equal(multi.pairs[0].verdict, 'multiple_bands');
+  assert.equal(multi.pairs[0].forward_sites.length, 2);
+  assert.deepEqual(multi.pairs[0].amplicons.map((entry) => entry.size), [120, 80], 'sizes follow the forward-site order, not the size order');
+  assert.deepEqual(multi.pairs[0].amplicons.map((entry) => entry.forward_site.start), [1, 41]);
+  assert.equal(multi.pairs[0].off_target_count, 0, 'both products are mismatch-free');
+
+  // 5. The size window filters products out of range and counts them.
+  const narrow = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'amp', forward, reverse }],
+    min_size: 120,
+    max_size: 130,
+    gel_path: 'C:/tmp/pcr-narrow.svg',
+  });
+  assert.equal(narrow.pairs[0].verdict, 'no_product');
+  assert.equal(narrow.pairs[0].out_of_range, 1, 'the 100 bp product was found but filtered');
+  assert.equal(narrow.settings.min_size, 120);
+
+  // 6. Circular template: a product that crosses the origin, with the modular
+  //    slice taken as the sequence.
+  const circular = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'wrap', forward: TEMPLATE.slice(150, 170), reverse: rc(TEMPLATE.slice(10, 30)) }],
+    circular: true,
+    min_size: 20,
+    max_size: 300,
+    gel_path: 'C:/tmp/pcr-wrap.svg',
+  });
+  assert.equal(circular.circular, true);
+  assert.equal(circular.pairs[0].amplicons.length, 1);
+  assert.equal(circular.pairs[0].amplicons[0].size, 80);
+  assert.equal(circular.pairs[0].amplicons[0].wraps_origin, true);
+  assert.equal(circular.pairs[0].amplicons[0].sequence, TEMPLATE.slice(150) + TEMPLATE.slice(0, 30), 'the slice wraps as template[151..200] + template[1..30]');
+
+  // 7. Screening a different template (a vector) answers "does this pair also
+  //    amplify the backbone".
+  const screened = await run('molbio_pcr_simulate', {
+    template: TEMPLATE,
+    primer_pairs: [{ name: 'amp', forward, reverse }],
+    min_size: 20,
+    max_size: 400,
+    screen_templates: [{ name: 'vector', sequence: 'TTTTGGGGCCCCAAAATTTTGGGGCCCCAAAA' }],
+    gel_path: 'C:/tmp/pcr-screen.svg',
+  });
+  assert.equal(screened.screens.length, 1);
+  assert.equal(screened.screens[0].name, 'vector');
+  assert.equal(screened.screens[0].products[0].amplicon_count, 0);
+  assert.equal(screened.screens[0].products[0].verdict, 'no_product');
+
+  // 8. Reading the template from a workspace FASTA, and include_sequence: false.
+  memFs.files.set('C:/tmp/template.fa', `>t\n${TEMPLATE}\n`);
+  const fromFile = await run('molbio_pcr_simulate', {
+    path: 'C:/tmp/template.fa',
+    primer_pairs: [{ name: 'amp', forward, reverse }],
+    min_size: 20,
+    max_size: 400,
+    include_sequence: false,
+    gel_path: 'C:/tmp/pcr-file.svg',
+  });
+  assert.equal(fromFile.pairs[0].amplicons[0].size, 100);
+  assert.equal(fromFile.pairs[0].amplicons[0].sequence, '', 'the sequence is omitted on request');
+
+  // 9. Error paths.
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [], gel_path: 'C:/tmp/x.svg' }), /at least one primer pair/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { gel_path: 'C:/tmp/x.svg', primer_pairs: [{ forward, reverse }] }), /provide exactly one of template .* or path/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, path: 'C:/tmp/template.fa', primer_pairs: [{ forward, reverse }], gel_path: 'C:/tmp/x.svg' }), /provide exactly one of template .* or path/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ name: 'x', forward, reverse: '' }], gel_path: 'C:/tmp/x.svg' }), /has no reverse primer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ name: 'x', forward: '', reverse }], gel_path: 'C:/tmp/x.svg' }), /has no forward primer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: '   ', primer_pairs: [{ forward, reverse }], gel_path: 'C:/tmp/x.svg' }), /template sequence is empty/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ forward, reverse }], three_prime_exact: 21, gel_path: 'C:/tmp/x.svg' }), /longer than the primer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ forward, reverse }], max_mismatches: -1, gel_path: 'C:/tmp/x.svg' }), /mismatches must be a non-negative integer/);
+  const tooMany = Array.from({ length: 25 }, (_, index) => ({ name: `p${index}`, forward, reverse }));
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: tooMany, gel_path: 'C:/tmp/x.svg' }), /at most 24 primer pairs/);
+}
+
+// ── v19: GC composition, CpG islands and skew ───────────────────────────────
+{
+  // A synthetic island: 250 bp of pure CG (100% GC, CpG at every position) then
+  // 150 bp of pure AT. Islands are 200 bp here because the 100 bp windows are
+  // 101-200 and 201-300; the latter is only 50% GC and does not qualify.
+  const sequence = 'CG'.repeat(125) + 'AT'.repeat(75);
+  const report = await run('molbio_gc_composition', {
+    sequence,
+    window: 100,
+    svg_path: 'C:/tmp/gc.svg',
+  });
+  assert.equal(report.length, 400);
+  assert.equal(report.gc_percent, 62.5);
+  assert.equal(report.at_percent, 37.5);
+  assert.equal(report.n_percent, 0);
+  assert.equal(report.gc_windows.length, 4);
+  assert.deepEqual(report.gc_windows.map((window) => window.gc_percent), [100, 100, 50, 0]);
+  assert.equal(report.cpg_islands.length, 1);
+  assert.deepEqual(
+    [report.cpg_islands[0].start, report.cpg_islands[0].end, report.cpg_islands[0].length, report.cpg_islands[0].gc_percent, report.cpg_islands[0].cpg_oe],
+    [1, 200, 200, 100, 2],
+    'the island is the merged first two windows',
+  );
+  assert.equal(report.observed_expected_cpg, 3.2, 'CpG observed/expected over the whole sequence');
+  assert.equal(report.criteria.name, 'gardiner');
+  assert.equal(report.criteria.min_length, 200);
+  assert.match(report.criteria.reference, /Gardiner-Garden & Frommer 1987/);
+
+  // A pure-CG stretch has zero GC skew, and the origin/terminus hints are
+  // explicitly an indicator.
+  assert.deepEqual(report.cumulative_gc_skew, [0, 0, 0, 0]);
+  assert.equal(report.ori_hint.window, 1);
+  assert.equal(report.ter_hint.window, 1);
+  assert.ok(report.notes.some((note) => note.includes('INDICATOR of the replication origin')));
+
+  // Entropy and complexity of a two-letter repeat: 'CG'x125 + 'AT'x75 contains
+  // all four bases, so entropy is well below the 2-bit maximum but not 1 —
+  // hand-computed as -(0.3125 log2 0.3125) x 2 - (0.1875 log2 0.1875) x 2.
+  const expectedEntropy = -2 * (0.3125 * Math.log2(0.3125)) - 2 * (0.1875 * Math.log2(0.1875));
+  assert.equal(report.entropy_bits, Math.round(expectedEntropy * 1e4) / 1e4);
+  assert.ok(report.linguistic_complexity < 0.05);
+  assert.equal(report.n50, 400, 'one uninterrupted block');
+  assert.equal(report.l50, 1);
+  assert.equal(report.dinucleotides.find((row) => row.pair === 'CG').observed, 125);
+  assert.equal(report.dinucleotides.find((row) => row.pair === 'CG').observed_expected, 3.2);
+  assert.ok(memFs.files.get('C:/tmp/gc.svg').includes('<svg'));
+
+  // Takai & Jones criteria need 500 bp and 55% GC, so this 200 bp island is not
+  // called — the criteria really are applied, not decorative.
+  const takai = await run('molbio_gc_composition', { sequence, criteria: 'takai', svg_path: 'C:/tmp/gc-takai.svg' });
+  assert.equal(takai.cpg_islands.length, 0);
+  assert.equal(takai.criteria.name, 'takai');
+  assert.equal(takai.criteria.min_length, 500);
+  assert.match(takai.criteria.reference, /Takai & Jones 2002/);
+
+  // The CpG ratio is a real condition: 50% GC with NO CpG dinucleotide is not
+  // an island even though every window clears the GC threshold.
+  const noCpG = 'GCTT'.repeat(75);
+  assert.equal(noCpG.length, 300);
+  assert.equal(noCpG.includes('CG'), false);
+  const depleted = await run('molbio_gc_composition', { sequence: noCpG, window: 100, svg_path: 'C:/tmp/gc-depleted.svg' });
+  assert.equal(depleted.gc_percent, 50);
+  assert.equal(depleted.observed_expected_cpg, 0);
+  assert.deepEqual(depleted.cpg_islands, [], 'high GC alone does not make an island — the obs/exp CpG condition applies too');
+
+  // A homopolymer: zero expected CpG must not divide by zero, and a single-base
+  // sequence has zero entropy.
+  const polyA = await run('molbio_gc_composition', { sequence: 'A'.repeat(300), window: 100, svg_path: 'C:/tmp/gc-poly.svg' });
+  assert.equal(polyA.gc_percent, 0);
+  assert.equal(polyA.observed_expected_cpg, 0);
+  assert.deepEqual(polyA.cpg_islands, []);
+  assert.equal(polyA.entropy_bits, 0);
+  assert.ok(polyA.linguistic_complexity > 0 && polyA.linguistic_complexity < 0.01, `a homopolymer has one distinct word per length, so complexity ${polyA.linguistic_complexity} is near zero`);
+
+  // Skew: a G-rich isochore followed by a C-rich one. Both are pure G/C, so the
+  // GC CONTENT is constant at 100% and only the G/C asymmetry moves the
+  // profile: every window's skew is exactly (3-1)/(3+1) = +0.5 for 'GGGC' and
+  // -0.5 for 'GCCC'.
+  const isochores = 'GGGC'.repeat(50) + 'GCCC'.repeat(50);
+  const biased = await run('molbio_gc_composition', { sequence: isochores, window: 100, svg_path: 'C:/tmp/gc-rich.svg' });
+  assert.equal(biased.gc_percent, 100);
+  assert.deepEqual(biased.gc_skew_windows.map((window) => window.gc_skew), [0.5, 0.5, -0.5, -0.5]);
+  assert.deepEqual(biased.cumulative_gc_skew, [0.5, 1, 0.5, 0]);
+  assert.equal(biased.ori_hint.window, 4, 'the cumulative minimum is the last window');
+  assert.equal(biased.ter_hint.window, 2, 'and the maximum is where the G-rich half ends');
+
+  // Custom thresholds and window/step, plus the ambiguous-base note.
+  const custom = await run('molbio_gc_composition', { sequence, window: 50, step: 25, min_length: 150, gc_threshold: 60, cpg_oe_threshold: 1.5, svg_path: 'C:/tmp/gc-custom.svg' });
+  assert.equal(custom.criteria.window, 50);
+  assert.equal(custom.criteria.min_length, 150);
+  assert.equal(custom.criteria.gc_threshold, 60);
+  assert.equal(custom.criteria.cpg_oe_threshold, 1.5);
+  assert.equal(custom.gc_windows.length, 15, '400 bp in 50 bp windows stepping by 25 gives floor((400-50)/25)+1 = 15 windows');
+  const ambiguous = await run('molbio_gc_composition', { sequence: `${'ACGT'.repeat(50)}NNNNNNNNNN`, window: 100, svg_path: 'C:/tmp/gc-n.svg' });
+  assert.ok(ambiguous.notes.some((note) => note.includes('ambiguous')));
+  assert.ok(ambiguous.n_percent > 0);
+  const short = await run('molbio_gc_composition', { sequence: 'ACGTACGTACGTACGTACGT', window: 100, svg_path: 'C:/tmp/gc-short.svg' });
+  assert.deepEqual(short.gc_windows, [], 'a sequence shorter than the window yields no windows');
+  assert.ok(short.notes.some((note) => note.includes('no cumulative-skew origin')));
+
+  // Errors.
+  await assert.rejects(() => run('molbio_gc_composition', { svg_path: 'C:/tmp/x.svg' }), /provide exactly one of sequence or path/);
+  await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGT', path: 'C:/tmp/x.fa', svg_path: 'C:/tmp/x.svg' }), /provide exactly one of sequence or path/);
+  await assert.rejects(() => run('molbio_gc_composition', { sequence: '   ' }), /sequence is empty/);
+  await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGTACGTAC', criteria: 'emboss' }), /must be one of gardiner, takai/);
+  await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGTACGTAC', window: 5 }), /window must be an integer of at least 10/);
+}
+
 // ── plugin surface ──────────────────────────────────────────────────────────
 
 assert.equal(plugin.name, 'dsh-molbio-tools');
 assert.deepEqual(plugin.inject, ['tools', 'systemPrompt']);
 
 console.log('all smoke tests passed');
+

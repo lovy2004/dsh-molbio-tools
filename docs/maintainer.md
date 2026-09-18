@@ -43,8 +43,9 @@ seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关�
 ## 开发与测试
 
 ```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 52 个工具 + 输出 schema 校验
+node test/smoke.mjs         # 插件：mock 注册表跑全部 57 个工具 + 输出 schema 校验
 node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
+node test/svgio.mjs         # 共享绘图助手：几何手算值 + 每种助手拼一张文档后光栅化必须干净
 node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
 node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
 node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
@@ -54,15 +55,15 @@ node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness �
 node test/client-mount.mjs --profile web --dsh <harness 根目录>
 ```
 
-`npm test` 依次跑这三组（`test:unit` = smoke + svgpng + 四个客户端套件，再 `contract`、
+`npm test` 依次跑这三组（`test:unit` = smoke + svgpng + svgio + 四个客户端套件，再 `contract`、
 `drift-probe`、`preset-health`）。
 脚本用 `node --run` 串联而不是裸 `&&`——`&&` 是 npm 的 shell 语法、不是 node 的，在 Windows
 的 cmd/PowerShell 下 `npm test` 会失败。只想跑一半时：`node --run test:smoke` /
-`node --run test:svgpng` / `node --run test:client`。
+`node --run test:svgpng` / `node --run test:svgio` / `node --run test:client`。
 
 三个检查回答的是**不同**的问题，发布前都要跑：
 
-- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 52 个工具，并用 harness 自身的
+- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 57 个工具，并用 harness 自身的
 `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
 SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
 比对、蛋白 MW/pI/消光系数手算值、酶切规则（P 前不切）、100% 效率标准曲线、FASTA/FASTQ
@@ -97,7 +98,7 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **2 错配脱靶的互查**（正向两次调用互相指认，mismatch_positions [4, 7]）、脱靶扣分
 （92 vs 无搜索时的 100）、种子末端不错配约束、GC/poly-T/C-run 过滤与「放宽 gc_max 才能
 救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
-排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）、v18 图片交接（未传 `attach_image` 时**一个字节都不提交**、结果仍是单个 text block；传了以后提交的确实是 PNG（签名 + IHDR 尺寸与凝胶画布手算值一致）、结果多出 `image` 字段与第二个 image block；10 个画图工具逐个断言"有参数、有输出字段"，总数恰好 11；四条降级路径——文本路由、无附件服务、路由解析不出、存储拒收——都**不改结果成功性**、只在 `image_note` 里点名原因；`render` 在附加图片时仍产出文本）。
+排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）、v18 图片交接（未传 `attach_image` 时**一个字节都不提交**、结果仍是单个 text block；传了以后提交的确实是 PNG（签名 + IHDR 尺寸与凝胶画布手算值一致）、结果多出 `image` 字段与第二个 image block；10 个画图工具逐个断言"有参数、有输出字段"，总数恰好 11；四条降级路径——文本路由、无附件服务、路由解析不出、存储拒收——都**不改结果成功性**、只在 `image_note` 里点名原因；`render` 在附加图片时仍产出文本）、v19 实验台五件套（FASTQ：8 条读夹具的逐位置均值/**线性插值四分位**/Q20-Q30/精确重复率/接头命中位置/过度代表序列的"小样本合法为空"与"24/30 命中"两侧；密码子：CAI 全最优 = 1、**家族大小必须从完整频率表来**（9 选 3 会让 GCT 的 CAI 从 1.0 变成 0.4444，这是实现时抓到的真 bug）、RSCU 家族和为家族大小、Nc/GC3/GC123 已知值、CpG obs/exp、五条警告路径、未知宿主由 enum 拦下；系统发生：p-distance 逐格手算、JC 校正值、**饱和夹取与上报**、逐对跳过缺口、**四点条件**钉住无根拓扑、UPGMA 与 NJ 输出确实不同、Newick 往返与四种非法输入的报错、同种子逐字节复现、bootstrap 预算按 replicates×pairs×columns 拒绝；PCR：产物坐标与序列逐字符、中段错配默认拒绝/放宽接受、**3' 端错配在 anchor=3 被拒而在 anchor=0 被接受**、错引导双带、大小窗口过滤计数、环状跨 origin 的取模切片序列、FASTA 输入与 8 条错误路径；组成：岛边界与长度手算、Takai 口径下同序列不出岛、**高 GC 但无 CpG 不算岛**、G/C 富集等长段的 ±0.5 skew 与 ori/ter 窗口、熵/复杂度/N50 手算值、同聚物不除零、窗口与 step 计数、5 条参数错误路径）。
 
 - `svgpng.mjs` 回答的是第三个正交问题：**工具算对了、但模型看到的图是不是对的**。纯文本正确
   而 PNG 空白/错位/无法解码，是唯一一类"其它套件全绿"的真故障，所以这层必须自己站住：
@@ -164,7 +165,7 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **任何**要 push 或打 tag 的版本，先跑完这三步，缺一步都不算发布完成：
 
 ```bash
-npm test                     # 9 个套件（= test:unit(smoke+svgpng+4 客户端) + contract + drift-probe + preset-health）；
+npm test                     # 10 个套件（= test:unit(smoke+svgpng+svgio+4 客户端) + contract + drift-probe + preset-health）；
                              # 客户端半、光栅化器或 preset 组合的改动必须全绿
 node build/client-bundle.mjs # 产物与源同一批构建（`--check` 只报告陈旧、不落盘）
 git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
@@ -308,21 +309,72 @@ DSH 后：
 
 ## 路线图
 
-- **先清障（已完成，包 0.9.1）**：DSH `0.1.6-alpha.1` 漂移修复——preset 组合
-  指向不存在的 `workflow-worker-thread`（**预设挂不上**）已改为上游 `workflow-ptc`、
-  `tool-ralph` 按上游 `disabled`、组合与上游逐行对齐；`preset-health` 的漂移检查升级为
-  逐行结构比对并**阻断发布**；新增 `drift-probe.mjs` 证明该守卫会失败；`contract.mjs` 的
-  hook-prop 断言不再绑定 minify 形态；产物新鲜度检查不再依赖 `spawnSync`（沙箱 EPERM 下
-  也能验证），生成逻辑抽到 `build/client-bundle-core.mjs`。工具与 preset 目录未变
-  （仍 52 / v17）。
-- **v19（功能候选池，按需挑选）**：Cas12a/Cas13 等其他 PAM 家族（`pam` 参数已可传 `NNRT` 这类模式，缺的是家族特定的评分曲线与几何校验）；gRNA 的基因组级脱靶（当前实现把传入序列当参考，基因组规模需要先建一次索引再复用）；多重 PCR 的温度梯度/引物浓度配平建议；TaqMan 的 MGB/双标记探针变体与探针订购 CSV 直出。
-  更宽的候选池与"为什么不做"的否定清单见 **[docs/capability-gap-survey.md](capability-gap-survey.md)**
-  （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）；
-  另有一个被 v18 明确留下的技术债候选：**若上游给 fs 缝加上二进制写入**（`contract.mjs` 里有一条
-  断言专门盯着这件事），就补齐当年的 `png_path`（工作区 PNG 文件），见 README 的 `attach_image` 一节。
+- **v19 已完成（2026-09-18，包 0.11.0 / preset 目录 v19）**：实验台分析五件套——`molbio_fastq_qc`
+  （读级质控）、`molbio_codon_usage`（CAI/RSCU/Nc）、`molbio_phylogenetic_tree`（距离法树 + bootstrap
+  + Newick）、`molbio_pcr_simulate`（in-silico PCR）、`molbio_gc_composition`（CpG 岛 + 累积 skew），
+  加共享绘图助手 `svgio.mjs` 与套件 `test/svgio.mjs`。工具 52 → 57，`attach_image` 11 → 15。
+  同时修掉两项 **DSH 0.1.6-alpha.2 漂移**（见下）与一条**比对器丢残基**的静默风险（改为显式 WARNING）。
+  逐项口径见 [docs/v19-plan.md](v19-plan.md) 与 CHANGELOG 0.11.0。
+- **v20 候选（按需挑选）**：
+  - **`msa.mjs` 的残基截断**（v19 发现、**未修**）：渐进比对可能丢掉无法安放的末端残基（11 bp vs
+    10 bp 的对比返回 10 列，长的被截断）。v19 只在建树工具里加了覆盖度 WARNING，**比对器本身没动**
+    ——修它需要处理"末端缺口免费"的半全局评分与 traceback 的残基守恒，属于 `msa.mjs` 的独立改动，
+    且会改变 v15 起的所有比对输出（现有保守性/logo/树的已知值断言都要复核）。
+  - **Cas12a/Cas13 等 PAM 家族**（`pam` 参数已能传 `NNRT`，缺家族特定的评分曲线与几何校验）、
+    **gRNA 基因组级脱靶**（当前把传入序列当参考，基因组规模需要先建一次索引再复用）、
+    **多重 PCR 温度梯度/浓度配平建议**、**TaqMan 的 MGB/双标记探针与订购 CSV**。
+  - **`svgpng.mjs` 的 `tspan` 多行文本**：v19 的树图在叶名很长时会与相邻标签视觉重叠；
+    真正修法是支持 `<tspan>` 多行或自动折行，那要动光栅化器的文本布局（并补像素断言）。
+  - **批量分析 + 表格导出**（survey 第 7 条：对工作区里所有匹配文件跑同一项分析并出 CSV）。
+  - 更宽的候选池与"为什么不做"的否定清单见 **[docs/capability-gap-survey.md](capability-gap-survey.md)**
+    （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）；v19 已把
+    top-5 全部落地，README 也新增了"明确不做的事"一节，把 §3 的 blocker 逐类写进用户文档。
+  - 另一个被 v18 留下的技术债候选：**若上游给 fs 缝加上二进制写入**（`contract.mjs` 里有一条
+    断言专门盯着这件事），就补齐当年的 `png_path`（工作区 PNG 文件），见 README 的 `attach_image` 一节。
 - **浏览器面板的候选（客户端半，不动 preset 目录）**：给 `molbio_sequence_logo` /
   `molbio_grna_design` 等工具加调用卡（同一套 `presentationMeta` + 卡片模式，上线前先跑
   `test/client.mjs` 的抢座位顺序那一层）；文献库写回需先定并发契约。
+
+### DSH 0.1.6-alpha.2 漂移（v19 修掉的两项）
+
+本仓库在 `0.1.6-alpha.1` 上发布 v18，机器随后升到 **alpha.2**；`npm test` 报出两处，**性质完全不同**：
+
+1. **preset 少了上游新增的 `tool-plugin-manager` 行 → 组合与 `standard` 不再逐行一致**。
+   这是**组合层**的漂移，被逐行结构比对正确拦下（`preset-health` 失败即阻断）。
+   alpha.2 的 shipped `standard` 在 `present` 之后新增：
+
+   ```yaml
+   - id: tool-plugin-manager
+     name: '@deepseek-ai/dsh-plugin-manager/tools'
+     disabled: true
+   ```
+
+   已按上游逐行补齐（含位置与 `disabled`）。**教训延续**：上游加行时本组合必须跟着加，
+   否则"standard + 一行 molbio"的章程就悄悄不成立了——这也正是当初把"只比 id"升级为
+   逐行结构比对的原因。
+2. **`test/contract.mjs` 绑定了 minifier 的空格**（`ctx.slots.provideRoot({ hooks: {` 这一**单空格**
+   拼写），alpha.2 把同一调用排成四行缩进。**契约没变**（同一 check 里紧跟的空白容忍正则一直是过的，
+   `installScope("session")` 也过），所以这是断言绑格式、不是产品故障。已改为空白容忍，并**加了
+   一条不空转自检**：四种拼写都必须通过，把 `hooks` 改名成 `hookz` 必须失败。**这条自检是关键**——
+   否则"放宽成不绑格式"的下一次修改就会退化成"什么都不检查"。
+
+### 发版时容易漏的一步：preset 版本目录必须镜像包根
+
+`preset/molbio-lab/plugins/dsh-molbio-tools-vN/` 里的模块**必须与包根逐字节相同**（组合里的相对
+路径指向它，preset 要能"随包带走"）。漏拷一个文件、或改了包根忘了同步版本目录，症状是
+"升级了却什么都没变"——因为组合挂的还是旧模块，而**任何挂载检查都看不见这一点**（旧模块挂得很好）。
+v19 起 `test/preset-health.mjs` 增加**镜像检查**：模块多一个少一个、内容有一个字节不同都失败，
+并已用突变实验证明它会失败。发布前照抄：
+
+```powershell
+$mods = @('index.mjs','lib.mjs', ... 全部模块 ...)   # 或直接列目录
+foreach ($m in $mods) { Copy-Item $m "preset\molbio-lab\plugins\dsh-molbio-tools-v19\$m" -Force }
+node test/preset-health.mjs   # 末尾应打印 "mirror OK: dsh-molbio-tools-v19 matches the package root module-for-module"
+```
+
+**改了 `lib.mjs`/`protein.mjs` 这类同时属于浏览器半的模块，还必须 `npm run build:client` 并提交
+产物**——`contract.mjs` 的"产物新鲜度"检查会失败（v19 就因此重建了 `lib/client.js` 与
+`packages/molbio-panel/lib/client.js`）。
 
 ### DSH 0.1.6 新能力的可用性勘察（2026-09-16，只读；基线 dsh 0.1.6-alpha.1）
 
@@ -439,6 +491,12 @@ CLI 流程；但 **Windows 上交互式 REPL 不可靠**（stdin 等待判定是
 
 ## 已完成的方向（历史）
 
+- **v19（2026-09-18，包 0.11.0 / preset 目录 v19）**：实验台分析五件套（`molbio_fastq_qc`、
+  `molbio_codon_usage`、`molbio_phylogenetic_tree`、`molbio_pcr_simulate`、`molbio_gc_composition`）
+  + 共享绘图助手 `svgio.mjs` + 套件 `test/svgio.mjs`。工具 52 → 57，`attach_image` 11 → 15。
+  修 DSH 0.1.6-alpha.2 的两处漂移（preset 缺 `tool-plugin-manager` 行、`contract.mjs` 绑
+  minifier 空格），并把"比对器可能丢残基"从静默风险改为显式 WARNING。发版流程新增
+  **preset 版本目录镜像检查**（`preset-health`）与人眼复核入口（`svgpng --preview`）。
 - **v18（2026-09-17，包 0.10.0 / preset 目录 v18）**：把画出来的图**交给模型看**——`svgpng.mjs`
   （零依赖 SVG 子集光栅化 + 自写 PNG 编码 + 内置折线字体）+ 11 个画图工具的可选 `attach_image`
   （附件而非文件：`ctx.attachments.saveImage` + 结果里的 image block，理由见上文三层证据）。

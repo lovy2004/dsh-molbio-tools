@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **52 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **57 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 52 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 57 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：专属模式 preset（3 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**52 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**57 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。
 
 ```powershell
@@ -83,7 +83,7 @@ bundle 会把工具注册到该 profile 的**全局层——所有会话都会�
 
 ### 只要浏览器面板（可选）
 
-如果只想要图形面板、不想把 52 个工具带进每个会话，装面板专用包即可（见
+如果只想要图形面板、不想把 57 个工具带进每个会话，装面板专用包即可（见
 [浏览器面板](#浏览器面板)）：
 
 ```powershell
@@ -94,7 +94,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 
 ## 它会做什么
 
-52 个工具按任务分为九组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+57 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
 ### 1. 序列分析与酶切（7）
@@ -188,6 +188,16 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_protocol_add` / `molbio_protocol_list` / `molbio_protocol_update` | 协议库（`protocols.json`）：步骤列表、自由参数、来源文献 |
 | `molbio_experiment_log` / `molbio_experiment_list` | 实验日志（`experiments.json`）：关联协议与文献、笔记与结果 |
 
+### 10. 实验台分析（5，v19 新增）
+
+| 工具 | 用途 |
+| --- | --- |
+| `molbio_fastq_qc` | **读级 FASTQ 质控**：每碱基质量（均值 **+ 四分位**）、每读质量直方图、每碱基 A/C/G/T 含量、每读 GC 分布（含理论正态叠加）、长度分布、**精确序列重复率**、过度代表序列、内置接头片段扫描、Q20/Q30 与"质量从第几位开始跌破 Q30"——并出一张六面板 SVG 报告 |
+| `molbio_codon_usage` | **密码子使用分析**：CAI（Sharp & Li）、逐密码子 RSCU、Nc（有效密码子数）、GC3/GC123、罕见密码子清单（带位置与宿主频率）、CDS 内 CpG 观测/期望、隐藏终止子扫描；可对比 E. coli / 酵母 / 人 |
+| `molbio_phylogenetic_tree` | **距离法系统发生树**：p-distance / Jukes-Cantor / Kimura 2P / Tamura-Nei 校正距离、UPGMA 或邻接法（NJ）、**bootstrap 支持度（种子可复现）**、严格/多数共识树、Newick 读写、矩形式/环形/扇形 SVG |
+| `molbio_pcr_simulate` | **in-silico PCR**：双链搜索引物结合位点、产物大小与坐标、逐位错配明细、**"3' 端必须精确匹配几个碱基"是独立旋钮**（中段错配仍能延伸、3' 错配通常不能）、环状模板跨 origin 产物、对额外模板（如载体）做错引导筛查、预期凝胶图 |
+| `molbio_gc_composition` | **GC 组成与 CpG 岛**：滑窗 GC、CpG 岛（Gardiner-Garden 1987 或 Takai & Jones 2002 两套阈值）、GC/AT skew 与**累积 skew**（复制起点/终点的经典指示）、二核苷酸观测/期望、词频、Shannon 熵、语言复杂度、N50/L50，出三面板图 |
+
 ---
 
 ## 典型用法示例
@@ -215,6 +225,11 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | "在这个基因里找 SpCas9 的 gRNA，脱靶越少越好" | `molbio_grna_design(sequence 或 .dna 路径)` → `save_path` 出订购 CSV / `map_path` 出图谱 |
 | "这段肽是不是两亲性？画个螺旋轮" | `molbio_helical_wheel(sequence, moment_window:11)` |
 | "画这个蛋白的疏水性图，找跨膜段" | `molbio_hydropathy_plot(sequence, window:19)` |
+| "这批测序数据质量怎么样，从第几位开始掉" | `molbio_fastq_qc(path)` → 看 `quality_tail_below_30` 与六面板报告 |
+| "这个基因在大肠杆菌里表达会好吗，问题在哪" | `molbio_codon_usage(sequence, host:'e_coli')` → CAI / 罕见密码子清单 |
+| "这对引物除了目标还会在哪扩增？预期几条带" | `molbio_pcr_simulate(template, primer_pairs:[…])` → 产物大小 + 凝胶图 |
+| "这几条序列谁跟谁最近，这个结论有信心吗" | `molbio_phylogenetic_tree(sequences:[…], bootstrap:100)` → 支持度 + Newick |
+| "这段是不是启动子/CPG 岛？复制起点在哪" | `molbio_gc_composition(sequence)` → CpG 岛区间 + 累积 GC skew 的 ori/ter 提示 |
 | "搜一下 KRAS G12D 抑制剂的最新文献并存进阅读库" | `molbio_pubmed_search` → `molbio_paper_add` |
 
 ---
@@ -233,11 +248,15 @@ SVG 文件**并在结果里返回路径：
 | `molbio_sequence_logo` / `molbio_grna_design` | logo SVG；订购 CSV 与带标记图谱 |
 | `molbio_qpcr_efficiency` / `molbio_plot` / `molbio_virtual_gel` | 曲线、柱状/散点图、凝胶图 |
 | `molbio_helical_wheel` / `molbio_hydropathy_plot` | 螺旋轮、疏水性图 |
+| `molbio_fastq_qc` | `<名称>.qc.svg`（六面板质控报告） |
+| `molbio_phylogenetic_tree` | `<名称>.nwk`（Newick）+ `<名称>-tree.svg` |
+| `molbio_pcr_simulate` | `pcr-gel.svg`（预期凝胶） |
+| `molbio_gc_composition` | `gc-composition.svg`（GC/CpG 三面板图） |
 | `molbio_fasta_fastq` / `molbio_extract_region` / `molbio_paper_export_bibtex` | FASTA / `.bib` |
 
 ### 让模型自己看图：`attach_image`（可选，默认关）
 
-上面这些**画图工具**（共 11 个）都接受一个可选参数 **`attach_image: true`**。打开后，工具会把
+上面这些**画图工具**（共 15 个）都接受一个可选参数 **`attach_image: true`**。打开后，工具会把
 同一张图**当场光栅化成 PNG 并作为图片附件挂到这次调用的结果上**——模型因此能直接"看见"凝胶
 条带、质粒图谱、logo、螺旋轮、曲线，而不是只能读数值。传了就会在结果里回一个 `image` 对象
 （附件的 id/尺寸/字节数），文本里也会写明"图已附上"。
@@ -416,6 +435,49 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   写入遵循会话的**沙箱政策**，与其它文件工具同权；面板（Papers tab）直接读 `papers.json`。
 - `molbio_paper_export_bibtex` 可选按 tag 过滤导出。
 
+### 实验台分析（v19）：五件套各自的口径
+
+- **FASTQ 质控**：每碱基统计按**该位置实际有读覆盖的读**计算，`observations` 逐位置给出——曲线
+  变细不等于质量下降。四分位用线性插值。**重复率按完整序列精确计数**（FastQC 用 50 bp 前缀哈希
+  抽样，本工具不同，`duplication.basis` 写明），且 `estimate_only: true`：扩增子与低起始量文库
+  本来就有高重复，重复率高**不等于**测序差。**过度代表序列**的门槛是
+  `max(20 reads, 0.1% × 样本)`，所以小样本**合法地什么都不报**（工具不会为了有输出而编一个命中）。
+  接头扫描用的是**内置公开短片段表**（TruSeq/Nextera/Illumina/polyA/polyG），不下载任何库。
+- **密码子使用**：CAI 用 Sharp & Li 1987，`w = f(密码子)/f(同义最优)`，几何均值**只统计序列里
+  真正出现的密码子**，跳过 Met/Trp（单密码子家族 w≡1）与终止密码子；频率为 0 的密码子按国际惯例
+  取 `w = 0.5/f_max`，并在 `zero_frequency_codons` 里点名。RSCU 与 Nc 用 Wright 1990 的
+  GC3 分箱期望值。**参考频率表是公开数据的转录常量**（E. coli K-12 / S. cerevisiae / H. sapiens），
+  测试会断言三张表各自 61 个有义密码子齐全、每个氨基酸家族和为 1，并断言 `molbio_codon_optimize`
+  的首选密码子在该宿主里**不是**罕见密码子（两张表不许悄悄打架）。CAI/Nc 是**估算值**，不是表达量。
+- **系统发生树**：这是**距离法**（UPGMA / 邻接法），**不是最大似然或贝叶斯**；输出里第一条 `note`
+  就写着这句。校正距离在饱和时（Jukes-Cantor 的 p ≥ 0.75、K2P/TN93 参数非正）**没有解**，工具
+  把该对记进 `saturated_pairs` 并**夹到模型上限**，而不是返回一个巨大的假数值或直接报错。
+  **bootstrap 百分比是列重采样的支持度，不是 p 值**；`seed` 显式给出，同种子必然复现（测试断言
+  两次运行的 Newick 与支持度完全一致）。距离按**逐对完整删除**处理（该对里任一位是缺口/简并就跳过，
+  `compared` 报实际位点数）。根节点的支持度不外显——那是生根位置造成的，不是可检验的演化支。
+- **in-silico PCR**：`max_mismatches`（容许多少错配）与 `three_prime_exact`（3' 端必须精确匹配
+  几个碱基，默认 3）是**两个独立旋钮**——中段错配仍能延伸，3' 错配通常不能，所以默认被拒。位点坐标
+  一律报在**顶链 1-based**；反向引物的位点其反向互补读在顶链上，产物就是顶链上 `forward.start →
+  reverse.end` 那一段。环状模板跨 origin 的产物用取模切片，`wraps_origin: true` 点名。
+  `off_target_count` 统计的是**带错配的产物**，不是"扩到了别的模板"。
+- **GC 组成与 CpG 岛**：两套阈值都在，因为它们的用途不同——**Gardiner-Garden & Frommer 1987**
+  （≥200 bp、GC > 50%、obs/exp > 0.6）会找出很多短岛，**Takai & Jones 2002**（≥500 bp、GC > 55%、
+  obs/exp > 0.65）找出更少更长的岛；结果里写明用的是哪套。三个条件是**与**关系：GC 高但 CpG
+  obs/exp 低**不算岛**（测试专门钉住这一点）。**累积 GC skew 的极小/极大是复制起点/终点的经典
+  *指示*，不是判定**，且只对闭合复制子有意义——序列太短时工具**不给**这个提示并说明原因。
+  简并碱基被排除在 skew/CpG/词频统计之外并计入 `n_percent`。
+
+### 明确不做的事（以及为什么）
+
+这些是这个工具集的**边界**，写在这里是为了不再重复勘察：**BAM/CRAM**（二进制格式）、
+**reads 比对与基因组级变异检出**（需要索引与外部程序）、**de novo 组装**（算力规模）、
+**BLAST 类同源检索**（需要网络与数据库）、**HMM/深度学习预测器**（模型权重）、
+**最大似然/贝叶斯建树**（算法规模——本包提供距离法树）、**Kraken/QIIME 类分类**与
+**群体遗传学参考面板**（参考数据库）、**基因组尺度 CRISPR 脱靶**（需要全基因组索引）。
+每一类在本工具集里都有一个**诚实的本地替代**：用户自带序列的 Smith-Waterman、用户自带的比对、
+距离法树、内置小表 + 用户提供的矩阵。更完整的清单与逐条 blocker 见
+[docs/capability-gap-survey.md](docs/capability-gap-survey.md) 第 3 节。
+
 ---
 
 ## 常见问题
@@ -473,7 +535,7 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 52 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 57 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）

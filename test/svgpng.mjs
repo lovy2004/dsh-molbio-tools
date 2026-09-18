@@ -32,6 +32,10 @@ import { renderPlasmidMap } from '../plasmid.mjs';
 import { linearFit, renderBarChart, renderGel, renderScatterChart } from '../plot.mjs';
 import { columnComposition, renderSequenceLogo } from '../logo.mjs';
 import { helicalWheel, hydropathyProfile, renderHelicalWheel, renderHydropathyPlot } from '../protein-structure.mjs';
+import { fastqQcReport, renderFastqQcReport } from '../fastq-qc.mjs';
+import { renderTreeSvg } from '../phylo.mjs';
+import { pcrGel } from '../pcr.mjs';
+import { gcComposition, renderCompositionSvg } from '../composition.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, '..');
@@ -259,6 +263,72 @@ test('every document the real renderers produce stays inside the supported subse
   }
 });
 
+test('the v19 pictures put ink where the data is', () => {
+  // The subset check above proves these documents RENDER. These assertions
+  // prove they render the RIGHT THING, at the level a wrong scale or a
+  // misplaced panel would break: sampling known rectangles and requiring ink
+  // (or requiring none).
+
+  // 1. The FASTQ report: six panels across three columns, and the quality-tail
+  //    panel must have ink in the left column at the top of the grid.
+  const report = v19FastqReport();
+  const fastq = renderSvgToPng(renderFastqQcReport(report, { columns: 3 }));
+  assert.equal(fastq.width, 16 * 2 + 3 * 470 + 2 * 16, 'three 470 px panels plus margins');
+  const fastqImage = decodePng(fastq.data);
+  const countInk = (image, x0, y0, x1, y1) => {
+    let count = 0;
+    for (let y = y0; y < Math.min(y1, image.height); y++) {
+      for (let x = x0; x < Math.min(x1, image.width); x++) {
+        const [r, g, b] = pixel(image, x, y);
+        if (r !== 255 || g !== 255 || b !== 255) count++;
+      }
+    }
+    return count;
+  };
+  assert.ok(countInk(fastqImage, 20, 100, 480, 300) > 500, 'the per-base quality panel has real content');
+  assert.ok(countInk(fastqImage, 510, 100, 970, 300) > 500, 'the per-sequence quality panel too');
+  assert.ok(countInk(fastqImage, 1000, 100, 1460, 300) > 500, 'and the per-base content panel');
+  // Ink near the very top of the quality panel means the axis reaches Q40
+  // rather than being squashed: sample the band just under the plot top.
+  assert.ok(countInk(fastqImage, 60, 110, 460, 130) > 20, 'the quality axis spans the panel height');
+
+  // 2. The tree: the leaf labels are at the right edge and the branches to
+  //    their left, i.e. the phylogram runs left-to-right.
+  const tree = renderSvgToPng(renderTreeSvg(v19Tree(), { layout: 'rectangular' }));
+  const treeImage = decodePng(tree.data);
+  assert.ok(countInk(treeImage, 40, 60, 300, treeImage.height - 40) > 200, 'the tree body is drawn');
+  assert.ok(countInk(treeImage, 520, 60, treeImage.width - 20, treeImage.height - 40) > 200, 'and the branch tips with labels reach the right');
+  // The fan layout must fill the panel too (a collapsed radius draws a dot).
+  const fan = decodePng(renderSvgToPng(renderTreeSvg(v19Tree(), { layout: 'fan' })).data);
+  let fanInk = 0;
+  for (let y = 0; y < fan.height; y++) {
+    for (let x = 0; x < fan.width; x++) {
+      const [r, g, b] = pixel(fan, x, y);
+      if (r !== 255 || g !== 255 || b !== 255) fanInk++;
+    }
+  }
+  assert.ok(fanInk > 2000, `the fan layout draws a full tree, not a dot (${fanInk} ink pixels)`);
+
+  // 3. The PCR gel: two lanes plus the ladder at the left, each with bands.
+  const gel = decodePng(renderSvgToPng(pcrGel([
+    { name: 'amp1', amplicons: [{ size: 100 }] },
+    { name: 'amp2', amplicons: [{ size: 120 }, { size: 80 }] },
+  ], { title: 'In-silico PCR' })).data);
+  assert.ok(countInk(gel, 70, 60, 140, gel.height - 40) > 200, 'the ladder lane is drawn');
+  assert.ok(countInk(gel, 140, 60, 210, gel.height - 40) > 50, 'the first sample lane has a band');
+  assert.ok(countInk(gel, 210, 60, 280, gel.height - 40) > 100, 'and the second has two');
+
+  // 4. Composition: the CpG island shading shades the left half of the GC
+  //    panel (blue wash) while the AT tail half stays white at the top.
+  const composition = decodePng(renderSvgToPng(renderCompositionSvg(v19CompositionReport(), { title: 'GC composition' })).data);
+  const plotTop = 66 + 16 + 40 + 20;
+  const leftWash = countInk(composition, 60, plotTop, 300, plotTop + 40);
+  assert.ok(leftWash > 1000, `the island span is shaded across the left half (${leftWash} non-white pixels)`);
+  // The GC curve reaches 100% in the island half and 0% in the AT half, so the
+  // lower part of the right half is painted by the descending line.
+  assert.ok(countInk(composition, 60, plotTop, 300, plotTop + 20) > countInk(composition, 400, plotTop, 620, plotTop + 20), 'the island half is drawn higher than the AT half');
+});
+
 test('a linear plasmid map is drawn at its own size (the track was clipped)', () => {
   // The renderer draws a 960x260 track; before v18 the root viewBox stayed
   // 840x840, so everything past x=840 — the 3' end of the ruler and the
@@ -349,7 +419,69 @@ function sampleDocuments() {
     ['hydropathy plot', renderHydropathyPlot(hydropathy, { title: 'Kyte-Doolittle hydropathy' })],
     ['bar chart', renderBarChart({ title: 'Relative expression', x_label: 'condition', y_label: 'fold change', labels: ['control', 'treated', 'rescue'], values: [1, 8.4, 2.1], errors: [0.2, 1.1, 0.4] })],
     ['scatter chart', renderScatterChart({ title: 'Standard curve', x_label: 'log10 quantity', y_label: 'Ct', x: [0, 1, 2, 3, 4], y: [32.1, 28.9, 25.2, 21.6, 18.1], fit: linearFit([0, 1, 2, 3, 4], [32.1, 28.9, 25.2, 21.6, 18.1]) })],
+    // v19 pictures: the six-panel FASTQ report, the phylogenetic tree (all
+    // three layouts use the same primitives, so one is enough here), the
+    // in-silico PCR gel and the three-panel GC/CpG composition figure.
+    ['fastq qc report', renderFastqQcReport(v19FastqReport(), { columns: 3 })],
+    ['phylogenetic tree', renderTreeSvg(v19Tree(), { layout: 'rectangular', subtitle: 'NJ, Kimura 2P, 20 replicates' })],
+    ['pcr gel', pcrGel([
+      { name: 'amp1', amplicons: [{ size: 100 }] },
+      { name: 'amp2', amplicons: [{ size: 120 }, { size: 80 }] },
+    ], { title: 'In-silico PCR' })],
+    ['gc composition', renderCompositionSvg(v19CompositionReport(), { title: 'GC composition' })],
   ];
+}
+
+/** A small but complete FASTQ report for the rasterizer sample. */
+function v19FastqReport() {
+  const reads = Array.from({ length: 24 }, (_, index) => {
+    const sequence = index === 0
+      ? 'ACGTACGTACGTAGATCGGAAGAG'
+      : 'ACGTACGTACGTACGTACGTACGT'.slice(0, 20 + (index % 4));
+    return {
+      id: `r${index}`,
+      sequence,
+      quality: [...sequence].map((_, position) => String.fromCharCode(33 + Math.max(3, 38 - Math.floor(position / 4) - (index % 4)))).join(''),
+    };
+  });
+  return fastqQcReport(reads, { max_plot_bases: 24 });
+}
+
+/** A six-taxon tree with support values, for the rasterizer sample. */
+function v19Tree() {
+  const leaf = (name, length) => ({ name, children: [], length, support: undefined });
+  return {
+    name: '',
+    length: 0,
+    support: undefined,
+    children: [
+      {
+        name: '',
+        length: 0.01,
+        support: 88,
+        children: [leaf('sample A', 0.002), leaf('sample B', 0.004)],
+      },
+      {
+        name: '',
+        length: 0.02,
+        support: 41,
+        children: [
+          leaf('sample C', 0.03),
+          {
+            name: '',
+            length: 0.01,
+            support: 74,
+            children: [leaf('sample D', 0.02), leaf('sample E', 0.025)],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** A composition report with one island and a real skew profile. */
+function v19CompositionReport() {
+  return gcComposition(`${'CG'.repeat(125)}${'AT'.repeat(75)}${'GGGC'.repeat(50)}`, { window: 100, step: 50 });
 }
 
 // ── optional dev modes (font eyeball check and per-type previews) ───────────
