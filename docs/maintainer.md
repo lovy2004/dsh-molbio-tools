@@ -292,7 +292,35 @@ preset 渠道（受 ESM 模块缓存约束）：
    git tag -a v0.5.1 -m "v15 (preset dir dsh-molbio-tools-v15): ..." && git push origin v0.5.1
    ```
 
-   bundle 渠道天然免疫模块缓存（每个发布版本在 node_modules 中都是独立目录）。
+bundle 渠道天然免疫模块缓存（每个发布版本在 node_modules 中都是独立目录）。
+
+### npm 发布（v20 实测的两个坑）
+
+root 包与面板包是**两个独立的 npm 条目**，**必须分开发布，且面板包要在它自己的目录里跑**
+（在仓库根跑两次 `npm publish` 会**两次都发布 root 包**）：
+
+```powershell
+cd <仓库根>            # 发布 dsh-molbio-tools
+npm publish --access public
+cd packages\molbio-panel   # 发布 dsh-molbio-panel（另一个条目）
+npm publish --access public
+```
+
+- **`npm pack --dry-run --json` 是发布前唯一能核对"包里到底有什么"的手段**（`files` 白名单是
+  allowlist，漏一个模块就是"装完却没有这个功能"）。v20 用它确认了 `font-metrics.mjs`、
+  重建后的 `lib/client.js`、`preset/.../dsh-molbio-tools-v20/index.mjs` 都在包里。
+- **`npm whoami` / `npm pack` / `npm publish` 都需要写 `%LOCALAPPDATA%\npm-cache`**。若在受限
+  沙箱里跑，会得到 `EPERM ... npm-cache\_cacache\tmp\...`（不是权限坏了，是沙箱拦了工作区外的写）；
+  `npm login` 还必须是**真 TTY**，所以登录与 OTP 只能由人来做。
+- **"要求写入 2FA"的账号即便 `npm profile get` 显示 `two-factor auth: disabled`，发布仍会被拒**：
+
+  ```
+  403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.
+  ```
+
+  `disabled` 指的是登录/其它操作的 2FA，写入策略是另一项。两条出路：交互式 `npm publish` 时输入
+  `--otp <6 位码>`，或用一个勾了 **bypass 2FA** 的 granular access token（环境变量 `NPM_TOKEN`，
+  不要写进仓库或 `.npmrc`）。
 
 ### preset 组合的维护（DSH 升级后必做）
 
