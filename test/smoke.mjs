@@ -2598,7 +2598,7 @@ function splicedToGenomic(splicedPos, exons) {
 
 // ── v19: phylogenetic tree ──────────────────────────────────────────────────
 {
-  const { distanceMatrix, parseNewick, toNewick, kmerDistanceMatrix } = await import('../phylo.mjs');
+  const { distanceMatrix, parseNewick, toNewick, kmerDistanceMatrix, coverageShortfall } = await import('../phylo.mjs');
 
   // A four-taxon fixture with hand-checkable differences:
   //   A and B identical; C is A plus one C->T transition; D is C plus one
@@ -2764,18 +2764,35 @@ function splicedToGenomic(splicedPos, exons) {
     svg_path: 'C:/tmp/unaligned.svg',
   });
   assert.equal(unaligned.aligned_by_tool, true);
-  assert.equal(unaligned.alignment_columns, 10, 'the progressive aligner pads rather than inserting a gap for this pair');
+  // v20 FIXED THE ALIGNER HERE. This assertion used to read `alignment_columns
+  // === 10` with the comment "the progressive aligner pads rather than
+  // inserting a gap for this pair", i.e. it pinned the BUG: u2 supplied 11
+  // bases and the alignment kept only 10, silently dropping the residue. The
+  // free-end-gap DP legitimately prefers the 10-column path (score 40 at
+  // (10,10) vs 30 at (11,10)), but the residues past the chosen endpoint are an
+  // OVERHANG, not a gap the alignment chose — dropping them lost data. The
+  // aligner now emits them, so the column count is 11 and nothing is lost.
+  assert.equal(unaligned.alignment_columns, 11, 'the trailing residue is emitted as an overhang column, not dropped');
   assert.ok(unaligned.notes.some((note) => note.includes('progressive aligner')));
-  // KNOWN LIMITATION, surfaced rather than hidden: the progressive aligner can
-  // drop an unplaceable trailing residue (u2 supplied 11 bases, the alignment
-  // kept 10). The tool reports the coverage shortfall in `notes` so a tree is
-  // never built silently from fewer residues than the user supplied. Fixing the
-  // aligner itself is msa.mjs work and is tracked outside this release.
+  // The coverage warning from v19 must now be ABSENT: every residue is placed.
   assert.ok(
-    unaligned.notes.some((note) => note.includes('WARNING: the alignment did not place every residue')),
-    'the coverage shortfall is reported',
+    !unaligned.notes.some((note) => note.includes('did not place every residue')),
+    'the aligner no longer loses residues, so the coverage warning must not fire',
   );
-  assert.ok(unaligned.notes.some((note) => note.includes('u2 (10 of 11 bases kept)')));
+  // The guard itself must still WORK, or "no warning" proves nothing. Run the
+  // coverage check directly with a deliberately truncated alignment: the same
+  // helper that used to fire on real output must still fire on a damaged row.
+  const damaged = coverageShortfall(
+    [
+      { id: 'u1', sequence: 'ACGTACGTAC-' },
+      { id: 'u2', sequence: 'ACGTACGTAC' },
+    ],
+    [
+      { id: 'u1', sequence: 'ACGTACGTAC' },
+      { id: 'u2', sequence: 'ACGTACGTACG' },
+    ],
+  );
+  assert.deepEqual(damaged, ['u2 (10 of 11 bases kept)'], 'the coverage guard still reports a truncated row');
   // When every residue IS placed, there is no warning.
   const clean = await run('molbio_phylogenetic_tree', {
     sequences: ['ACGTACGTAC', 'ACGTTCGTAC', 'ACGTTCGTAA'],

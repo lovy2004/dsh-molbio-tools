@@ -213,6 +213,35 @@ const ALLOWED_EXTRA_ROWS = new Set(['tool-molbio']);
 const ALLOWED_DISABLED_ROWS = new Set();
 
 /**
+ * A preset description claims how many tools it brings. When the toolset grows
+ * and the claim does not, users read a wrong number in the mode picker and
+ * nothing fails: v19 shipped 57 tools while `preset.yml` still said 52.
+ *
+ * Returns one message per number in `description` that does NOT equal
+ * `registered` and is not explicitly attributed to something else. Descriptions
+ * legitimately mention other counts (`90+ 限制酶`, `2–50 条序列`), so the parse
+ * is deliberately narrow: it looks for a number directly followed by the
+ * Chinese counter `个` and `molbio_*` (the exact v19 phrasing), and for an
+ * English `<n> tools` form.
+ *
+ * @param {string} description - the preset.yml description text.
+ * @param {number} registered - how many molbio_* tools the plugin registers.
+ * @returns {string[]} drift messages, empty when every claim matches.
+ */
+function toolCountDrift(description, registered) {
+  const drift = [];
+  const claims = [];
+  for (const match of String(description).matchAll(/(\d+)\s*个\s*molbio_\*/g)) claims.push(match[1]);
+  for (const match of String(description).matchAll(/(\d+)\s+tools\b/gi)) claims.push(match[1]);
+  for (const claim of claims) {
+    if (Number(claim) !== registered) {
+      drift.push(`the description claims ${claim} tools but the plugin registers ${registered}`);
+    }
+  }
+  return drift;
+}
+
+/**
  * Structural drift against the shipped `standard` preset, row by row and in
  * order. Comparing ids alone (the v15–v17 behaviour) misses exactly the two
  * defects that reached a release: a provider package the harness does not
@@ -407,7 +436,29 @@ async function main() {
     console.error('  composition header).');
   }
 
-  if (failures.length > 0 || drift.length > 0 || mirrorDrift.length > 0) {
+  // The preset's own user-facing DESCRIPTION quotes a tool count, and v19 bumped
+  // the toolset from 52 to 57 without updating it: the number a user reads in the
+  // mode picker was wrong for a whole release, and nothing failed. A claim about
+  // the toolset is a claim this suite can check, so it does — against the count
+  // the plugin actually registers.
+  const countDrift = [];
+  const presetYml = join(dirname(composition), 'preset.yml');
+  // Count the tools the PRESET actually loads (its version directory's entry
+  // module), not the package root: the mirror check above proves the two are
+  // byte-identical, and this is the copy the composition names.
+  const pluginEntry = activeMatch === null ? undefined : join(pluginsDir, activeMatch[1], 'index.mjs');
+  if (existsSync(presetYml) && pluginEntry !== undefined && existsSync(pluginEntry)) {
+    const description = /^\s*description:\s*(.+)$/m.exec(await readFile(presetYml, 'utf8'))?.[1] ?? '';
+    const registered = (await readFile(pluginEntry, 'utf8')).match(/name:\s*'molbio_[a-z0-9_]+'/g)?.length ?? 0;
+    countDrift.push(...toolCountDrift(description, registered));
+  }
+  if (countDrift.length > 0) {
+    console.error('tool-count check (preset.yml description vs the registered tools):');
+    for (const line of countDrift) console.error(`  FAIL ${line}`);
+    console.error('');
+  }
+
+  if (failures.length > 0 || drift.length > 0 || mirrorDrift.length > 0 || countDrift.length > 0) {
     if (failures.length > 0) {
       console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
       for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
@@ -417,6 +468,9 @@ async function main() {
     }
     if (mirrorDrift.length > 0) {
       console.error(`preset-health FAILED: ${mirrorDrift.length} file(s) in the active preset version directory are not the current sources`);
+    }
+    if (countDrift.length > 0) {
+      console.error(`preset-health FAILED: ${countDrift.length} tool-count claim(s) in preset.yml do not match the registered tools`);
     }
     process.exit(1);
   }
@@ -431,4 +485,4 @@ async function main() {
 // keeps `node test/preset-health.mjs` behaving exactly as before.
 if (import.meta.main) await main();
 
-export { compositionDrift };
+export { compositionDrift, toolCountDrift };

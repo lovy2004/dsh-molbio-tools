@@ -98,7 +98,7 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
 **2 错配脱靶的互查**（正向两次调用互相指认，mismatch_positions [4, 7]）、脱靶扣分
 （92 vs 无搜索时的 100）、种子末端不错配约束、GC/poly-T/C-run 过滤与「放宽 gc_max 才能
 救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
-排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）、v18 图片交接（未传 `attach_image` 时**一个字节都不提交**、结果仍是单个 text block；传了以后提交的确实是 PNG（签名 + IHDR 尺寸与凝胶画布手算值一致）、结果多出 `image` 字段与第二个 image block；10 个画图工具逐个断言"有参数、有输出字段"，总数恰好 11；四条降级路径——文本路由、无附件服务、路由解析不出、存储拒收——都**不改结果成功性**、只在 `image_note` 里点名原因；`render` 在附加图片时仍产出文本）、v19 实验台五件套（FASTQ：8 条读夹具的逐位置均值/**线性插值四分位**/Q20-Q30/精确重复率/接头命中位置/过度代表序列的"小样本合法为空"与"24/30 命中"两侧；密码子：CAI 全最优 = 1、**家族大小必须从完整频率表来**（9 选 3 会让 GCT 的 CAI 从 1.0 变成 0.4444，这是实现时抓到的真 bug）、RSCU 家族和为家族大小、Nc/GC3/GC123 已知值、CpG obs/exp、五条警告路径、未知宿主由 enum 拦下；系统发生：p-distance 逐格手算、JC 校正值、**饱和夹取与上报**、逐对跳过缺口、**四点条件**钉住无根拓扑、UPGMA 与 NJ 输出确实不同、Newick 往返与四种非法输入的报错、同种子逐字节复现、bootstrap 预算按 replicates×pairs×columns 拒绝；PCR：产物坐标与序列逐字符、中段错配默认拒绝/放宽接受、**3' 端错配在 anchor=3 被拒而在 anchor=0 被接受**、错引导双带、大小窗口过滤计数、环状跨 origin 的取模切片序列、FASTA 输入与 8 条错误路径；组成：岛边界与长度手算、Takai 口径下同序列不出岛、**高 GC 但无 CpG 不算岛**、G/C 富集等长段的 ±0.5 skew 与 ori/ter 窗口、熵/复杂度/N50 手算值、同聚物不除零、窗口与 step 计数、5 条参数错误路径）。
+排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）、v18 图片交接（未传 `attach_image` 时**一个字节都不提交**、结果仍是单个 text block；传了以后提交的确实是 PNG（签名 + IHDR 尺寸与凝胶画布手算值一致）、结果多出 `image` 字段与第二个 image block；10 个画图工具逐个断言"有参数、有输出字段"，总数恰好 11；四条降级路径——文本路由、无附件服务、路由解析不出、存储拒收——都**不改结果成功性**、只在 `image_note` 里点名原因；`render` 在附加图片时仍产出文本）、v19 实验台五件套（FASTQ：8 条读夹具的逐位置均值/**线性插值四分位**/Q20-Q30/精确重复率/接头命中位置/过度代表序列的"小样本合法为空"与"24/30 命中"两侧；密码子：CAI 全最优 = 1、**家族大小必须从完整频率表来**（9 选 3 会让 GCT 的 CAI 从 1.0 变成 0.4444，这是实现时抓到的真 bug）、RSCU 家族和为家族大小、Nc/GC3/GC123 已知值、CpG obs/exp、五条警告路径、未知宿主由 enum 拦下；系统发生：p-distance 逐格手算、JC 校正值、**饱和夹取与上报**、逐对跳过缺口、**四点条件**钉住无根拓扑、UPGMA 与 NJ 输出确实不同、Newick 往返与四种非法输入的报错、同种子逐字节复现、bootstrap 预算按 replicates×pairs×columns 拒绝；PCR：产物坐标与序列逐字符、中段错配默认拒绝/放宽接受、**3' 端错配在 anchor=3 被拒而在 anchor=0 被接受**、错引导双带、大小窗口过滤计数、环状跨 origin 的取模切片序列、FASTA 输入与 8 条错误路径；组成：岛边界与长度手算、Takai 口径下同序列不出岛、**高 GC 但无 CpG 不算岛**、G/C 富集等长段的 ±0.5 skew 与 ori/ter 窗口、熵/复杂度/N50 手算值、同聚物不除零、窗口与 step 计数、5 条参数错误路径）、**v20 比对残基守恒**（多组不等长输入逐条断言"输出行去缺口后逐字符等于输入序列"——11/10、12/10、不等长多序列、4/4 无重叠、前导悬垂、5/10 单侧全悬垂；所有行等长；以及**用一个故意截断的行驱动 `coverageShortfall`**，断言它仍报 `u2 (10 of 11 bases kept)`，否则"没有警告"什么也证明不了）。
 
 - `svgpng.mjs` 回答的是第三个正交问题：**工具算对了、但模型看到的图是不是对的**。纯文本正确
   而 PNG 空白/错位/无法解码，是唯一一类"其它套件全绿"的真故障，所以这层必须自己站住：
@@ -112,6 +112,13 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
   裁掉了——正是"给模型看图"这件事把该 bug 暴露出来），以及**光栅化器不得进入客户端产物**
   （它 import `node:zlib`，进 bundle 就会在浏览器里炸）。`--sheet <png>` 导出整张字形表、
   `--preview <dir>` 导出每种图各一张，供人眼复核字体（改字形后**必须**这样看一遍）。
+- **v20 给这层加了 `<tspan>` 多行文本的像素断言**（18 → 22 项）：三行 `<tspan>` 必须各自落在
+  自己的基线上、**行间是空的**（塌到一条基线上会失败）；`dy` 相对堆叠逐级下移、**相邻基线之间
+  空着**（证明是移动而不是重印）；自闭合空 `<tspan dy/>` 推进一个空行；`<tspan>` 的 `transform`
+  与嵌套 `<tspan>` 被**报告**而不是猜着画。最后一条是本次修复的**图像回归守卫**：长叶名的树图，
+  在标签列里数"密集行"，断言每个名字至少两行、4 个标签块之间**至少 3 处空白间隔**——v19 的
+  单行长标签会把这个数字压到 0 或 1。扫描区间从文档里**读出**（第一个 `<tspan>` 的 `x`），
+  因为靠猜会把分支尖端、支持度和标题都算成"标签行"。
 
 - `client.mjs` / `panel-render.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面
   两者正交的第三个问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在
@@ -146,6 +153,13 @@ source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺
   目录解析，与 Loader 改写 `baseUrl` 的行为一致）、行集合与官方 `standard` 预设的差异
   （缺行 = 悄悄丢能力，多行 = 本插件的 tool-molbio）。`disabled:` 行与 `!!js` 条件行按
   Loader 的规则跳过。退出码非 0 即发布阻断。
+- **工具数声明比对（v20 新增）**：`preset.yml` 的描述里写着"57 个 molbio_\* 工具"，
+  而 v19 从 52 加到 57 时**漏改了它**——用户在整个 v19 周期看到的是错的数字，且没有任何
+  检查会发现。`toolCountDrift(description, registered)` 现在把**预设真正加载的那个入口模块**
+  （组合指向的 `vN/index.mjs`，与包根逐字节一致由镜像检查保证）里注册的工具数与描述里的
+  数字对比。解析刻意窄（`<n> 个 molbio_*` 与英文 `<n> tools`），所以 `90+ 限制酶`、
+  `2–50 条序列`这类其它数字不会被误判；没有工具数描述的文案也不会被逼着加一个。
+  与 `compositionDrift` 一样导出给 `drift-probe.mjs` 用变异输入驱动。
 - **漂移检查是"逐行结构比对"，不是"比 id"**：`compositionDrift`（`preset-health.mjs` 导出）
   按**行序**比对 `id`、`name`、`disabled`、`isolate`、`config`，任何差异都是**发布阻断**。
   0.1.6-alpha.1 那次的教训是两件事同时发生而检查全瞎：组合里有一行指向
@@ -309,26 +323,25 @@ DSH 后：
 
 ## 路线图
 
-- **v19 已完成（2026-09-18，包 0.11.0 / preset 目录 v19）**：实验台分析五件套——`molbio_fastq_qc`
-  （读级质控）、`molbio_codon_usage`（CAI/RSCU/Nc）、`molbio_phylogenetic_tree`（距离法树 + bootstrap
-  + Newick）、`molbio_pcr_simulate`（in-silico PCR）、`molbio_gc_composition`（CpG 岛 + 累积 skew），
-  加共享绘图助手 `svgio.mjs` 与套件 `test/svgio.mjs`。工具 52 → 57，`attach_image` 11 → 15。
-  同时修掉两项 **DSH 0.1.6-alpha.2 漂移**（见下）与一条**比对器丢残基**的静默风险（改为显式 WARNING）。
-  逐项口径见 [docs/v19-plan.md](v19-plan.md) 与 CHANGELOG 0.11.0。
-- **v20 候选（按需挑选）**：
-  - **`msa.mjs` 的残基截断**（v19 发现、**未修**）：渐进比对可能丢掉无法安放的末端残基（11 bp vs
-    10 bp 的对比返回 10 列，长的被截断）。v19 只在建树工具里加了覆盖度 WARNING，**比对器本身没动**
-    ——修它需要处理"末端缺口免费"的半全局评分与 traceback 的残基守恒，属于 `msa.mjs` 的独立改动，
-    且会改变 v15 起的所有比对输出（现有保守性/logo/树的已知值断言都要复核）。
+- **v20 已完成（2026-09-18，包 0.12.0 / preset 目录 v20）**：两条"沉默的错"——(A) `msa.mjs` 渐进比对
+  静默丢掉**尾部**悬垂残基（11 bp 对 10 bp 只留 10 列），现在把端点之后的残基作为纯悬垂列补进结果，
+  不变式是"每条输出行去缺口后逐字符等于输入"；(D) `svgpng.mjs` 支持 `<tspan>` 多行文本，树图矩形
+  布局的长叶名折行而不是压在一起。新增 `font-metrics.mjs`（让"预留宽度"与"绘制宽度"共用同一份
+  字宽度量），`svgio.mjs` 新增 `wrapTextLines`/`textSpanLines`。工具仍 57；顺带修掉 `preset.yml`
+  里停了一版的工具数（52 → 57）并补上守卫 `toolCountDrift`。逐项口径见
+  [docs/v20-plan.md](v20-plan.md) 与 CHANGELOG 0.12.0。
+- **v21 候选（按需挑选）**：
   - **Cas12a/Cas13 等 PAM 家族**（`pam` 参数已能传 `NNRT`，缺家族特定的评分曲线与几何校验）、
     **gRNA 基因组级脱靶**（当前把传入序列当参考，基因组规模需要先建一次索引再复用）、
     **多重 PCR 温度梯度/浓度配平建议**、**TaqMan 的 MGB/双标记探针与订购 CSV**。
-  - **`svgpng.mjs` 的 `tspan` 多行文本**：v19 的树图在叶名很长时会与相邻标签视觉重叠；
-    真正修法是支持 `<tspan>` 多行或自动折行，那要动光栅化器的文本布局（并补像素断言）。
   - **批量分析 + 表格导出**（survey 第 7 条：对工作区里所有匹配文件跑同一项分析并出 CSV）。
+  - **比对后处理套件**（survey 第 6 名）：IUPAC 共识、缺口比例修剪、同一性矩阵、逐列覆盖度
+    ——`conservationAnalysis` 已给出共识/逐列 identity/熵，缺的是修剪与覆盖度视图。
+  - **`svgpng.mjs` 的旋转多行文本**：v20 给矩形布局折了行，但环形/扇形布局的旋转标签仍按整行
+    绘制（旋转文本没有按真实字宽测过，硬折会算错行数）。真修法是让折行也知道旋转，或给径向标签
+    改用别的排布（沿切线/半径分层），并补像素断言。
   - 更宽的候选池与"为什么不做"的否定清单见 **[docs/capability-gap-survey.md](capability-gap-survey.md)**
-    （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）；v19 已把
-    top-5 全部落地，README 也新增了"明确不做的事"一节，把 §3 的 blocker 逐类写进用户文档。
+    （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）。
   - 另一个被 v18 留下的技术债候选：**若上游给 fs 缝加上二进制写入**（`contract.mjs` 里有一条
     断言专门盯着这件事），就补齐当年的 `png_path`（工作区 PNG 文件），见 README 的 `attach_image` 一节。
 - **浏览器面板的候选（客户端半，不动 preset 目录）**：给 `molbio_sequence_logo` /
@@ -364,17 +377,24 @@ DSH 后：
 路径指向它，preset 要能"随包带走"）。漏拷一个文件、或改了包根忘了同步版本目录，症状是
 "升级了却什么都没变"——因为组合挂的还是旧模块，而**任何挂载检查都看不见这一点**（旧模块挂得很好）。
 v19 起 `test/preset-health.mjs` 增加**镜像检查**：模块多一个少一个、内容有一个字节不同都失败，
-并已用突变实验证明它会失败。发布前照抄：
+并已用突变实验证明它会失败。发布前照抄（`v20` 换成当前版本目录名；**新增模块也要一起列进
+`package.json` 的 `files` 白名单**，v20 的 `font-metrics.mjs` 就是这一类）：
 
 ```powershell
-$mods = @('index.mjs','lib.mjs', ... 全部模块 ...)   # 或直接列目录
-foreach ($m in $mods) { Copy-Item $m "preset\molbio-lab\plugins\dsh-molbio-tools-v19\$m" -Force }
-node test/preset-health.mjs   # 末尾应打印 "mirror OK: dsh-molbio-tools-v19 matches the package root module-for-module"
+$root = (Get-Location).Path
+$dest = "preset\molbio-lab\plugins\dsh-molbio-tools-v20"
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
+# 包根的每个 .mjs 都是插件模块（test* 除外），正好是镜像检查期待的那一组
+Get-ChildItem -Path $root -Filter '*.mjs' -File |
+  Where-Object { $_.Name -notlike 'test*' } |
+  ForEach-Object { Copy-Item $_.FullName (Join-Path $dest $_.Name) -Force }
+node test/preset-health.mjs   # 末尾应打印 "mirror OK: dsh-molbio-tools-v20 matches the package root module-for-module"
 ```
 
-**改了 `lib.mjs`/`protein.mjs` 这类同时属于浏览器半的模块，还必须 `npm run build:client` 并提交
-产物**——`contract.mjs` 的"产物新鲜度"检查会失败（v19 就因此重建了 `lib/client.js` 与
-`packages/molbio-panel/lib/client.js`）。
+**改了 `lib.mjs`/`msa.mjs`/`protein.mjs` 这类同时属于浏览器半的模块，还必须 `npm run build:client`
+并提交产物**——`contract.mjs` 的"产物新鲜度"检查会失败（v19 因 `lib.mjs`、v20 因 `msa.mjs` 都因此
+重建了 `lib/client.js` 与 `packages/molbio-panel/lib/client.js`）。`font-metrics.mjs`/`svgio.mjs`/
+`svgpng.mjs` **不进**客户端产物，`contract.mjs` 与 `test/svgpng.mjs` 各有一条断言盯着这件事。
 
 ### DSH 0.1.6 新能力的可用性勘察（2026-09-16，只读；基线 dsh 0.1.6-alpha.1）
 
@@ -491,6 +511,11 @@ CLI 流程；但 **Windows 上交互式 REPL 不可靠**（stdin 等待判定是
 
 ## 已完成的方向（历史）
 
+- **v20（2026-09-18，包 0.12.0 / preset 目录 v20）**：两条"沉默的错"——`msa.mjs` 渐进比对丢尾部
+  悬垂残基（现在每条输出行去缺口后逐字符等于输入），`svgpng.mjs` 的 `<tspan>` 多行文本（树图长叶名
+  折行而非互压）。新增 `font-metrics.mjs` 与 `svgio.wrapTextLines`/`textSpanLines`；工具仍 57。
+  顺带修掉 `preset.yml` 里停了一版的工具数并补上 `toolCountDrift` 守卫。发版流程新增
+  "`svgpng` 像素级标签不重叠守卫"与"工具数声明比对"。
 - **v19（2026-09-18，包 0.11.0 / preset 目录 v19）**：实验台分析五件套（`molbio_fastq_qc`、
   `molbio_codon_usage`、`molbio_phylogenetic_tree`、`molbio_pcr_simulate`、`molbio_gc_composition`）
   + 共享绘图助手 `svgio.mjs` + 套件 `test/svgio.mjs`。工具 52 → 57，`attach_image` 11 → 15。

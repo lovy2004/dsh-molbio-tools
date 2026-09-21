@@ -94,6 +94,18 @@ function decodePng(bytes) {
 const pixel = (image, x, y) => [...image.rgb.subarray((y * image.width + x) * 3, (y * image.width + x) * 3 + 3)];
 const WHITE = [255, 255, 255];
 
+/** Non-white pixels inside a rectangle. Used to ask "is there ink HERE?". */
+const countInk = (image, x0, y0, x1, y1) => {
+  let count = 0;
+  for (let y = Math.max(0, y0); y < Math.min(y1, image.height); y++) {
+    for (let x = Math.max(0, x0); x < Math.min(x1, image.width); x++) {
+      const [r, g, b] = pixel(image, x, y);
+      if (r !== 255 || g !== 255 || b !== 255) count++;
+    }
+  }
+  return count;
+};
+
 /** Bounding box of every non-white pixel, or undefined for a blank raster. */
 function inkBox(image) {
   let minX = Infinity;
@@ -275,16 +287,6 @@ test('the v19 pictures put ink where the data is', () => {
   const fastq = renderSvgToPng(renderFastqQcReport(report, { columns: 3 }));
   assert.equal(fastq.width, 16 * 2 + 3 * 470 + 2 * 16, 'three 470 px panels plus margins');
   const fastqImage = decodePng(fastq.data);
-  const countInk = (image, x0, y0, x1, y1) => {
-    let count = 0;
-    for (let y = y0; y < Math.min(y1, image.height); y++) {
-      for (let x = x0; x < Math.min(x1, image.width); x++) {
-        const [r, g, b] = pixel(image, x, y);
-        if (r !== 255 || g !== 255 || b !== 255) count++;
-      }
-    }
-    return count;
-  };
   assert.ok(countInk(fastqImage, 20, 100, 480, 300) > 500, 'the per-base quality panel has real content');
   assert.ok(countInk(fastqImage, 510, 100, 970, 300) > 500, 'the per-sequence quality panel too');
   assert.ok(countInk(fastqImage, 1000, 100, 1460, 300) > 500, 'and the per-base content panel');
@@ -385,6 +387,139 @@ test('guard rails: what it cannot draw, it reports or refuses', () => {
   assert.equal(parseColor('none'), undefined);
   assert.equal(parseColor('nonsense'), undefined);
   assert.deepEqual(parseColor('white'), [255, 255, 255]);
+});
+
+test('a <tspan> run lands on its own baseline (multi-line labels)', () => {
+  // v20: a long leaf name used to be drawn as one run straight through its
+  // neighbours. The fix is <tspan> lines, so this test measures the PIXELS of
+  // that mechanism rather than trusting the markup: three explicit lines at
+  // y = 20/40/60 must produce ink in three separate bands, and nothing in the
+  // bands between them.
+  const lines = ['first line', 'second line', 'third line'];
+  const document = wrap(
+    `<text x="10" y="20" font-size="12" fill="#000000">`
+    + `<tspan x="10" y="20">${lines[0]}</tspan>`
+    + `<tspan x="10" y="40">${lines[1]}</tspan>`
+    + `<tspan x="10" y="60">${lines[2]}</tspan>`
+    + '</text>',
+    160,
+    80,
+  );
+  const result = renderSvgToPng(document);
+  assert.deepEqual(result.unsupported, [], 'a tspan run is inside the supported subset');
+  assert.deepEqual(result.missing_glyphs, [], 'and needs no glyphs the font lacks');
+  const image = decodePng(result.data);
+  // Cap height is 0.7 em = 8.4 px at font-size 12, drawn upward from the
+  // baseline: each line occupies roughly [y-9, y].
+  assert.ok(countInk(image, 5, 11, 150, 21) > 50, 'the first line is inked at its own baseline');
+  assert.ok(countInk(image, 5, 31, 150, 41) > 50, 'the second line is inked 20 px lower, not on top of the first');
+  assert.ok(countInk(image, 5, 51, 150, 61) > 50, 'and the third too');
+  // The mechanism is what matters: the band between line 1 and line 2 must be
+  // empty, or the runs are collapsing onto one baseline (the v19 failure mode).
+  assert.equal(countInk(image, 5, 24, 150, 30), 0, 'nothing is drawn between the lines');
+});
+
+test('a <tspan> dy offset stacks lines (and dx shifts them)', () => {
+  const dy = renderSvgToPng(wrap(
+    '<text x="10" y="20" font-size="12" fill="#000000">'
+    + '<tspan x="10">one</tspan><tspan x="10" dy="14">two</tspan><tspan x="10" dy="14">three</tspan>'
+    + '</text>',
+    160, 90,
+  ));
+  assert.deepEqual(dy.unsupported, [], 'the relative form stays inside the subset');
+  const image = decodePng(dy.data);
+  // Baselines are 20, 34, 48. Glyphs occupy [baseline-8.4, baseline+2.4] at
+  // font-size 12 (ascenders reach the cap line, descenders dip ~0.2 em).
+  assert.ok(countInk(image, 5, 11, 100, 21) > 20, 'the first run sits on the element baseline');
+  assert.ok(countInk(image, 5, 25, 100, 47) > 20, 'each dy step moves the next run down');
+  // The proof that dy moved anything: the two bands between the baselines are
+  // empty. Measure rows that are inside neither glyph band.
+  assert.equal(countInk(image, 5, 23, 100, 26), 0, 'the first dy step left a blank band, so the run moved instead of overprinting');
+  assert.equal(countInk(image, 5, 37, 100, 39), 0, 'and so did the second');
+
+  // An empty self-closing tspan carrying only a dy still advances the cursor:
+  // that is how a caller emits a blank line without emitting a blank run.
+  const gapped = renderSvgToPng(wrap(
+    '<text x="10" y="20" font-size="12" fill="#000000"><tspan x="10">top</tspan><tspan x="10" dy="14"/><tspan x="10" dy="14">bottom</tspan></text>',
+    160, 90,
+  ));
+  const gapImage = decodePng(gapped.data);
+  assert.ok(countInk(gapImage, 5, 11, 100, 21) > 0, 'the first run is drawn');
+  assert.ok(countInk(gapImage, 5, 39, 100, 49) > 0, 'the run after a blank tspan lands two steps down');
+  assert.equal(countInk(gapImage, 5, 23, 100, 38), 0, 'the blank line stays blank');
+});
+
+test('a tspan form this subset cannot place is reported, never mis-drawn', () => {
+  // Approximating these would put glyphs somewhere plausible and wrong, which is
+  // exactly the silent-failure mode this module exists to avoid.
+  const transformed = renderSvgToPng(wrap(
+    '<text x="10" y="20" font-size="12" fill="#000000"><tspan x="10" transform="rotate(30)">tilted</tspan></text>',
+    80, 40,
+  ));
+  assert.ok(transformed.unsupported.includes('transform on <tspan>'), `a tspan transform is reported (${transformed.unsupported.join(', ')})`);
+});
+
+test('the wrapped tree labels really do not overlap their neighbours', () => {
+  // The v19 symptom was a long leaf name running into the row above. Render a
+  // tree of long names and assert the label column holds SEPARATE ink bands,
+  // one per leaf, with clear space between them.
+  const longLeaf = (name) => ({ name, children: [], length: 0.01, support: undefined });
+  const names = [
+    'Escherichia_coli_K12_MG1655_chromosome_isolate_one',
+    'Escherichia_coli_K12_MG1655_chromosome_isolate_two',
+    'Escherichia_coli_K12_MG1655_chromosome_isolate_three',
+    'Escherichia_coli_K12_MG1655_chromosome_isolate_four',
+  ];
+  const tree = {
+    name: '', length: 0, support: undefined,
+    children: [
+      { name: '', length: 0.01, support: 88, children: [longLeaf(names[0]), longLeaf(names[1])] },
+      { name: '', length: 0.02, support: 41, children: [longLeaf(names[2]), longLeaf(names[3])] },
+    ],
+  };
+  const svg = renderTreeSvg(tree, { layout: 'rectangular' });
+  const result = renderSvgToPng(svg);
+  assert.deepEqual(result.unsupported, [], 'the wrapped tree stays inside the supported subset');
+  assert.deepEqual(result.missing_glyphs, []);
+  const image = decodePng(result.data);
+  // Find the label column from the DOCUMENT rather than guessing: the first
+  // wrapped run's x is exactly where the labels begin, and every branch tip ends
+  // before it. Scanning to the left of that would count branch tips, support
+  // values and the title as "label" rows.
+  const firstRun = /<tspan x="([\d.]+)"/.exec(svg);
+  assert.ok(firstRun !== null, 'the wrapped tree emits tspan runs');
+  const labelLeft = Math.ceil(Number.parseFloat(firstRun[1]));
+  // A text line puts dozens of dark pixels on a row; the panel border and the
+  // tail of the title are sparse there. The density threshold is what separates
+  // "a label line is here" from "something merely passes through".
+  const dense = [];
+  for (let y = 0; y < image.height; y++) dense.push(countInk(image, labelLeft, y, image.width, y + 1) > 20);
+  const bands = [];
+  for (let y = 0; y < dense.length; y++) {
+    if (dense[y] && !dense[y - 1]) bands.push(y);
+  }
+  // Every leaf name here wraps to TWO lines, so the label column holds one band
+  // per LINE (8), not per leaf. Assert that the wrapping actually happened,
+  // rather than pinning the exact count.
+  assert.ok(bands.length >= names.length * 2, `each long name wraps to at least two lines (found ${bands.length} bands: ${bands.join(', ')})`);
+  // THE POINT OF THE TEST: count blank gaps between the first and last label
+  // band. Four leaves occupy four vertical blocks, so there must be at least
+  // three clear gaps between them. When the v19 bug was present the labels were
+  // drawn as single long runs that ran into each other and this count collapsed
+  // to zero or one — which is precisely the overlap being guarded against.
+  let gaps = 0;
+  let inGap = false;
+  for (let y = bands[0]; y <= bands.at(-1); y++) {
+    if (!dense[y] && !inGap) {
+      gaps++;
+      inGap = true;
+    } else if (dense[y]) {
+      inGap = false;
+    }
+  }
+  assert.ok(gaps >= names.length - 1, `blank gaps separate the ${names.length} label blocks (found ${gaps}, need >= ${names.length - 1})`);
+  const tail = bands.at(-1);
+  assert.ok([...dense.slice(tail)].some((value) => !value), 'the last line is followed by blank rows, not clipped at the canvas edge');
 });
 
 test('the rasterizer stays out of the browser half', () => {

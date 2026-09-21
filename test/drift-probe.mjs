@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { compositionDrift } from './preset-health.mjs';
+import { compositionDrift, toolCountDrift } from './preset-health.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -180,6 +180,30 @@ check('reordering the rows is caught', () => {
   const [moved] = reordered.splice(from, 1);
   reordered.splice(to, 0, moved);
   assert.match(driftText(reordered), /row order: position \d+ is "tool-todo" here and "tool-ask-user"/, driftText(reordered));
+});
+
+// ── the tool-count claim in preset.yml ─────────────────────────────────────
+// v19 grew the toolset from 52 to 57 while `preset.yml` kept advertising 52,
+// so the mode picker showed a wrong number for a whole release. The guard that
+// now checks it is worth exactly as much as its ability to fail.
+
+check('the tool-count guard is quiet when the claim matches', () => {
+  assert.deepEqual(toolCountDrift('标准编码能力 + 57 个 molbio_* 工具（…）。', 57), []);
+  assert.deepEqual(toolCountDrift('the standard agent plus 57 tools', 57), []);
+  // Counts attributed to something else must not be mistaken for the toolset.
+  assert.deepEqual(toolCountDrift('90+ 限制酶、2–50 条序列、57 个 molbio_* 工具', 57), []);
+  assert.deepEqual(toolCountDrift('no claim here at all', 57), []);
+});
+
+check('a stale tool count in the description is caught (v19: 52 while 57 shipped)', () => {
+  const stale = toolCountDrift('标准编码能力 + 52 个 molbio_* 工具（…）。', 57);
+  assert.equal(stale.length, 1, 'the stale claim is reported');
+  assert.match(stale[0], /claims 52 tools but the plugin registers 57/, stale[0]);
+  assert.match(toolCountDrift('the standard agent plus 52 tools', 57).join(' | '), /claims 52 tools but the plugin registers 57/);
+});
+
+check('a description with no tool count is not forced to carry one', () => {
+  assert.deepEqual(toolCountDrift('分子生物学专属模式：标准编码能力 + molbio 工具集。', 57), []);
 });
 
 console.log('');
