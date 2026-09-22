@@ -185,12 +185,70 @@ node build/client-bundle.mjs # 产物与源同一批构建（`--check` 只报告
 git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
 ```
 
-**preset 组合的改动**（`preset/molbio-lab/*`）额外一条：`node test/preset-health.mjs` 必须
-报 `OK`，且 `git diff --no-index <安装的 standard> preset/molbio-lab/agent.cordis.yml` 只应剩
-**末尾 `tool-molbio` 那一个 hunk**（加上文首"维护契约"注释）。吸收 DSH 升级时照抄上游文本
-（含注释与 key 顺序），不要手写"看起来等价"的行——0.1.6-alpha.1 的
+**preset 组合的改动**（`preset/molbio-lab/*`）额外两条：
+
+1. `node test/preset-health.mjs` 必须报 `OK`。它现在把本包的 preset **行**与**已安装 harness
+   自带的 `standard`** 逐行对比——0.1.7-alpha.1 起上游基线是
+   `<harness>/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`
+   （旧的 `@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml` 已随该包一并消失）。
+   只应剩 `skill-filesystem`、`tool-skill`、`tool-molbio` 这三行差异。
+2. 改的是 `preset/molbio-lab/agent.cordis.yml`（**行清单**），改完必须跑
+   `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`（bundle patch）；
+   `--check` 会因两者不一致而失败，`npm test` 里没有这一项，别忘。
+
+吸收 DSH 升级时照抄上游文本（含注释与 key 顺序），不要手写"看起来等价"的行——0.1.6-alpha.1 的
 `workflow-worker-thread` 就是这么进去的。组合文件本身**不吃模块缓存**（每次挂载重读），
 所以只改组合**不需要**新建 `vN` 目录。
+
+> **preset 机制在 0.1.7-alpha.1 变了。** 旧机制是"扫描目录里的 `agent.cordis.yml`"，靠
+> `agent-presets` 行的 `config.roots` 注册额外根目录；`preset/install.mjs` 就是往 profile 的
+> `cordis.patch.yml` 里追加那个 `roots:`。新机制没有目录扫描——preset 是 bundle patch 里的一个
+> `@deepseek-ai/dsh-agent-preset` **行**，`config.plugins` 装原来那套行清单。所以：
+> `dsh.bundle.patch` 现在是**两个文件**（宿主层 + preset 层），安装即注册，`install.mjs` 不再写
+> 任何东西、只做体检与遗留清理。老 profile 里那条 `- id: agent-presets` 会让每次组合打印
+> `patch: entry "agent-presets" not found`，应当删除。
+
+### preset 行的 specifier 必须是**包名**（0.1.7-alpha.1 硬规则）
+
+`preset/molbio-lab/agent.cordis.yml` 末尾那行必须写包名：
+
+```yaml
+- id: tool-molbio
+  name: 'dsh-molbio-tools'          # ✅ Node 从 profile 的 node_modules 解析
+```
+
+**不要**写相对路径（`./plugins/dsh-molbio-tools-v20/index.mjs`）。0.1.6 及更早可以，
+0.1.7-alpha.1 **不行**，而且失败方式极其隐蔽：
+
+| 你看到的 | 实际情况 |
+|---|---|
+| 预设选择器里显示"加载失败" | preset **挂载成功**；只有 `agentPresets/list` 的 `broken` 字段有内容 |
+| `--dump-config` 一切正常 | 组合树完全正确，问题在**运行时**，静态检查看不见 |
+| 报错 `tool-molbio (…): never started` | 该 entry 被创建但**从未被 import**，`fiberPhase` 为 `null` |
+
+**怎么验证**（必须真的起一次，静态检查不够）：建一个 scratch profile
+（`dsh scratch --from-default-profile web --dump-config`，把依赖与 bundle 指向本包，
+`pnpm install`），起 `dsh --profile scratch --no-open --port 3099` 并记下打印的 `?token=…`；
+用 token 换 cookie 后查两个接口：
+
+```powershell
+curl.exe -s -c jar -o NUL "http://127.0.0.1:3099/?token=<token>"
+curl.exe -s -b jar -X POST http://127.0.0.1:3099/api/agentPresets/list `
+  -H "Content-Type: application/json" -H "Origin: http://127.0.0.1:3099" `
+  -d '{"type":"client-request","rpcId":"p","method":"agentPresets/list","payload":{"args":{}}}'
+# 同样方式查 pluginInventory/list，看 molbio-lab 行的 tool-molbio
+```
+
+判据是**两个字段**：`agentPresets/list` 的 `broken` 必须为空，且 `pluginInventory/list` 里
+`molbio-lab` 的 `tool-molbio` 必须是 `fiberPhase: "active"`（不是 `null`）。
+`/api/...` 的请求体必须带外层 envelope（`type`/`rpcId`/`method`/`payload.args`），
+只发 `{}` 只会得到 `arguments-invalid`。验证完删掉 scratch profile。
+
+> **版本目录已删除（0.13.0）。** `preset/molbio-lab/plugins/dsh-molbio-tools-vN/` 整体不复存在。
+> 那套机制是为规避**相对文件 URL** 的 ESM 模块缓存：preset 行写相对路径，于是每次发版都要把
+> 全部 `.mjs` 复制进一个**新目录**（删除前累计 195 个文件 / 5.2 MB）。preset 行改用**包名**后，
+> 缓存问题与拷贝都不存在了，`preset-health.mjs` 的**镜像检查**也一并删除。
+> 下文（以及 CHANGELOG 的历史条目）里提到 `vN` 目录的地方，是当时的记录，不再是纪律。
 
 客户端半的改动还有两条**专门针对"会弄坏 GUI"**的确认：
 
@@ -235,8 +293,8 @@ node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && 
 三条纪律：**产物必须与源一起提交**（`dsh plugin add` 装的是产物，用户机器上没有构建
 步骤）；**发布白名单必须覆盖产物所在目录**（`lib/`、`packages/`——`npm publish` 只带
 `files` 列出的东西，漏了就会出现"装完却没有面板"的静默失败，`test/contract.mjs` 的
-打包检查专门盯着这一条）；**产物不能进 preset 的版本目录**——客户端模块靠 `rev` 哈希
-失效，与"版本目录规则"无关（那条规则只约束被 `import()` 的宿主侧 `.mjs`）。
+打包检查专门盯着这一条）；**产物不得进 preset 目录**（客户端模块靠 `rev` 哈希失效；
+0.13.0 起 preset 目录里本来也不再放任何东西了）。
 
 **第四条纪律（0.7.2 用一次 GUI 起不来换来）**：客户端座位一律
 `ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位, …}, 组件)), 标签)`，
@@ -277,22 +335,18 @@ package.json 与 lockfile 里的声明不变）。装完核对三件事：链接
 3. 改 `build/client-entry.mjs` → `node build/client-bundle.mjs` → 重启：**产物不重新构建就
    没有任何效果**（浏览器拿的是 `lib/client.js`，按 `rev` 哈希失效）。
 
-preset 渠道（受 ESM 模块缓存约束）：
+preset 渠道：
 
 1. 修改包根代码并跑 `node test/smoke.mjs`（插件）与 `node test/preset-health.mjs`（组合）；
-2. **只在插件 `.mjs` 有改动时**才新建版本目录：把 `.mjs` 文件复制进
-   `preset/molbio-lab/plugins/dsh-molbio-tools-vN/`（绝不在已发布目录里原地改文件），
-   并同步修改 `preset/molbio-lab/agent.cordis.yml` 的插件行目录名。
-   只改 `agent.cordis.yml` / `preset.yml` / 文档时**不需要**新目录——组合文件每次挂载
-   都重新读取，模块缓存规则只约束被 `import()` 的 `.mjs`；
-3. 更新 `CHANGELOG.md`（包版本 ↔ 版本目录对照）并把 `package.json` 的 `version` bump；
-4. commit + push，然后打**带日期的注释 tag**（仓库用 `v<包版本>`，如 `v0.5.1`）：
+2. 如果改了 preset 的**行清单**（`preset/molbio-lab/agent.cordis.yml`，包括 `preset.yml` 的描述），
+   跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`；
+   **没有版本目录要新建、没有拷贝要同步**——preset 行按包名引用本包，`dsh plugin update` 直接生效；
+3. 更新 `CHANGELOG.md` 并把 `package.json` 的 `version` bump；
+4. commit + push，然后打**带日期的注释 tag**（仓库用 `v<包版本>`，如 `v0.13.0`）：
 
    ```bash
-   git tag -a v0.5.1 -m "v15 (preset dir dsh-molbio-tools-v15): ..." && git push origin v0.5.1
+   git tag -a v0.13.0 -m "0.13.0: DSH 0.1.7-alpha.1 adaptation (panel read fix, preset as bundle patch)" && git push origin v0.13.0
    ```
-
-bundle 渠道天然免疫模块缓存（每个发布版本在 node_modules 中都是独立目录）。
 
 ### npm 发布（v20 实测的两个坑）
 
@@ -324,22 +378,24 @@ npm publish --access public
 
 ### preset 组合的维护（DSH 升级后必做）
 
-`preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的副本 + 末尾一行
-`tool-molbio`（当前基线：**dsh 0.1.6-alpha.1**）。它不会自动跟随 DSH 升级，因此每次升级
-DSH 后：
+`preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的**行清单**副本 + 末尾一行
+`tool-molbio`（当前基线：**dsh 0.1.7-alpha.1**；那一版把 preset 从"目录里的
+`agent.cordis.yml`"改成"bundle patch 里的 `@deepseek-ai/dsh-agent-preset` 行"，行本身没变）。
+它不会自动跟随 DSH 升级，因此每次升级 DSH 后：
 
 1. 取新版的 shipped `standard`：
-   `<harness>/node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml`；
-2. 与 `preset/molbio-lab/agent.cordis.yml` 做 `git diff --no-index`，**逐行吸收上游改动**
-   （新增/删除的行、注释、key 顺序、配置契约变化），只保留 `tool-molbio` 这一处有意差异
-   与头部注释。**照抄上游文本，不要手写"看起来等价"的行**——"注释也要抄"这条纪律的价值
-   就是让上面这条 diff 恒为**一个 hunk**，从而能当漂移审计用；
-3. 跑 `node test/preset-health.mjs` 直到 `OK`（它现在把任何结构差异当**发布阻断**，
-   不只是打印 note）；
-4. 更新组合头部"Baseline: …"那行里的 DSH 版本号；
-5. **route-B（推荐渠道）用户不需要做任何事**：组合文件每次挂载重新读取，重启 profile 即可。
-   仅"复制渠道"用户需要把新组合复制到 `~/.dsh/.agent-presets/molbio-lab/`
-   （组合文件可直接覆盖，`plugins/` 里的 `vN` 目录不受影响）。
+   `<harness>/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`；
+2. 与 `preset/molbio-lab/agent.cordis.yml` 对比（把上游的 `config.plugins:` 块与我们的行清单
+   对齐看），**逐行吸收上游改动**（新增/删除的行、注释、key 顺序、配置契约变化），只保留
+   `skill-filesystem` / `tool-skill` / `tool-molbio` 这几处有意差异与头部注释。**照抄上游文本，
+   不要手写"看起来等价"的行**——上游在 0.1.6-alpha.1 用 `workflow-worker-thread` 教过一次；
+3. 跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`；
+4. 跑 `node test/preset-health.mjs` 直到 `OK`（它把任何结构差异当**发布阻断**，不只是打印
+   note），再跑 `node test/drift-probe.mjs` 确认守卫仍能抓到漂移；
+5. 更新 `agent.cordis.yml` 头部"Baseline: …"那行里的 DSH 版本号；
+6. **用户不需要做任何事**：preset 随 bundle 走，`dsh plugin update` 之后重启 profile 即可。
+   （0.1.7-alpha.1 之前用"复制到 `~/.dsh/.agent-presets`"的用户，其副本已不再被读取，应删除——
+   这正是 0.1.7 升级时最容易留下的一具"看起来装着、其实没生效"的僵尸。）
 
 偏差的历史教训：
 
@@ -399,24 +455,22 @@ DSH 后：
    一条不空转自检**：四种拼写都必须通过，把 `hooks` 改名成 `hookz` 必须失败。**这条自检是关键**——
    否则"放宽成不绑格式"的下一次修改就会退化成"什么都不检查"。
 
-### 发版时容易漏的一步：preset 版本目录必须镜像包根
+### 发版时唯一容易漏的一步：preset 行必须按包名引用
 
-`preset/molbio-lab/plugins/dsh-molbio-tools-vN/` 里的模块**必须与包根逐字节相同**（组合里的相对
-路径指向它，preset 要能"随包带走"）。漏拷一个文件、或改了包根忘了同步版本目录，症状是
-"升级了却什么都没变"——因为组合挂的还是旧模块，而**任何挂载检查都看不见这一点**（旧模块挂得很好）。
-v19 起 `test/preset-health.mjs` 增加**镜像检查**：模块多一个少一个、内容有一个字节不同都失败，
-并已用突变实验证明它会失败。发布前照抄（`v20` 换成当前版本目录名；**新增模块也要一起列进
-`package.json` 的 `files` 白名单**，v20 的 `font-metrics.mjs` 就是这一类）：
+（0.13.0 起替换了原来的"版本目录必须镜像包根"一节——目录已删除，见上文。）
+
+`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行必须写**包名**。写成相对路径
+（`./plugins/dsh-molbio-tools-vN/index.mjs`）在 dsh 0.1.7-alpha.1 上会让 preset **挂载成功却
+零工具**，而 `--dump-config` 完全正常、任何挂载检查都看不见——只有运行时的
+`agentPresets/list` 的 `broken` 字段与 `pluginInventory/list` 的 `fiberPhase` 能揭穿它
+（验证方法见上文"preset 行的 specifier 必须是包名"）。
+
+`test/preset-health.mjs` 现在直接盯着这条规则：组合里出现任何 `./plugins/…` 形式的
+specifier 就 FAIL，并已用突变实验证明它会失败。发版前：
 
 ```powershell
-$root = (Get-Location).Path
-$dest = "preset\molbio-lab\plugins\dsh-molbio-tools-v20"
-New-Item -ItemType Directory -Path $dest -Force | Out-Null
-# 包根的每个 .mjs 都是插件模块（test* 除外），正好是镜像检查期待的那一组
-Get-ChildItem -Path $root -Filter '*.mjs' -File |
-  Where-Object { $_.Name -notlike 'test*' } |
-  ForEach-Object { Copy-Item $_.FullName (Join-Path $dest $_.Name) -Force }
-node test/preset-health.mjs   # 末尾应打印 "mirror OK: dsh-molbio-tools-v20 matches the package root module-for-module"
+node build/preset-patch.mjs    # 改了行清单就重新生成 patch
+node test/preset-health.mjs    # 末尾应打印 "specifier OK: the preset names the package …"
 ```
 
 **改了 `lib.mjs`/`msa.mjs`/`protein.mjs` 这类同时属于浏览器半的模块，还必须 `npm run build:client`

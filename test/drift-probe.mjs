@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { compositionDrift, toolCountDrift } from './preset-health.mjs';
+import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch } from './preset-health.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -91,12 +91,21 @@ function orderedRows(rows) {
   return out;
 }
 
-const standardPath = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'presets', 'standard', 'agent.cordis.yml');
-assert.ok(existsSync(standardPath), `the shipped standard preset is installed at ${standardPath}`);
+// The shipped `standard` preset is a bundle patch now, not a scanned
+// `agent.cordis.yml` (0.1.7-alpha.1 removed `@deepseek-ai/dsh-agent-presets`).
+// Both sides are read through `presetPlugins`, so this probe exercises the same
+// container walk the real guard uses.
+const standardCandidates = [
+  join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'presets', 'standard.patch.yml'),
+  join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'presets', 'standard', 'agent.cordis.yml'),
+];
+const standardPath = standardCandidates.find((path) => existsSync(path));
+assert.ok(standardPath !== undefined, `the shipped standard preset is installed at one of ${standardCandidates.join(', ')}`);
 
-const standardRows = orderedRows(await readComposition(standardPath));
-const mineRows = orderedRows(await readComposition(join(repoRoot, 'preset', 'molbio-lab', 'agent.cordis.yml')));
+const standardRows = orderedRows(presetPlugins(await readComposition(standardPath)));
+const mineRows = orderedRows(presetPlugins(await readComposition(join(repoRoot, 'preset', 'molbio-lab', 'preset.patch.yml'))));
 console.log(`harness : ${harnessRoot}`);
+console.log(`standard: ${standardPath}`);
 console.log(`rows    : standard ${standardRows.length}, molbio-lab ${mineRows.length}\n`);
 
 let failed = 0;
@@ -115,7 +124,15 @@ const check = (name, run) => {
 
 const withRow = (id, patch) => mineRows.map((row) => (row?.id === id ? { ...row, ...patch } : row));
 const withoutRow = (id) => mineRows.filter((row) => row?.id !== id);
-const driftText = (rows) => compositionDrift(standardRows, rows).join(' | ');
+/**
+ * The drift a mutated row list produces, read back OUT of the patch container.
+ *
+ * `rows` is already flattened (`mineRows` below), so this must NOT flatten
+ * again: `orderedRows` on an already-flattened list re-enters each group row's
+ * `config` and emits its children a second time, which shows up as spurious
+ * row-order drift.
+ */
+const driftText = (rows) => compositionDrift(standardRows, presetPlugins(asPresetPatch(rows))).join(' | ');
 
 // ── the guard stays quiet when the composition is right ─────────────────────
 

@@ -79,10 +79,28 @@ export function childPath(parent, name) {
   return base === '' ? String(name) : `${base}/${String(name)}`;
 }
 
-/** Decode the base64 payload `workspaceFiles.readAll` returns. */
-export function decodeBase64Bytes(base64) {
-  if (typeof base64 !== 'string') throw new MolbioInputError('expected a base64 string from the workspace read');
-  const binary = atob(base64);
+/**
+ * Normalise one workspace read into the raw bytes the parsers consume.
+ *
+ * Two transports reach this function and they do NOT agree on the spelling:
+ *
+ *   - pre-0.1.7 `readAll` answered `data` as a base64 STRING;
+ *   - 0.1.7-alpha.1 `readBytes` answers `data` as a `Uint8Array`, because the
+ *     gateway lifts native bytes into a base64 attachment and reassembles them
+ *     client-side before the call resolves.
+ *
+ * Accepting both here is what keeps the panel working across the change: the
+ * caller feature-detects the METHOD, and this function normalises the VALUE.
+ * A `Uint8Array` is passed through by reference (no copy), so a large plasmid
+ * costs nothing extra.
+ *
+ * @param {string|Uint8Array} data the `data` field of a successful read.
+ * @returns {Uint8Array} the file's raw bytes.
+ */
+export function decodeWorkspaceBytes(data) {
+  if (data instanceof Uint8Array) return data;
+  if (typeof data !== 'string') throw new MolbioInputError('expected base64 text or bytes from the workspace read');
+  const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
   return bytes;

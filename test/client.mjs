@@ -106,7 +106,12 @@ const ctx = {
   remote: {
     workspaceFiles: {
       async list() { return { ok: true, value: { entries: [], truncated: false } }; },
-      async readAll() { return { ok: true, value: { data: '' } }; },
+      // This file only proves the BOOT GRAPH (which seats get claimed); no file
+      // is ever opened here, so the read method is never called. It mirrors the
+      // 0.1.7-alpha.1 namespace shape — `readBytes`, no `readAll` — so the stub
+      // cannot quietly keep an API the harness has dropped. The read path itself
+      // is driven for real in test/panel-render.mjs.
+      async readBytes() { return { ok: true, value: { data: new Uint8Array() } }; },
     },
   },
   get(service) {
@@ -229,11 +234,19 @@ assert.deepEqual(sorted.map((entry) => entry.name), ['a.dna', 'z.dna', 'a.fasta'
 assert.equal(panelCore.childPath('D:\\work', 'a.dna'), 'D:\\work/a.dna');
 assert.equal(panelCore.childPath('', 'a.dna'), 'a.dna');
 
-// base64 → bytes (the workspace transport spelling)
-const bytes = panelCore.decodeBase64Bytes(Buffer.from('hello').toString('base64'));
+// workspace read payload → bytes, in BOTH transport spellings. Pre-0.1.7
+// `readAll` sent base64 text; 0.1.7-alpha.1 `readBytes` sends native bytes.
+// Accepting only the first is what silently broke every file open on the newer
+// harness, so each spelling is pinned here.
+const bytes = panelCore.decodeWorkspaceBytes(Buffer.from('hello').toString('base64'));
 assert.ok(bytes instanceof Uint8Array);
 assert.equal(new TextDecoder().decode(bytes), 'hello');
-assert.throws(() => panelCore.decodeBase64Bytes(undefined), /base64/);
+const native = new Uint8Array([104, 101, 108, 108, 111]);
+assert.equal(panelCore.decodeWorkspaceBytes(native), native, 'native bytes pass through by reference, not copied');
+assert.equal(new TextDecoder().decode(panelCore.decodeWorkspaceBytes(native)), 'hello');
+assert.equal(new TextDecoder().decode(panelCore.decodeWorkspaceBytes(new Uint8Array(0))), '', 'an empty file is not an error');
+assert.throws(() => panelCore.decodeWorkspaceBytes(undefined), /base64|bytes/);
+assert.throws(() => panelCore.decodeWorkspaceBytes({ data: 'x' }), /base64|bytes/);
 
 // parsing a real SnapGene file, entirely in "browser" terms
 const dnaBytes = new Uint8Array(await readFile(new URL('./fixtures/pUC118.dna', import.meta.url)));

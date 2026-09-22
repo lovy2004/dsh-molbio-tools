@@ -1,5 +1,27 @@
 # The `standard` agent preset: the full coding agent, mounted once per process.
 #
+# ── WHAT THIS FILE IS (0.1.7-alpha.1 and later) ─────────────────────────────
+#
+# This is a ROW LIST. It is no longer a file DSH discovers: as of
+# dsh 0.1.7-alpha.1 the harness "neither scans directories nor accepts preset
+# paths" (@deepseek-ai/dsh-agent-preset-registry), and the package that used to
+# scan them — @deepseek-ai/dsh-agent-presets — no longer ships. A preset is now
+# a `@deepseek-ai/dsh-agent-preset` ROW whose `config.plugins` carries exactly
+# these rows.
+#
+# `build/preset-patch.mjs` wraps this list into that row and writes
+# `preset/molbio-lab/preset.patch.yml`, which `package.json` declares as the
+# second entry of `dsh.bundle.patch`. So the BUNDLE installs the preset:
+#
+#     dsh plugin --profile <p> add dsh-molbio-tools
+#
+# Edit THIS file, then run `node build/preset-patch.mjs`.
+#
+# NOTE: the mode is the ONLY place these 57 tools load. The bundle's other patch
+# layer (`cordis.patch.yml`) deliberately inserts nothing — registering the tool
+# at the host level as well would put it in every session and is not what this
+# package is for.
+#
 # This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
 # standing scope; every session naming it joins by scope parentage, so the
 # tools and prompt sections registered here cover each joined agent while a
@@ -11,7 +33,7 @@
 # A service row here MUST sit inside a group carrying an `isolate` realm.
 # Without one it publishes into the root realm, where it is process-global —
 # another preset publishing the same name collides, and a host reader would
-# resolve one preset's instance for every session; `dsh-agent-presets` rejects
+# resolve one preset's instance for every session; the preset registry rejects
 # that at mount. `true` means an entry-local realm: this standing mount's own
 # private instance, apart from every other preset's. (A shared label does NOT
 # pool instances — `provide()` throws on the second registration under the
@@ -19,30 +41,33 @@
 #
 # ── How this file is maintained ─────────────────────────────────────────────
 #
-# This composition is a COPY of the DSH-shipped `standard` preset with exactly
-# ONE intentional difference: the trailing `tool-molbio` row. Everything above
-# that row — every comment, every row, every config key, in upstream's ORDER —
-# is upstream text copied verbatim.
+# This row list is a COPY of the DSH-shipped `standard` preset with THREE
+# intentional differences: `skill-filesystem`, `tool-skill`, and the trailing
+# `tool-molbio` row. Everything besides those — every comment, every row, every
+# config key, in upstream's ORDER — is upstream text copied verbatim.
 #
-# Baseline: the `standard` preset of dsh 0.1.6-alpha.1 (harness root
+# Baseline: the `standard` preset of dsh 0.1.7-alpha.1 (harness root
 # `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`, file
-# `node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml`).
+# `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`, whose
+# rows live under the `preset-standard` row's `config.plugins:`).
 #
-# Keeping the text byte-identical above `tool-molbio` is not cosmetic: a preset
-# mounts DSH's OWN packages, so upstream drift here kills the whole preset at
-# mount (the failure mode of 0.1.5-alpha.2, when `dsh-persona` replaced `text:`
-# with `prefix:`/`suffix:` and this composition stopped appearing in the
-# picker). When the diff is exactly one hunk, `git diff --no-index` against the
-# installed baseline IS the drift audit. v17 shipped with
-# `@deepseek-ai/dsh-workflow-worker-thread`, a package no released DSH
-# installs; `test/preset-health.mjs` caught it as an unmountable row.
+# Keeping the text verbatim is not cosmetic: a preset mounts DSH's OWN
+# packages, so upstream drift here kills the whole preset at mount (the failure
+# mode of 0.1.5-alpha.2, when `dsh-persona` replaced `text:` with
+# `prefix:`/`suffix:` and this composition stopped appearing in the picker).
+# v17 shipped with `@deepseek-ai/dsh-workflow-worker-thread`, a package no
+# released DSH installs; `test/preset-health.mjs` caught it as an unmountable
+# row.
 #
-# Two rules when absorbing a DSH upgrade:
+# Three rules when absorbing a DSH upgrade:
 #   1. copy upstream changes — including comments and key order — instead of
-#      hand-writing an equivalent-looking row, so the next diff stays one hunk;
-#   2. re-run `node test/preset-health.mjs`, which validates every row's config
-#      against the INSTALLED package's own schema and reports drift; only the
-#      `extra row "tool-molbio"` note may remain.
+#      hand-writing an equivalent-looking row, so the drift check stays quiet
+#      for the right reason;
+#   2. re-run `node build/preset-patch.mjs`, then `node test/preset-health.mjs`,
+#      which validates every row's config against the INSTALLED package's own
+#      schema and reports drift; only the allowed differences above may remain;
+#   3. `node test/drift-probe.mjs` must still catch its mutations — a guard
+#      nobody has seen fail is not a guard.
 #
 # Do NOT "fix" `present` (or any other row) by hand to suit the toolset: if the
 # upstream row is wrong for this preset, fix it upstream, not here.
@@ -310,14 +335,19 @@
 # wrapped), CpG-island/GC-skew composition, read-level FASTQ QC, CRISPR gRNA
 # design, and literature/protocol/experiment records).
 # Registers into the host `tools` registry and publishes no service, so it
-# needs no isolate realm. The relative specifier resolves against THIS preset
-# directory — the plugin travels with the preset, which is what makes it
-# copy-and-installable.
+# needs no isolate realm.
+#
+# The specifier is the PACKAGE NAME, resolved by Node from the profile's
+# node_modules — not a `./plugins/…` path. A relative specifier here does NOT
+# work on DSH 0.1.7-alpha.1: the preset mounts, but the entry is created without
+# ever being imported, so the roster reports the mode as broken and it loads
+# zero tools:
+#
+#     tool-molbio (./plugins/dsh-molbio-tools-v20/index.mjs): never started
+#
+# A bare name is also what makes upgrades automatic: `dsh plugin update` moves
+# the package and this row follows it. The per-release `plugins/dsh-molbio-
+# tools-vN/` copies existed only to work around ESM module-cache reuse of a
+# relative file URL, which a resolved package name does not have.
 - id: tool-molbio
-  # Module-cache rule: DSH standing mounts reuse the process ESM module
-  # cache keyed by file URL, INCLUDING relative imports inside the plugin.
-  # Every release therefore lives in its OWN directory (dsh-molbio-tools-vN);
-  # never modify a released directory in place — copy the new files into a
-  # fresh version directory and update this row, or new sessions keep
-  # running cached old modules.
-  name: './plugins/dsh-molbio-tools-v20/index.mjs'
+  name: 'dsh-molbio-tools'

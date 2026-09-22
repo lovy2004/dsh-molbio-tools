@@ -6707,10 +6707,28 @@ window.__ModuleLoader__.load({
 			  return base === '' ? String(name) : `${base}/${String(name)}`;
 			}
 
-			/** Decode the base64 payload `workspaceFiles.readAll` returns. */
-			function decodeBase64Bytes(base64) {
-			  if (typeof base64 !== 'string') throw new MolbioInputError('expected a base64 string from the workspace read');
-			  const binary = atob(base64);
+			/**
+			 * Normalise one workspace read into the raw bytes the parsers consume.
+			 *
+			 * Two transports reach this function and they do NOT agree on the spelling:
+			 *
+			 *   - pre-0.1.7 `readAll` answered `data` as a base64 STRING;
+			 *   - 0.1.7-alpha.1 `readBytes` answers `data` as a `Uint8Array`, because the
+			 *     gateway lifts native bytes into a base64 attachment and reassembles them
+			 *     client-side before the call resolves.
+			 *
+			 * Accepting both here is what keeps the panel working across the change: the
+			 * caller feature-detects the METHOD, and this function normalises the VALUE.
+			 * A `Uint8Array` is passed through by reference (no copy), so a large plasmid
+			 * costs nothing extra.
+			 *
+			 * @param {string|Uint8Array} data the `data` field of a successful read.
+			 * @returns {Uint8Array} the file's raw bytes.
+			 */
+			function decodeWorkspaceBytes(data) {
+			  if (data instanceof Uint8Array) return data;
+			  if (typeof data !== 'string') throw new MolbioInputError('expected base64 text or bytes from the workspace read');
+			  const binary = atob(data);
 			  const bytes = new Uint8Array(binary.length);
 			  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
 			  return bytes;
@@ -6995,7 +7013,7 @@ window.__ModuleLoader__.load({
 			exports.isOpenable = isOpenable;
 			exports.sortEntries = sortEntries;
 			exports.childPath = childPath;
-			exports.decodeBase64Bytes = decodeBase64Bytes;
+			exports.decodeWorkspaceBytes = decodeWorkspaceBytes;
 			exports.parsePlasmidFile = parsePlasmidFile;
 			exports.plasmidSvg = plasmidSvg;
 			exports.parseAlignmentFile = parseAlignmentFile;
@@ -7047,7 +7065,7 @@ window.__ModuleLoader__.load({
 			 * inside the factory would also have to be torn down by hand on unload.
 			 */
 			const { createElement: h, useEffect, useMemo, useRef, useState } = __ext0;
-			const { LIBRARY_FILE, childPath, classifyEntry, decodeBase64Bytes, filterPapers, isOpenable, libraryTags, logoSvg, mapCardSummary, mapCardView, paperFields, paperLink, paperSummary, parseAlignmentFile, parseLibrary, parsePlasmidFile, plasmidSvg, readWorkspaceText, sortEntries } = __molbio_require("build/panel-core.mjs");
+			const { LIBRARY_FILE, childPath, classifyEntry, decodeWorkspaceBytes, filterPapers, isOpenable, libraryTags, logoSvg, mapCardSummary, mapCardView, paperFields, paperLink, paperSummary, parseAlignmentFile, parseLibrary, parsePlasmidFile, plasmidSvg, readWorkspaceText, sortEntries } = __molbio_require("build/panel-core.mjs");
 			/** This implementation's identity, and the key its body/title register under. */
 			const PANEL_ID = 'dsh-molbio-tools';
 			/** Type discriminator the tab is opened by. */
@@ -7059,6 +7077,11 @@ window.__ModuleLoader__.load({
 			/** Read one file's raw bytes through the workspace Remote. */
 			async function readBytes(remote, sessionId, path, signal) {
 			  const scope = { sessionId };
+			  // Feature-detect the METHOD, normalise the VALUE (see decodeWorkspaceBytes).
+			  // DSH 0.1.7-alpha.1 dropped `readAll` and answers `readBytes` with a
+			  // Uint8Array, so this fallback is the live path on every current install —
+			  // and the bug it hides (feeding the raw bytes to a base64 decoder) is exactly
+			  // why test/panel-render.mjs now drives a Remote that has no `readAll` at all.
 			  const result = typeof remote.workspaceFiles.readAll === 'function'
 			    ? await remote.workspaceFiles.readAll(scope, path, signal)
 			    : await remote.workspaceFiles.readBytes(scope, path, { offset: 0, length: 8 * 1024 * 1024 }, signal);
@@ -7066,7 +7089,7 @@ window.__ModuleLoader__.load({
 			    const failure = result !== null && typeof result === 'object' ? result.error : undefined;
 			    throw new Error(failure?.message ?? `the workspace read of ${path} failed`);
 			  }
-			  return decodeBase64Bytes(result.value.data);
+			  return decodeWorkspaceBytes(result.value.data);
 			}
 
 			/** List one directory, newest-first ordering rules applied by the caller. */

@@ -177,14 +177,32 @@ check('the root-hook assertions accept any spelling but still check the contract
 
 // ── 3. the workspaceFiles methods the panel calls ───────────────────────────
 
-check('workspaceFiles exposes list / readAll / read on the host Remote', () => {
+check('workspaceFiles exposes list / read / readBytes on the host Remote', () => {
   const host = hostHalf('@deepseek-ai/dsh-api-workspace-files');
   assert.ok(host !== undefined, 'api-workspace-files is installed');
-  for (const method of ['async list(', 'async readAll(', 'async read(']) {
+  // 0.1.7-alpha.1 REMOVED `readAll` and replaced it with `readBytes`, whose
+  // `data` is a Uint8Array the gateway lifts into a base64 ATTACHMENT (see
+  // `encodeRpcResult`/`writeBytes` in dsh-api-gateway) rather than inlining it
+  // as base64 text. The panel features-detects `readAll` and falls back to
+  // `readBytes`, so this pins the method the panel actually calls today —
+  // `readAll` is deliberately NOT required, and a reintroduction would not be
+  // an error either.
+  for (const method of ['async list(', 'async read(', 'async readBytes(']) {
     assert.ok(host.text.includes(method), `the host Remote implements ${method.trim()}`);
   }
   assert.ok(host.text.includes('workspace-file/not-found'), 'the wire still carries the not-found code the empty-library state keys on');
-  assert.ok(host.text.includes('toString("base64")'), 'readAll still answers base64 bytes (the panel decodes exactly that)');
+  // The byte window the fallback asks for, and the field it decodes. A window
+  // above `maxBytes` is REFUSED rather than shortened, so the panel's fixed
+  // 8 MiB request is a real contract with the deployment caps: if the default
+  // cap ever drops below it, `readBytes` starts failing where `readAll` used to
+  // succeed, and only this assertion would notice before a user did.
+  assert.ok(/offset:\s*0/.test(host.text) || host.text.includes('readBytes'), 'readBytes serves the byte window the panel requests');
+  const gateway = hostHalf('@deepseek-ai/dsh-api-gateway');
+  assert.ok(gateway !== undefined, 'api-gateway is installed (it owns the byte attachment encoding)');
+  assert.ok(
+    /writeBytes\s*=\s*\(bytes,\s*path\)/.test(gateway.text) && gateway.text.includes('Uint8Array'),
+    'the gateway still lifts Uint8Array results into attachments (the shape the panel decodes)',
+  );
 });
 
 check('official client packages call the same workspaceFiles methods', () => {

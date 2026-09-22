@@ -44,7 +44,7 @@
 
 需要一台已装好 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的机器。
 
-### 推荐：专属模式 preset（3 步）
+### 推荐：专属模式 preset（2 步）
 
 装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**57 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。
@@ -53,33 +53,46 @@
 # 1. 把包装进你的 profile（web 是默认 profile 名，按需替换）
 dsh plugin --profile web add D:\path\to\dsh-molbio-tools
 
-# 2. 把包内的 preset 注册进该 profile（幂等；--check 可当体检，--dry-run 只打印）
-node D:\path\to\dsh-molbio-tools\preset\install.mjs --profile web
-
-# 3. 重启该 profile，然后在预设选择器里选 "Molecular Biology Lab" 新建会话
+# 2. 重启该 profile，然后在预设选择器里选 "Molecular Biology Lab" 新建会话
 ```
 
-以后升级只要一条命令，**不用重新复制、也不用改配置**（第 2 步只需做一次）：
+**升级**同样只有一条命令，不用重新复制、也不用改配置：
 
 ```powershell
 dsh plugin --profile web update dsh-molbio-tools
 ```
 
-### 备选：复制 preset 目录（可离线带走）
+> **0.7.1 起不再需要"注册 preset 根目录"这一步。**
+> DSH 0.1.7-alpha.1 移除了 `@deepseek-ai/dsh-agent-presets` 及其目录发现机制：preset 现在是
+> bundle patch 里的一个 `@deepseek-ai/dsh-agent-preset` **行**（本包的是
+> `preset/molbio-lab/preset.patch.yml`，由 `dsh.bundle.patch` 声明）。
+> 因此 preset 随 bundle 一起安装，**装完即出现**。
+>
+> 老版本遗留的两样东西可以清理（`node preset\install.mjs --profile web` 会替你查出来）：
+>
+> - profile 的 `cordis.patch.yml` 里那条 `- id: agent-presets`（目标行已不存在，每次组合会
+>   打印 `patch: entry "agent-presets" not found`）；
+> - `~/.dsh/.agent-presets/molbio-lab/`（旧机制的死副本，**已不再被读取**，会永远停在旧版本）。
 
-把仓库里的 `preset/molbio-lab/` 整个复制到 `~/.dsh/.agent-presets/molbio-lab/`，重启后即可在
-选择器里看到该模式。适合无法改 profile 配置的环境；代价是**每个新版本都要重新复制**到新的
-`vN` 目录（同一目录原地覆盖不会生效，原因见 [开发者入口](#开发者入口)）。
+### 备选：复制 preset 目录 —— 0.7.1 起已失效
 
-### 备选：bundle 安装（工具对该 profile 全局可见）
+旧版可把 `preset/molbio-lab/` 复制到 `~/.dsh/.agent-presets/molbio-lab/`。DSH 0.1.7-alpha.1
+**不再扫描任何预设目录**，所以这条路已经走不通；请改用上面的 bundle 安装。
 
-```powershell
-dsh plugin --profile <name> add github:lovy2004/dsh-molbio-tools   # 或 npm 上的包名 / 本地 tarball
-dsh --profile <name> --dump-config                                 # 组合树里应出现 "# == dsh-molbio-tools"
-```
+### 工具只在专属模式里出现（设计如此）
 
-bundle 会把工具注册到该 profile 的**全局层——所有会话都会加载**。只有"整个 profile 专做
-分子生物学"时才推荐；混合用途请用上面的 preset 方式。
+本包的 bundle patch 分两层，分工是固定的：
+
+| 层 | 作用 |
+| --- | --- |
+| `cordis.patch.yml` | **什么都不插**（空列表）——留给将来真正属于宿主层的东西 |
+| `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，57 个工具在这一层里 |
+
+所以 57 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
+
+> 如果你确实想要"工具对所有会话全局可见"，那需要自己加一层宿主行——但那不是本包的设计，
+> 且会让专属模式里的同一行变成死行（0.1.7-alpha.1 上表现为选择器显示"加载失败"）。
 
 ### 只要浏览器面板（可选）
 
@@ -491,17 +504,26 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 ## 常见问题
 
 **装完选择器里没有 "Molecular Biology Lab"？**
-先确认第 2 步（`preset/install.mjs`）跑过并重启了 profile。用 `node <包目录>\preset\install.mjs
---profile web --check` 可当体检；`--dump-config` 里应能看到新增的 preset 扫描根。
+先确认该 profile 的 `dsh.profile.bundles` 里有 `dsh-molbio-tools`（**不是**只有
+`dsh-molbio-panel`——面板包不带 preset），然后重启 profile。体检命令：
+
+```powershell
+node <包目录>\preset\install.mjs --profile web          # 报告 + 真实组合验证
+node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组合
+```
+
+它会顺带查出老版本遗留的 `agent-presets` 死配置与 `~/.dsh/.agent-presets` 死副本。
 
 **工具在别的会话里消失了？**
-这正是 preset 渠道的目的：工具只在 **Molecular Biology Lab** 模式里出现。混合用途 profile 请
-一直用 preset 渠道，不要用 bundle 全局安装。
+这不是故障，是设计：工具只在 **Molecular Biology Lab** 模式里出现，其它模式不带它们。
+
+**选了模式却显示"加载失败"？**
+先跑一次体检（上一段。它会核对 preset 里的工具行是否写成**包名**——写成相对路径
+`./plugins/…` 时 preset 能挂载但一个工具都加载不了，选择器就显示加载失败）。
 
 **升级后还是旧行为？**
-`dsh plugin --profile <p> update dsh-molbio-tools` 之后要**重启 profile**。若用的是"复制 preset
-目录"渠道，必须把新版本的 `vN` 目录复制过去并更新插件行——原地覆盖同一目录**不会**生效（模块按
-文件 URL 缓存）。
+`dsh plugin --profile <p> update dsh-molbio-tools` 之后要**重启 profile**。
+（"复制 preset 目录"渠道在 DSH 0.1.7-alpha.1 已失效，见[安装](#安装)一节。）
 
 **没弹出图片窗口？**
 看结果里的 `auto_viewed`：`false` 通常意味着无桌面环境（headless）、被 `MOLBIO_AUTO_VIEW=0`
@@ -525,8 +547,8 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 ## 开发者入口
 
 改代码、加工具、发版本、排查组合问题请看 **[docs/maintainer.md](docs/maintainer.md)**，其中包含
-与官方插件规范的逐项对照、开发与测试（`npm test`）、发布前预检、preset 组合维护（DSH 升级后
-必做）、以及**版本目录规则**的原理与纪律。
+与官方插件规范的逐项对照、开发与测试（`npm test`）、发布前预检、以及 preset 组合维护
+（DSH 升级后必做；含**preset 行必须按包名引用**这条硬规则与它的运行时验证方法）。
 
 其它文档：
 
@@ -534,10 +556,10 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 | --- | --- |
 | [docs/maintainer.md](docs/maintainer.md) | 维护者文档：合规对照、开发测试、发布流程、路线图 |
 | [docs/client-panel.md](docs/client-panel.md) | 浏览器内面板：产物格式、服务契约、上限、验证方式、已知限制 |
-| [docs/route-b.md](docs/route-b.md) | 安装渠道 B（注册包内 preset）：机制、升级 Runbook、取舍 |
+| [docs/route-b.md](docs/route-b.md) | 安装渠道 B 的历史记录（0.1.7-alpha.1 起该渠道已废弃） |
 | [docs/client-pipeline-exploration.md](docs/client-pipeline-exploration.md) | 浏览器内面板的可行性与实现路径调研 |
 | [docs/capability-gap-survey.md](docs/capability-gap-survey.md) | 能力缺口调查：40 条排序候选、必做 top-5、以及"想做但不可行"的确切阻断原因 |
-| [CHANGELOG.md](CHANGELOG.md) | 变更日志（包版本 ↔ preset 版本目录对照） |
+| [CHANGELOG.md](CHANGELOG.md) | 变更日志（包版本 ↔ 历史 preset 版本目录对照） |
 
 包内目录结构：
 
@@ -569,10 +591,11 @@ dsh-molbio-tools/
 ├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
-├── preset/molbio-lab/     # 推荐安装渠道：专属模式 preset（vN 版本目录）
+├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
+│                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
 ├── test/            # 冒烟测试 + 光栅化器 + 客户端/组合检查（含 preset 漂移守卫 drift-probe.mjs）
 ├── docs/            # 维护者与实现文档
-└── cordis.patch.yml # bundle 渠道补丁层
+└── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
 ```
 
 ---

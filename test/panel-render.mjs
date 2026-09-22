@@ -225,8 +225,17 @@ const useSessions = (selector) => selector({ byId: { [SESSION]: { cwd: CWD } }, 
 
 const puc118Bytes = new Uint8Array(await readFile(new URL('./fixtures/pUC118.dna', import.meta.url)));
 
-/** A workspace Remote stub over a virtual file tree. */
-function remote(tree) {
+/**
+ * A workspace Remote stub over a virtual file tree.
+ *
+ * The default shape is DSH 0.1.7-alpha.1's: `readBytes`, whose `data` is a
+ * `Uint8Array` the gateway lifts into a base64 attachment, and NO `readAll` at
+ * all — so every block below drives the panel's FALLBACK branch, which is the
+ * only branch a current harness can reach. `options.legacyReadAll` restores the
+ * pre-0.1.7 `readAll` method so the branch the panel used in older installs
+ * stays covered too.
+ */
+function remote(tree, options = {}) {
   return {
     workspaceFiles: {
       async list(_scope, path) {
@@ -234,14 +243,24 @@ function remote(tree) {
         if (entries === undefined) return { ok: true, value: { path, entries: [], truncated: false } };
         return { ok: true, value: { path, entries, truncated: false } };
       },
-      // `readAll` carries bytes base64-encoded on the wire; the stub encodes
-      // whatever fixture it was handed, so a test may pass a buffer or text and
-      // still see the transport's real shape.
-      async readAll(_scope, path) {
+      // Pre-0.1.7 transport: bytes base64-encoded as TEXT on the wire. Kept so
+      // a regression in the `readAll` branch is still caught.
+      ...(options.legacyReadAll === true
+        ? {
+          async readAll(_scope, path) {
+            const value = tree[path];
+            if (value === undefined) return { ok: false, error: { code: 'workspace-file/not-found', message: `${path} does not exist` } };
+            const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value);
+            return { ok: true, value: { data: bytes.toString('base64') } };
+          },
+        }
+        : {}),
+      // Current transport: native bytes, and no `readAll` on the namespace —
+      // which is what forces the panel down its `readBytes` path.
+      async readBytes(_scope, path) {
         const value = tree[path];
         if (value === undefined) return { ok: false, error: { code: 'workspace-file/not-found', message: `${path} does not exist` } };
-        const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value);
-        return { ok: true, value: { data: bytes.toString('base64') } };
+        return { ok: true, value: { data: new Uint8Array(typeof value === 'string' ? Buffer.from(value, 'utf8') : value) } };
       },
       async read(_scope, path) {
         const value = tree[path];
@@ -372,7 +391,7 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
       async list() {
         return { ok: true, value: { path: CWD, entries: [{ name: 'broken.dna', type: 'file' }], truncated: false } };
       },
-      async readAll() {
+      async readBytes() {
         return { ok: false, error: { code: 'workspace-file/too-large', message: 'exceeds the 33554432 byte full-file cap' } };
       },
     },
@@ -385,6 +404,32 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   await harness.render();
   const rendered = markup(harness.tree);
   assert.ok(rendered.includes('too-large') || rendered.includes('exceeds'), 'the Remote failure reaches the pane');
+  harness.unmount();
+}
+
+// ── Molbio panel: the pre-0.1.7 `readAll` transport still works ────────────
+//
+// The block above proves the `readBytes` fallback every current install takes.
+// This one pins the other half of the feature-detect: when a harness DOES
+// expose `readAll`, the panel must prefer it rather than silently requiring
+// `readBytes`. Without this, deleting the `readAll` branch would go unnoticed
+// until someone ran an older DSH.
+
+{
+  const files = remote({
+    [CWD]: [{ name: 'pUC118.dna', type: 'file' }],
+    [`${CWD}/pUC118.dna`]: puc118Bytes,
+  }, { legacyReadAll: true });
+  assert.equal(typeof files.workspaceFiles.readAll, 'function', 'the legacy stub exposes readAll');
+  globalThis.__molbioTestHooks = mount(MolbioPanel);
+  const harness = globalThis.__molbioTestHooks;
+  harness.setProps({ sessionId: SESSION, remote: files, useSessions });
+  await harness.render();
+  elements(harness.tree, 'div').find((node) => node.props?.title?.startsWith('pUC118.dna')).props.onClick();
+  await harness.render();
+  const rendered = markup(harness.tree);
+  assert.ok(rendered.includes('3162 bp'), 'readAll still yields the parsed record');
+  assert.ok(rendered.includes('AmpR'), 'and its features');
   harness.unmount();
 }
 

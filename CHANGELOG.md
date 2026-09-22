@@ -3,11 +3,111 @@
 本仓库有两套版本号，请在提 issue 或对照本文档时区分：
 
 - **包版本（`package.json` / npm / git tag）**：遵循 semver，如 `0.5.1`。
-- **preset 版本目录（`dsh-molbio-tools-vN`）**：DSH 的 ESM 模块缓存按文件 URL 缓存，
-  每次插件代码变更**必须新建目录**（见 [README 的版本目录规则](README.md#插件更新版本目录规则)）。
-  它只增不减，且与 semver 不同步。
+- **preset 版本目录（`dsh-molbio-tools-vN`）**：**已于 0.13.0 废弃并从仓库删除**（见该条）。
+  历史上 DSH 的 ESM 模块缓存按**文件 URL** 缓存，而 preset 里的插件行写成相对路径
+  `./plugins/dsh-molbio-tools-vN/index.mjs`，因此每次插件代码变更**必须新建目录**。
+  0.1.7-alpha.1 上那条相对路径**不再被 import**（preset 能挂载，却一个工具都加载不了）；
+  改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
+  下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
-版本目录当前指向 v20（`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行）。
+## [0.13.0] — 2026-09-18（适配 DSH 0.1.7-alpha.1：修掉面板读文件全坏 + preset 迁移；工具仍 57）
+
+**这一版是被 DSH 升级"考"出来的**，两个问题都属于本仓库最在意的那一类——**测试全绿，功能却坏了**。
+插件本体（57 个工具、宿主组合层）在新版上一直是好的；坏的是**浏览器面板读文件**和
+**preset 安装渠道**，而现有断言恰好都盯着**旧行为**，所以没有一个红灯。
+
+### 修复 1（严重）：0.1.7-alpha.1 上面板**打不开任何文件**
+
+**症状**：右侧栏 Molbio 面板能看到文件列表，点任何 `.dna`/`.fasta` 都报错，质粒图谱永远画不出来。
+
+**根因**：`readBytes()` 对**方法**做了特性探测（`readAll` 在就调它，否则调 `readBytes`），
+却对**值的形态**没有探测——两条分支最后都交给 `decodeBase64Bytes()`，而那个函数**只接受 base64
+字符串**：
+
+```js
+if (typeof base64 !== 'string') throw new MolbioInputError('expected a base64 string …');
+```
+
+0.1.7-alpha.1 删掉了 `workspaceFiles.readAll`，`readBytes` 成了唯一路径，而它返回的 `data` 是
+**`Uint8Array`**（gateway 把原生字节抬成 base64 attachment，客户端再重组）。于是回退分支**必然抛错**。
+
+**修法**：把 `decodeBase64Bytes` 换成 `decodeWorkspaceBytes`——**探测方法，归一化值**：字符串按
+base64 解，`Uint8Array` 原样透传（不复制，大质粒零额外开销）。
+
+**为什么没被测出来（这版的重点）**：`test/contract.mjs` 曾**断言宿主必须实现 `readAll`**
+（0.1.7 上直接 FAIL），而 `test/panel-render.mjs` 的 Remote 桩件**只提供 `readAll`**——两条断言
+合起来把回退分支**整个罩住了**：真机上唯一能走的路，测试里一次都没走过。所以这一版：
+`panel-render.mjs` 的默认桩件改成**新版形态**（有 `readBytes`、**没有 `readAll`**），
+所有既有断言现在都跑在**真机实际路径**上；另加一块**旧形态回归**（`legacyReadAll`），
+两条分支都钉住。`contract.mjs` 改为钉 `read`/`readBytes`/`list` 与 gateway 的字节附件编码。
+
+### 修复 2：preset 渠道在 0.1.7-alpha.1 上**完全失效**
+
+0.1.7-alpha.1 移除了 `@deepseek-ai/dsh-agent-presets` 及其**目录发现**机制——
+新注册表**既不扫描目录、也不接受 preset 路径**（官方 README 原文）。preset 现在是 bundle patch
+里的一个 `@deepseek-ai/dsh-agent-preset` **行**，`config.plugins` 装原来的行清单。后果：
+
+- `preset/molbio-lab/agent.cordis.yml` 成了**无消费者的孤儿**，选择器里再不会出现该模式；
+- `preset/install.mjs` 往 profile 写的 `- id: agent-presets` + `config.roots` 目标行**已不存在**，
+  每次组合都打印 `patch: entry "agent-presets" not found`；
+- `~/.dsh/.agent-presets/molbio-lab/` 是**死副本**（且停在 v16 / 46 个工具）。
+
+**修法**：新增生成器 `build/preset-patch.mjs`，把 `agent.cordis.yml`（**行清单**，仍是唯一手改处）
+包成 `preset/molbio-lab/preset.patch.yml`，并由 `dsh.bundle.patch` 声明为**第二个 patch 层**
+（宿主层 + preset 层）。**装完即出现**，不再有第 2 步、不再需要 `roots`。
+`preset/install.mjs` 改为**体检工具**：验证 bundle 是否被选中、真实跑一次
+`--dump-config` 确认 `preset-molbio-lab` 进了组合，并报出上述两处遗留及其清理方法。
+
+**验证**（不是"看代码觉得对"）：`dsh --profile molbio-web --dump-config` 退出 0，
+组合树里出现 `preset-molbio-lab` / `id: molbio-lab` / 33 行 `plugins`。
+
+### 修复 3：preset 里的**相对 specifier 在 0.1.7-alpha.1 上根本不解析**
+
+上面两项修完后，实测仍然**加载失败**——而且是只在真机上才看得见的那一种：
+
+```
+Molecular Biology Lab — 加载失败
+```
+
+真因不在本仓库的组合，而在**模块说明符的写法**。preset 的 `tool-molbio` 行原本写的是相对路径
+`./plugins/dsh-molbio-tools-v20/index.mjs`（沿用 0.1.6 及更早的写法）。在 0.1.7-alpha.1 上，
+
+- preset **能挂载**（`agentPresets/list` 无 `broken`），
+- 但那一行**永远不会被 import**：roster 报
+  `tool-molbio (./plugins/dsh-molbio-tools-v20/index.mjs): never started`，
+  `compositionInventory` 里它的 `fiberPhase` 是 `null`。
+
+改成**包名** `name: 'dsh-molbio-tools'` 即恢复正常（实测 `fiberPhase: active`）。顺带把
+`cordis.patch.yml` 里那条宿主层 `tool-molbio` 也去掉了：它在**全局层**注册同样的 57 个工具，
+与本包"工具只属于 molbio-lab 这一个模式"的设计相抵触（也是两处重复注册的来源）。
+现在 bundle 的两个 patch 层分工明确——`cordis.patch.yml` **什么都不插**（为空列表，留给将来
+真正宿主层的东西），`preset.patch.yml` 声明 preset 并携带工具行。
+
+**验证方式（本轮的关键教训）**：不再只跑静态检查。用一个 scratch profile
+（`--from-default-profile web` + link 本包）真起一个 `dsh web` 到另一个端口，带 cookie 认证调
+`/api/agentPresets/list` 与 `/api/pluginInventory/list`，读 `broken` / `fiberPhase` 字段。
+`broken` 与 `fiberPhase` 是仅有的两个能证明"preset 真的活着"的字段，静态
+`--dump-config` **看不出**这个问题。
+
+> **顺带删除的负重：`preset/molbio-lab/plugins/dsh-molbio-tools-v11…v20/`。**
+> 版本目录机制是为规避**相对文件 URL** 的 ESM 模块缓存而设的：preset 行写相对路径，于是
+> 每次发版都要把全部 `.mjs` 复制进一个新目录（本次删除前是 **195 个文件 / 5.2 MB**）。
+> 改用包名后这个理由不复存在，十个目录与 `preset-health.mjs` 的**镜像检查**一并删除。
+> 腾出的位置由一条更有价值的检查补上：**preset 行不得写相对路径**——正是本轮的真因，
+> 已用突变实验证明它会失败（把 specifier 改回 `./plugins/…`，`preset-health` 立即 FAIL）。
+
+### 测试基线的迁移
+
+`preset-health.mjs` / `drift-probe.mjs` 的**上游基线**改成
+`@deepseek-ai/dsh-web-app/presets/standard.patch.yml`（旧包的 `presets/standard/agent.cordis.yml`
+已消失——`drift-probe` 之前是**直接崩溃**，`preset-health` 则因 `existsSync` 守卫**静默跳过**整段
+漂移比对，等于悄悄停止看守）。两侧都通过新的 `presetPlugins()` 从 `config.plugins` 取行；
+`--check` 不再允许静默跳过：找不到基线会明确告警。
+
+一处静默陷阱顺手修掉：`drift-probe` 的 `driftText` 对**已展平**的行列表再调一次 `orderedRows`，
+会重新进入每个 group 行的 `config`、把子行**发两遍**，表现为"位置 14 顺序不符"的假漂移。
+
+工具仍 57。**不再有版本目录**：`preset/molbio-lab/plugins/` 已整体删除，preset 行按包名引用本包。
 
 ## [0.12.0] — 2026-09-18（v20：修掉比对器丢残基 + 长叶名折行；工具仍 57）
 

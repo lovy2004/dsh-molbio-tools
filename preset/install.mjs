@@ -1,52 +1,43 @@
 /**
  * dsh-molbio-tools/preset/install.mjs
  *
- * Register this package's agent preset with a DSH profile — without copying
- * the preset into `<dshHome>/.agent-presets`.
+ * Check that this package's "Molecular Biology Lab" preset is installed — and
+ * clean up the leftovers from the mechanism DSH removed.
  *
- * WHAT THIS DOES
- * --------------
- * `dsh plugin add dsh-molbio-tools` installs the package into a profile and
- * makes its 46 tools load, but it cannot make the "Molecular Biology Lab"
- * preset appear in the picker: `dsh plugin` manages profile BUNDLES, and agent
- * presets are discovered only from the package's own `presets/` directory and
- * from `<dshHome>/.agent-presets` (see @deepseek-ai/dsh-agent-presets,
- * "可选的 preset 来自两处"). Discovery roots can also be configured, and that
- * is the seam this script uses:
+ * WHAT CHANGED (read this before wondering why the script stopped writing)
+ * ----------------------------------------------------------------------
+ * On dsh <= 0.1.6 a preset was a FILE the harness discovered: an
+ * `agent.cordis.yml` under `<dshHome>/.agent-presets`, or under a directory
+ * registered through the `agent-presets` row's `config.roots`. This script used
+ * to append exactly that `roots:` entry to the profile's `cordis.patch.yml`.
  *
- *     - id: agent-presets            # the web-app's roster row
- *       config:
- *         default: standard          # patch replaces the WHOLE config, so restate it
- *         roots:
- *           - path: <this package>/preset
- *             trust: system
+ * dsh 0.1.7-alpha.1 removed `@deepseek-ai/dsh-agent-presets` and its whole
+ * discovery mechanism. The replacement (`@deepseek-ai/dsh-agent-preset-registry`)
+ * "neither scans directories nor accepts preset paths": a preset is now a
+ * `@deepseek-ai/dsh-agent-preset` ROW inside a bundle patch. This package ships
+ * one (`preset/molbio-lab/preset.patch.yml`, declared as the second entry of
+ * `dsh.bundle.patch`), so the BUNDLE installs the preset:
  *
- * Two consequences worth knowing before you run it:
+ *     dsh plugin --profile <name> add D:\path\to\dsh-molbio-tools
  *
- * 1. The root points INTO the installed package, and that path is stable
- *    across versions (`node_modules/dsh-molbio-tools` is a symlink for `link:`
- *    installs and a real directory for npm/tarball installs). So upgrading is
- *    `dsh plugin --profile <p> update dsh-molbio-tools` and nothing else — no
- *    re-copy, no edit here. A copied preset, by contrast, is frozen where it
- *    was copied and must be re-copied (into a NEW version directory) on every
- *    release.
- * 2. `trust: system` keeps the preset read-only for this deployment: it cannot
- *    be edited or deleted from the presets UI, which is what you want for a
- *    directory owned by a package. Authoring your own presets still works as
- *    long as `includeUserRoot` stays at its default (true).
+ * That is now the ONLY step. There is nothing to patch into the profile, and
+ * the old `roots:` entry does real harm on the new harness — its target row no
+ * longer exists, so every compose reports:
  *
- * The edit is idempotent: if this exact root is already registered, the script
- * reports it and writes nothing. The profile's patch file is backed up first.
+ *     patch: entry "agent-presets" not found
+ *
+ * This script therefore no longer writes anything. It reports whether the
+ * preset is actually reachable, and points at the two leftovers that a
+ * pre-0.1.7 install leaves behind.
  *
  * Usage:
- *   node preset/install.mjs [--profile <name>] [--dsh-home <path>] [--dry-run] [--check]
+ *   node preset/install.mjs [--profile <name>] [--dsh-home <path>] [--check]
  *
- *   --profile <name>   profile to register with (default: web)
+ *   --profile <name>   profile to inspect (default: web)
  *   --dsh-home <path>  harness home (default: $DSH_HOME, else ~/.dsh)
- *   --dry-run          print the entry that would be written, write nothing
- *   --check            report whether the root is registered; exit 1 when absent
+ *   --check            exit non-zero when the preset is NOT reachable
  */
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -64,7 +55,6 @@ function flag(name) {
 }
 
 const profile = flag('profile') === undefined ? 'web' : String(flag('profile'));
-const dryRun = flag('dry-run') === true;
 const checkOnly = flag('check') === true;
 const dshHomeFlag = flag('dsh-home');
 const dshHome = resolve(
@@ -73,181 +63,123 @@ const dshHome = resolve(
     : (process.env.DSH_HOME !== undefined && process.env.DSH_HOME.trim() !== '' ? process.env.DSH_HOME : join(homedir(), '.dsh')),
 );
 
-const fail = (message) => {
-  console.error(`install.mjs: ${message}`);
-  process.exit(1);
-};
-
-// ── locate this package's preset root ───────────────────────────────────────
-// The script lives at <package>/preset/install.mjs, so the preset root is its
-// own directory. When the package was installed INTO the profile, prefer that
-// copy: it is the one `dsh plugin update` refreshes, so pointing at it keeps
-// upgrades automatic even when this script is run from a dev checkout.
 const profileDir = join(dshHome, 'profiles', profile);
 const profilePatch = join(profileDir, 'cordis.patch.yml');
-const installedPreset = join(profileDir, 'node_modules', 'dsh-molbio-tools', 'preset');
-const presetRoot = existsSync(installedPreset) ? installedPreset : here;
-const composition = join(presetRoot, 'molbio-lab', 'agent.cordis.yml');
+const manifest = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
+const packageName = manifest.name;
 
-if (!existsSync(composition)) {
-  fail(`no preset composition at ${composition}\n  run this from the package (preset/install.mjs) or install the package into the profile first`);
-}
+/** Problems that make the preset unreachable, and notes that merely inform. */
+const problems = [];
+const notes = [];
+
 if (!existsSync(profileDir)) {
-  fail(`no profile directory at ${profileDir}\n  create the profile first (e.g. \`dsh --profile ${profile} --from-default-profile web\`) and run \`dsh plugin --profile ${profile} add dsh-molbio-tools\``);
-}
-if (!existsSync(profilePatch)) {
-  fail(`the profile has no cordis.patch.yml at ${profilePatch}`);
-}
-
-// Normalize to forward slashes: the path is written into YAML, and `\` is an
-// escape character there. Windows accepts forward slashes and discovery
-// resolves them, so one form works everywhere.
-const rootPath = presetRoot.replace(/\\/g, '/');
-
-// ── is the registration already there? ──────────────────────────────────────
-const original = readFileSync(profilePatch, 'utf8');
-const already = original.includes(rootPath) || original.includes(presetRoot);
-
-if (checkOnly) {
-  if (already) {
-    console.log(`ok: ${rootPath} is already registered in ${profilePatch}`);
-    process.exit(0);
-  }
-  console.error(`not registered: ${rootPath} does not appear in ${profilePatch}`);
-  process.exit(1);
+  problems.push(`no profile directory at ${profileDir}`);
+} else if (!existsSync(join(profileDir, 'package.json'))) {
+  problems.push(`${profileDir} has no package.json — is "${profile}" a profile?`);
 }
 
-if (already && !dryRun) {
-  console.log(`already registered — nothing to do`);
-  console.log(`  preset root : ${rootPath}`);
-  console.log(`  patch file  : ${profilePatch}`);
-  process.exit(0);
-}
-
-// ── does this profile actually compose the roster row we patch? ─────────────
-// A profile without @deepseek-ai/dsh-web-app (headless, sdk, a bare `dsh plugin`
-// profile) has no `agent-presets` row, and the loader would reject an
-// id-targeted patch naming an id it never saw. Detect it from the profile's own
-// bundle list rather than by attempting the write.
+// ── 1. is this package a selected bundle of the profile? ────────────────────
 let bundles = [];
-try {
-  const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
-  bundles = manifest.dsh?.profile?.bundles ?? [];
-} catch (error) {
-  fail(`cannot read the profile manifest: ${String(error.message)}`);
-}
-const hasRoster = bundles.some((name) => name === '@deepseek-ai/dsh-web-app'
-  || name.includes('web-app')
-  || name.includes('agent-presets'));
-if (!hasRoster) {
-  fail(`profile "${profile}" does not compose the agent-preset roster\n`
-    + `  its bundles are: ${bundles.join(', ') || '(none)'}\n`
-    + `  patch a profile that includes @deepseek-ai/dsh-web-app (the shipped \`web\` template does), or copy the preset into ${join(dshHome, '.agent-presets')} instead`);
-}
-
-// ── append the patch entry ──────────────────────────────────────────────────
-// A freshly initialized profile ships an EMPTY patch file whose whole content is
-// the empty top-level array `[]` (plus a comment header). Appending after that
-// `[]` produces a document with two top-level nodes — invalid YAML — so the
-// placeholder is replaced rather than appended to. A file that already holds
-// entries is appended to, never rewritten: it is the user's, may carry
-// unrelated entries and comments, and is watched live by a `patchReload: live`
-// profile.
-const head = [
-  '# Registered by dsh-molbio-tools/preset/install.mjs — makes the "Molecular Biology Lab"',
-  '# preset visible to this profile from the installed package, so package upgrades carry the',
-  '# preset with them (no copy step, no per-release edit). `config` replaces the row\'s whole',
-  '# config, so `default` is restated. Re-running the installer is a no-op.',
-].join('\n');
-const entry = [
-  head,
-  '- id: agent-presets',
-  '  config:',
-  '    default: standard',
-  '    roots:',
-  `      - path: ${rootPath}`,
-  '        trust: system',
-].join('\n');
-
-/** Whether the file holds nothing but comments and the empty-array placeholder. */
-function isEmptyPatchList(text) {
-  const code = text
-    .split(/\r?\n/)
-    .filter((line) => !/^\s*#/.test(line))
-    .join('\n')
-    .trim();
-  return code === '' || code === '[]';
-}
-
-const updated = isEmptyPatchList(original)
-  // Drop the placeholder itself: stripping only trailing whitespace would leave
-  // the `[]` in place, and a second top-level node after `[]` is exactly the
-  // "end of the stream or a document separator is expected" parse error.
-  ? `${original.replace(/^[ \t]*\[\][ \t]*\r?\n?/m, '').replace(/\s*$/, '')}\n${entry}\n`
-  : `${original.replace(/\s*$/, '')}\n\n${entry}\n`;
-
-if (dryRun) {
-  console.log(already
-    ? 'dry run — this root is ALREADY registered; a real run would change nothing'
-    : 'dry run — the following entry would be appended to:');
-  console.log(`  ${profilePatch}`);
-  console.log(entry);
-  process.exit(0);
-}
-
-const backup = `${profilePatch}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-copyFileSync(profilePatch, backup);
-writeFileSync(profilePatch, updated, 'utf8');
-console.log(`patched  : ${profilePatch}`);
-console.log(`backup   : ${backup}`);
-console.log(`preset   : ${rootPath}/molbio-lab`);
-
-// ── verify by asking the harness to compose the tree ────────────────────────
-// `--dump-config` re-runs the real patch pipeline, so a malformed patch or a row
-// the loader would reject shows up here rather than at session start. The two
-// failure modes are NOT the same thing and must not be reported alike:
-//
-//   - the dump cannot be RUN (no `dsh` on PATH, a sandbox that refuses piped
-//     child stdio) — say so, keep the patch, exit 0;
-//   - the dump RUNS and is empty or missing the root — that means the patch
-//     itself is bad; restore the backup and exit non-zero.
-//
-// An empty result from execFileSync carries its own reason on stderr, which is
-// how a loader error is told apart from a launch failure.
-const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh';
-let dump = '';
-let verifyRan = false;
-try {
-  dump = execFileSync(dsh, ['--profile', profile, '--dump-config'], {
-    cwd: dshHome,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
-  });
-  verifyRan = true;
-} catch (error) {
-  const stderr = String(error.stderr ?? '');
-  if (stderr.includes('parsePatchList') || stderr.includes('YAMLException')) {
-    fail(`the patch was rejected by the loader at ${profilePatch}\n`
-      + `  restore ${backup} and report this — the profile patch file was not valid YAML after the append\n`
-      + `  loader stderr: ${stderr.split('\n')[0]}`);
+if (existsSync(join(profileDir, 'package.json'))) {
+  try {
+    bundles = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))?.dsh?.profile?.bundles ?? [];
+  } catch (error) {
+    problems.push(`cannot read the profile manifest: ${String(error.message)}`);
   }
-  console.error('warning: could not RUN the verification (`dsh --profile ' + profile + ' --dump-config`)');
-  console.error(`  ${String(error.message).split('\n')[0]}`);
-  console.error('  the patch was written; compose it manually or restart the profile and check the preset picker');
-  process.exit(0);
 }
-if (!verifyRan || !dump.includes(rootPath)) {
-  fail(`the patch was written but \`dsh --profile ${profile} --dump-config\` does not carry ${rootPath}\n`
-    + `  restore ${backup} and report this — the profile may not have the roster row this patch targets`);
+const selected = bundles.some((name) => name === packageName || name.startsWith(`${packageName}@`));
+if (!selected && problems.length === 0) {
+  problems.push(`"${packageName}" is not in dsh.profile.bundles of "${profile}" — the bundle patch that `
+    + `declares the preset is not composed, so the mode cannot appear.\n`
+    + `  fix: dsh plugin --profile ${profile} add ${manifest.name}`);
 }
 
+// ── 2. the shipped preset patch must exist and declare the row ──────────────
+const patchPath = join(here, 'molbio-lab', 'preset.patch.yml');
+const sourcePath = join(here, 'molbio-lab', 'agent.cordis.yml');
+if (!existsSync(patchPath)) {
+  problems.push(`the preset patch is missing: ${patchPath}\n  fix: node build/preset-patch.mjs`);
+} else {
+  const text = readFileSync(patchPath, 'utf8');
+  if (!text.includes("name: '@deepseek-ai/dsh-agent-preset'")) {
+    problems.push(`${patchPath} does not declare a @deepseek-ai/dsh-agent-preset row`);
+  }
+  if (!/^\s*id:\s*molbio-lab\s*$/m.test(text)) {
+    problems.push(`${patchPath} does not declare the molbio-lab preset id`);
+  }
+  // The tool row MUST name the PACKAGE. A relative `./plugins/…` specifier does
+  // not resolve inside a preset on 0.1.7-alpha.1: the preset mounts, but its tool
+  // entry is never imported and the mode loads zero tools.
+  const toolRow = /- id:\s*tool-molbio\s*\n\s*name:\s*(.+)$/m.exec(text)?.[1]?.trim();
+  if (toolRow === undefined) {
+    problems.push(`${patchPath} carries no tool-molbio row`);
+  } else if (toolRow !== `'${packageName}'` && toolRow !== packageName) {
+    problems.push(`the tool-molbio row names ${toolRow}, but a preset row must name the PACKAGE `
+      + `(${packageName}). A relative "./plugins/…" specifier never resolves inside a preset on `
+      + `dsh 0.1.7-alpha.1 — the mode mounts and loads zero tools.\n`
+      + '  fix: edit preset/molbio-lab/agent.cordis.yml, then: node build/preset-patch.mjs');
+  }
+  if (existsSync(sourcePath)) {
+    notes.push(`row list    : ${sourcePath}`);
+  }
+}
+
+// ── 3. leftovers from the mechanism 0.1.7-alpha.1 removed ───────────────────
+if (existsSync(profilePatch)) {
+  const patch = readFileSync(profilePatch, 'utf8');
+  // The dead registration this very script used to write.
+  if (/^\s*- id:\s*agent-presets\s*$/m.test(patch)) {
+    notes.push(`STALE PATCH: ${profilePatch} still carries a "- id: agent-presets" entry, whose target row `
+      + `no longer exists in dsh 0.1.7-alpha.1. It is harmless but noisy — every compose logs:\n`
+      + `    patch: entry "agent-presets" not found\n`
+      + '  fix: delete that entry (keep the rest of the file) and restart the profile.');
+  }
+}
+const copiedPreset = join(dshHome, '.agent-presets', 'molbio-lab');
+if (existsSync(copiedPreset)) {
+  notes.push(`DEAD COPY: ${copiedPreset} is a preset directory from the removed discovery mechanism. `
+    + 'dsh 0.1.7-alpha.1 does not read it, so it is frozen at whatever release it was copied from.\n'
+    + '  fix: reselect the bundle (see below) and delete this directory — the bundle carries the preset now.');
+}
+
+// ── report ─────────────────────────────────────────────────────────────────
+console.log(`package : ${manifest.name}@${manifest.version}`);
+console.log(`profile : ${profile} (${profileDir})`);
+console.log(`preset  : ${patchPath}`);
 console.log('');
-console.log('verified : the composed config carries the new root');
-console.log('');
-console.log('next steps');
-console.log(`  1. restart the profile so the roster is composed with the new root`);
-console.log(`     (a \`patchReload: live\` profile picks it up on the next start)`);
-console.log(`  2. pick "Molecular Biology Lab" when creating a session`);
-console.log(`  3. to upgrade later: dsh plugin --profile ${profile} update dsh-molbio-tools`);
-console.log('     the root path above does not change, so nothing else needs re-running');
+
+for (const note of notes) console.log(`note: ${note}`);
+if (notes.length > 0) console.log('');
+
+if (problems.length === 0) {
+  console.log('OK: the preset ships with the bundle — the mode is registered when the profile composes.');
+  console.log(`    next: restart the profile and pick "Molecular Biology Lab" when creating a session.`);
+  // Compose the tree for real when `dsh` is on PATH; a sandbox that refuses
+  // piped child stdio is reported as "could not verify", never as a failure.
+  if (!checkOnly) {
+    try {
+      const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh';
+      const dump = execFileSync(dsh, ['--profile', profile, '--dump-config'], {
+        cwd: dshHome,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      });
+      if (dump.includes('preset-molbio-lab')) {
+        console.log('verified: the composed config carries the preset-molbio-lab row');
+      } else {
+        console.log('WARNING: the composed config does NOT carry preset-molbio-lab.');
+        console.log('  the bundle is selected but its preset patch did not compose — reinstall the bundle');
+        console.log(`  (dsh plugin --profile ${profile} update ${manifest.name}) and report this.`);
+        process.exit(1);
+      }
+    } catch (error) {
+      console.log(`could not verify by composing (${String(error.message).split('\n')[0]})`);
+      console.log('  the preset may still be fine — check the picker after restarting the profile.');
+    }
+  }
+  process.exit(0);
+}
+
+for (const problem of problems) console.error(`problem: ${problem}`);
+process.exit(1);

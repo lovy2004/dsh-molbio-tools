@@ -34,17 +34,53 @@
  * installed DSH's shipped `standard` preset, with the harness root discovered
  * from the global npm prefix.
  */
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
+// Re-exported for test/drift-probe.mjs, which drives the same reader against
+// deliberately mutated declarations.
+import { presetPlugins, asPresetPatch } from './preset-rows.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 
 /** Rows that name no importable package. */
 const NON_PACKAGE_ROWS = new Set(['cordis:group', 'cordis:builtin', 'cordis:plugin']);
+
+/**
+ * This package's own name, so a preset row that names it is validated against
+ * the checkout rather than against the harness root (where it is not installed).
+ */
+const selfName = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).name;
+
+/**
+ * The `description` of the preset row inside a patch layer, unquoted.
+ *
+ * Only the row's OWN `config.description` is wanted — a bundle patch is full of
+ * comments, and some of them mention the word. The generated layer writes the
+ * value as a JSON string (so `—` and `"` survive), hence the unquoting; a plain
+ * YAML scalar is returned as written.
+ *
+ * @param {string} text the patch file's source.
+ * @returns {string|undefined} the description, or undefined when absent.
+ */
+function presetDescription(text) {
+  const at = text.indexOf("name: '@deepseek-ai/dsh-agent-preset'");
+  if (at === -1) return undefined;
+  const line = /^\s*description:\s*(.+?)\s*$/m.exec(text.slice(at))?.[1];
+  if (line === undefined) return undefined;
+  if (line.startsWith('"')) {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return undefined;
+    }
+  }
+  return line;
+}
+
 
 /** Strip the `@deepseek-ai/` scope for the npm/global-prefix probe. */
 function harnessCandidates() {
@@ -155,7 +191,13 @@ async function checkRow(row, packages, harnessRoot, presetBase) {
       : { ...result, status: 'unresolvable', detail: `preset-relative module not found: ${target}` };
   }
 
-  const pkgDir = packageInstalled(row.name, harnessRoot);
+  const pkgDir = row.name === selfName
+    // The row names THIS package. `packageInstalled` walks up from the harness
+    // root, where this package is not installed — but in the preset it is
+    // resolved by Node from the profile that selected the bundle, which is the
+    // same source tree. Validate the checkout we are standing in.
+    ? repoRoot
+    : packageInstalled(row.name, harnessRoot);
   if (pkgDir === undefined) return { ...result, status: 'unresolvable', detail: 'package is not installed' };
   let entry;
   try {
@@ -334,7 +376,7 @@ async function main() {
     console.error(`preset-health: "${stray}" is not a composition file (.yml/.yaml) — did you mean --dsh "${stray}"?`);
     process.exit(2);
   }
-  const composition = resolve(candidate ?? join(repoRoot, 'preset', 'molbio-lab', 'agent.cordis.yml'));
+  const composition = resolve(candidate ?? join(repoRoot, 'preset', 'molbio-lab', 'preset.patch.yml'));
   if (!existsSync(composition)) {
     console.error(`preset-health: no composition at ${composition}`);
     process.exit(2);
@@ -350,7 +392,7 @@ async function main() {
   console.log(`harness : ${harnessRoot} (dsh ${version})`);
   console.log(`composition: ${composition}`);
 
-  const rows = flattenRows(await readComposition(composition, harnessRoot));
+  const rows = flattenRows(presetPlugins(await readComposition(composition, harnessRoot)));
   console.log(`rows    : ${rows.length}\n`);
 
   const failures = [];
@@ -368,13 +410,26 @@ async function main() {
   // divergence to report — and a FAILURE, not a note: the v17 release shipped
   // an unmountable provider row while this check printed a drift NOTE and the
   // suite reported success.
-  const standardPath = join(packages, 'dsh-agent-presets', 'presets', 'standard', 'agent.cordis.yml');
+  // The shipped `standard` preset lives in the Web app's bundle now: it is a
+  // patch layer like ours, not a scanned `agent.cordis.yml`. (Before
+  // 0.1.7-alpha.1 it was `@deepseek-ai/dsh-agent-presets/presets/standard/…`;
+  // that package no longer exists, so the old path is kept only as a fallback
+  // for an older harness.)
+  const standardCandidates = [
+    join(packages, 'dsh-web-app', 'presets', 'standard.patch.yml'),
+    join(packages, 'dsh-agent-presets', 'presets', 'standard', 'agent.cordis.yml'),
+  ];
+  const standardPath = standardCandidates.find((path) => existsSync(path));
   const drift = [];
-  if (existsSync(standardPath) && resolve(standardPath) !== composition) {
+  if (standardPath !== undefined && resolve(standardPath) !== composition) {
     drift.push(...compositionDrift(
-      orderedRows(await readComposition(standardPath, harnessRoot)),
-      orderedRows(await readComposition(composition, harnessRoot)),
+      orderedRows(presetPlugins(await readComposition(standardPath, harnessRoot))),
+      orderedRows(presetPlugins(await readComposition(composition, harnessRoot))),
     ));
+  } else if (standardPath === undefined) {
+    // A silent skip is how a drift guard quietly stops guarding. Say so.
+    console.error('warning: no shipped `standard` preset found to compare against');
+    console.error(`  looked for: ${standardCandidates.join(', ')}`);
   }
 
   console.log('');
@@ -382,58 +437,30 @@ async function main() {
     console.error('drift vs shipped standard preset:');
     for (const line of drift) console.error(`  FAIL ${line}`);
     console.error('');
-    console.error('  Absorb upstream changes verbatim (comments and key order included) so this');
-    console.error('  composition stays `standard` + one trailing tool-molbio row; see the');
-    console.error('  "How this file is maintained" header in preset/molbio-lab/agent.cordis.yml.');
+    console.error('  Absorb upstream changes verbatim (comments and key order included) so the');
+    console.error('  preset stays `standard` + the molbio rows; see the "How this file is');
+    console.error('  maintained" header in preset/molbio-lab/agent.cordis.yml.');
   }
 
-  // An unmanaged directory that no `.gitignore` entry covers ships with the repo.
-  const strays = [];
-  const pluginsDir = join(dirname(composition), 'plugins');
-  if (existsSync(pluginsDir)) {
-    for (const entry of await readdir(pluginsDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) strays.push(entry.name);
-    }
-  }
-  if (strays.length > 0) console.log(`version directories present: ${strays.join(', ')}\n`);
+  // `compositionText` is the patch that DECLARES the preset; its `plugins:` block
+  // is the row list this whole file validates.
+  const compositionText = await readFile(composition, 'utf8');
 
-  // The version directory the composition points at must MIRROR the package
-  // root module-for-module. The preset travels with the plugin, so a row that
-  // names vN while vN still holds the previous release's file is a silent
-  // "upgrade that changed nothing" — the exact failure the module-cache rule in
-  // the composition header exists to prevent, and one that no mount check can
-  // see (the old module mounts perfectly).
-  const mirrorDrift = [];
-  const activeMatch = /name:\s*'\.\/plugins\/([^/']+)\//.exec(await readFile(composition, 'utf8'));
-  if (activeMatch !== null) {
-    const versionDir = join(pluginsDir, activeMatch[1]);
-    const packageRoot = join(dirname(resolve(composition)), '..', '..');
-    if (!existsSync(versionDir)) {
-      mirrorDrift.push(`the composition points at ${activeMatch[1]}, which does not exist`);
-    } else {
-      const shipped = (await readdir(versionDir)).filter((name) => name.endsWith('.mjs')).sort();
-      for (const name of shipped) {
-        const rootFile = join(packageRoot, name);
-        if (!existsSync(rootFile)) {
-          mirrorDrift.push(`${activeMatch[1]}/${name} has no counterpart at the package root`);
-          continue;
-        }
-        const [inPreset, inRoot] = await Promise.all([readFile(join(versionDir, name)), readFile(rootFile)]);
-        if (!inPreset.equals(inRoot)) mirrorDrift.push(`${activeMatch[1]}/${name} differs from ${name} at the package root`);
-      }
-      const missing = (await readdir(packageRoot))
-        .filter((name) => name.endsWith('.mjs'))
-        .filter((name) => !shipped.includes(name));
-      for (const name of missing) mirrorDrift.push(`${name} exists at the package root but is missing from ${activeMatch[1]}`);
-    }
-  }
-  if (mirrorDrift.length > 0) {
-    console.error('mirror check (the preset version directory vs the package root):');
-    for (const line of mirrorDrift) console.error(`  FAIL ${line}`);
+  // The preset used to name a copied module directory
+  // (`./plugins/dsh-molbio-tools-vN/index.mjs`), which this suite kept in
+  // module-for-module sync with the package root. That mechanism is gone: the
+  // row names the PACKAGE now (see the specifier rule in docs/maintainer.md) and
+  // Node resolves it from the profile's node_modules, so there is no copy left
+  // to drift. Assert the rule instead of the copy — a relative specifier here is
+  // the silent failure this file exists to catch.
+  const relativeRow = /name:\s*'?(\.\/plugins\/[^']+)'?/.exec(compositionText);
+  if (relativeRow !== null) {
+    console.error('specifier check (the preset tool row):');
+    console.error(`  FAIL the tool-molbio row names ${relativeRow[1]}, a relative path`);
     console.error('');
-    console.error('  Copy the current modules into the version directory the composition names —');
-    console.error('  never edit a released directory in place (see the module-cache rule in the');
-    console.error('  composition header).');
+    console.error('  A relative specifier does NOT resolve inside a preset on dsh 0.1.7-alpha.1:');
+    console.error('  the preset mounts, but the entry is never imported and the mode loads zero');
+    console.error("  tools. Name the package instead (name: 'dsh-molbio-tools').");
   }
 
   // The preset's own user-facing DESCRIPTION quotes a tool count, and v19 bumped
@@ -442,14 +469,20 @@ async function main() {
   // the toolset is a claim this suite can check, so it does — against the count
   // the plugin actually registers.
   const countDrift = [];
-  const presetYml = join(dirname(composition), 'preset.yml');
-  // Count the tools the PRESET actually loads (its version directory's entry
-  // module), not the package root: the mirror check above proves the two are
-  // byte-identical, and this is the copy the composition names.
-  const pluginEntry = activeMatch === null ? undefined : join(pluginsDir, activeMatch[1], 'index.mjs');
-  if (existsSync(presetYml) && pluginEntry !== undefined && existsSync(pluginEntry)) {
-    const description = /^\s*description:\s*(.+)$/m.exec(await readFile(presetYml, 'utf8'))?.[1] ?? '';
-    const registered = (await readFile(pluginEntry, 'utf8')).match(/name:\s*'molbio_[a-z0-9_]+'/g)?.length ?? 0;
+  // The description moved from `preset.yml` into the preset row's `config`
+  // (0.1.7-alpha.1), because a bundle patch is now the whole declaration.
+  // `preset.yml` is still read as a fallback for a composition that predates the
+  // move.
+  const description = presetDescription(compositionText)
+    ?? (/^\s*description:\s*(.+)$/m.exec(existsSync(join(dirname(composition), 'preset.yml'))
+      ? await readFile(join(dirname(composition), 'preset.yml'), 'utf8')
+      : '')?.[1] ?? '');
+  // Count the tools from the package root entry: the preset row names the
+  // package, and Node resolves it from the profile's node_modules to exactly
+  // this file.
+  const countSource = join(dirname(resolve(composition)), '..', '..', 'index.mjs');
+  if (existsSync(countSource)) {
+    const registered = (await readFile(countSource, 'utf8')).match(/name:\s*'molbio_[a-z0-9_]+'/g)?.length ?? 0;
     countDrift.push(...toolCountDrift(description, registered));
   }
   if (countDrift.length > 0) {
@@ -458,7 +491,7 @@ async function main() {
     console.error('');
   }
 
-  if (failures.length > 0 || drift.length > 0 || mirrorDrift.length > 0 || countDrift.length > 0) {
+  if (failures.length > 0 || drift.length > 0 || relativeRow !== null || countDrift.length > 0) {
     if (failures.length > 0) {
       console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
       for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
@@ -466,16 +499,16 @@ async function main() {
     if (drift.length > 0) {
       console.error(`preset-health FAILED: ${drift.length} structural drift(s) from the shipped standard preset`);
     }
-    if (mirrorDrift.length > 0) {
-      console.error(`preset-health FAILED: ${mirrorDrift.length} file(s) in the active preset version directory are not the current sources`);
+    if (relativeRow !== null) {
+      console.error('preset-health FAILED: the preset tool row uses a relative specifier, which never resolves in a preset');
     }
     if (countDrift.length > 0) {
-      console.error(`preset-health FAILED: ${countDrift.length} tool-count claim(s) in preset.yml do not match the registered tools`);
+      console.error(`preset-health FAILED: ${countDrift.length} tool-count claim(s) do not match the registered tools`);
     }
     process.exit(1);
   }
-  console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, and the composition is the shipped standard plus tool-molbio`);
-  console.log(`mirror OK: ${activeMatch?.[1] ?? 'no version directory'} matches the package root module-for-module`);
+  console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, and the preset is the shipped standard plus the molbio rows`);
+  console.log(`specifier OK: the preset names the package (${selfName}), so Node resolves it from the profile — no copied directory to keep in sync`);
 }
 
 // `compositionDrift` is exported for `test/drift-probe.mjs`, which drives it
@@ -485,4 +518,4 @@ async function main() {
 // keeps `node test/preset-health.mjs` behaving exactly as before.
 if (import.meta.main) await main();
 
-export { compositionDrift, toolCountDrift };
+export { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch };

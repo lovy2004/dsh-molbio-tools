@@ -34,7 +34,7 @@ import {
   LIBRARY_FILE,
   childPath,
   classifyEntry,
-  decodeBase64Bytes,
+  decodeWorkspaceBytes,
   filterPapers,
   isOpenable,
   libraryTags,
@@ -63,6 +63,11 @@ const PAPERS_KIND = 'molbio-papers';
 /** Read one file's raw bytes through the workspace Remote. */
 async function readBytes(remote, sessionId, path, signal) {
   const scope = { sessionId };
+  // Feature-detect the METHOD, normalise the VALUE (see decodeWorkspaceBytes).
+  // DSH 0.1.7-alpha.1 dropped `readAll` and answers `readBytes` with a
+  // Uint8Array, so this fallback is the live path on every current install —
+  // and the bug it hides (feeding the raw bytes to a base64 decoder) is exactly
+  // why test/panel-render.mjs now drives a Remote that has no `readAll` at all.
   const result = typeof remote.workspaceFiles.readAll === 'function'
     ? await remote.workspaceFiles.readAll(scope, path, signal)
     : await remote.workspaceFiles.readBytes(scope, path, { offset: 0, length: 8 * 1024 * 1024 }, signal);
@@ -70,7 +75,7 @@ async function readBytes(remote, sessionId, path, signal) {
     const failure = result !== null && typeof result === 'object' ? result.error : undefined;
     throw new Error(failure?.message ?? `the workspace read of ${path} failed`);
   }
-  return decodeBase64Bytes(result.value.data);
+  return decodeWorkspaceBytes(result.value.data);
 }
 
 /** List one directory, newest-first ordering rules applied by the caller. */

@@ -1,10 +1,36 @@
-# dsh-molbio-tools bundle layer: inserts the molecular-biology tool plugin.
+# dsh-molbio-tools bundle layer: the molecular-biology toolset.
 #
-# The row references the package BY NAME (Node module resolution), so this
-# layer works identically for npm, git, link, and tarball installs.
+# ── WHY THIS LAYER NO LONGER INSERTS THE TOOL ITSELF ────────────────────────
 #
-# The plugin registers into the host `tools` registry and publishes no
-# service, so the row needs no isolate realm and no other configuration.
-- insert:
-    - id: tool-molbio
-      name: dsh-molbio-tools
+# This file used to insert a host-plane row:
+#
+#     - insert:
+#         - id: tool-molbio
+#           name: dsh-molbio-tools
+#
+# That registered all 57 tools into the profile's GLOBAL layer, so every session
+# — whichever preset it used — carried them. The molbio-lab preset then declared
+# the very same `tool-molbio` row inside its own `config.plugins`, and on DSH
+# 0.1.7-alpha.1 that combination left the preset's copy an entry that never
+# started:
+#
+#     broken: "tool-molbio (./plugins/dsh-molbio-tools-v20/index.mjs): never started"
+#
+# The preset mounted, but its tool row was dead — the mode appeared in the picker
+# and loaded no molbio tool at all. Repeating a module in two layers of one
+# composition is the mistake; the tool belongs to exactly ONE of them.
+#
+# It belongs to the PRESET: the whole point of the molbio-lab mode is that the 57
+# tools load for sessions that choose it and nowhere else. That row lives in
+# `preset/molbio-lab/agent.cordis.yml` (generated into `preset.patch.yml`), which
+# `package.json` declares as the SECOND entry of `dsh.bundle.patch`.
+#
+# ── WHAT THIS LAYER IS FOR NOW ─────────────────────────────────────────────
+#
+# It inserts nothing today. It is kept as the bundle's first patch layer because
+# it is the natural home for any future HOST-plane row the package needs (a
+# service, a command, a host-scoped tool) — and because removing a declared
+# patch file would break `dsh.bundle.patch` ordering for existing installs.
+#
+# A patch layer is a top-level YAML list; an empty one is the empty list.
+[]
