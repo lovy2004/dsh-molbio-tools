@@ -81,14 +81,28 @@ for (const target of TARGETS) {
   const { text, externalSpecifiers } = generator.renderBundle(manifest.name);
   const previous = existsSync(output) ? await readFile(output, 'utf8') : undefined;
   if (checkOnly) {
-    const state = previous === text ? 'up to date' : previous === undefined ? 'MISSING' : 'STALE';
+    // Compare CONTENT, not bytes. The generator emits LF; a checkout on Windows
+    // with `core.autocrlf=true` materializes the artifact with CRLF, so a raw
+    // `previous === text` reports a stale bundle for a file that is byte-for-byte
+    // the same content — and the check that guards the panel against shipping
+    // stale code then cries wolf on every Windows checkout, which is how a real
+    // staleness signal gets ignored. Line endings are not what this guards.
+    const normalize = (value) => (value === undefined ? undefined : value.replace(/\r\n/g, '\n'));
+    const state = normalize(previous) === normalize(text) ? 'up to date' : previous === undefined ? 'MISSING' : 'STALE';
     if (state !== 'up to date') process.exitCode = 1;
     console.log(`client bundle ${state}: ${output.replace(packageRoot, '.')} (${(text.length / 1024).toFixed(1)} KB) — ${target.label}`);
     continue;
   }
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, text, 'utf8');
-  written.push({ manifest, output, text, externalSpecifiers, label: target.label, changed: previous !== text });
+  written.push({
+    manifest,
+    output,
+    text,
+    externalSpecifiers,
+    label: target.label,
+    changed: (previous ?? '').replace(/\r\n/g, '\n') !== text.replace(/\r\n/g, '\n'),
+  });
 }
 
 if (checkOnly) {

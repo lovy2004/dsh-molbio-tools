@@ -55,42 +55,94 @@ benchmark can produce.
 ### Tiers and SELECTION: what to run after a change
 
 ```bash
-node benchmark/run.mjs --model --tools primer_tm      # just the tasks that touch molbio_primer_tm
-node benchmark/run.mjs --list  --tools "primer_*"     # see what that would select, no model call
-node benchmark/run.mjs --replay --tools primer_tm     # re-score recorded responses, free
+node benchmark/run.mjs --model --changed           # derive the tasks from the working tree
+node benchmark/run.mjs --list  --changed           # see that decision, no model call
+node benchmark/run.mjs --model --tools primer_tm   # just the tasks that touch molbio_primer_tm
+node benchmark/run.mjs --replay --changed          # re-score recorded responses, free
 ```
+
+`--changed` is the one to reach for by default. It answers "which of my changed
+files can a tool's behaviour depend on" from the code rather than from a
+hand-maintained table:
+
+```
+changed file → the module it is (.mjs in the package root)
+             → every module that transitively imports it
+             → every tool those modules implement
+             → every task covering those tools
+```
+
+Measured, and printed so the answer can be audited:
+
+```
+$ touch crispr.mjs && node benchmark/run.mjs --list --changed
+1 of 49 task(s) selected — --tools molbio_grna_design --changed
+  (from --changed; 2 module(s) affected: crispr.mjs, index.mjs)
+
+$ touch lib.mjs && node benchmark/run.mjs --list --changed
+48 of 49 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
+```
+
+`lib.mjs` selecting nearly everything is the **correct** answer, not a failure to
+narrow: it is a shared library most tools depend on, so a change there deserves the
+whole suite.
 
 `--tools` takes `molbio_primer_tm`, `primer_tm`, or `primer_*`; a name that
 matches nothing is a hard error (it is a typo, or a tool with no task — which
 `test/benchmark-coverage.mjs` reports as a gap). Selecting by tool is not a
-convenience wrapper: it is the intended default unit of work, because the rule
-below is "a changed tool re-runs ITS benchmark", and the previous selector made
-you work out which task that was by hand.
-
-That is why `--tools` bypasses the tier: a tool you name is a tool you changed,
-so its task runs even if it is full-only.
+convenience wrapper: it is the intended default unit of work, because the rule is
+"a changed tool re-runs ITS benchmark", and the previous selector made you work out
+which task that was by hand. `--tools` bypasses the tier: a tool you name is a tool
+you changed, so its task runs even if it is full-only.
 
 | selection | tasks | when |
 |---|---|---|
-| `--tools <name>` | the tasks covering that tool | you changed one tool |
+| `--changed` | the tasks the working tree affects | the default after any edit |
+| `--tools <name>` | the tasks covering that tool | you know exactly what you changed |
 | `--tools a,b,c` / `primer_*` | the union | you changed a few |
+| `--changed --tools X` | the INTERSECTION | "of what I changed, test X" |
 | (default) | **core** — 14 tasks | a broad smoke of the catalog |
-| `--tier full` | all 49, 57/57 tools | a shared-code change, or before a release |
+| `--tier full` | all 49, 57/57 tools | before a release |
+
+The two `--tools` operators are stated because confusing them is the difference
+between testing what you changed and testing **less** than that: alone it unions,
+with `--changed` it intersects. Intersecting can only ever run *less*, so it can
+never mask a change — the widening direction is the dangerous one, and it is never
+applied.
+
+### Why `--changed` cannot silently skip a broken tool
+
+The failure mode that matters is a skipped benchmark that would have failed, and it
+is invisible: a test that does not run is green. Every uncertain case therefore
+widens to the full suite, with the reason printed.
+
+| situation | outcome |
+|---|---|
+| no git, no HEAD, or the plugin structure unreadable | full run |
+| a file that is not a package module and not inert (new or renamed) | full run |
+| `index.mjs` (it binds every tool) | full run |
+| an affected tool that no task covers | full run |
+| a module **only** imported by other modules (`svgio.mjs`) | partial — its importers' tasks |
+| docs, changelog, `test/`, `benchmark/`, config | **`none`: nothing to run** |
+
+`none` is deliberately NOT `full`. A documentation commit that triggers 49 model
+calls is how a `--changed` default gets switched off and the full suite goes back
+to running every time — the exact behaviour this option exists to prevent. It is
+only reachable with an explicit `--changed`, so everything else still fails safe,
+and `test/benchmark-changed.mjs` asserts both directions.
 
 ### The part that still runs in full, on purpose
 
-A model run with `--tools` first executes the **whole** offline gate: all 49
-tasks' `where: "tool"` expectations are recomputed against the shipped tools
-(no model, a few hundred milliseconds). That is what makes partial runs safe —
-the expected values are re-proven for the tasks you skipped, so "skipped because
+A model run with `--changed` or `--tools` first executes the **whole** offline
+gate: all 49 tasks' `where: "tool"` expectations are recomputed against the shipped
+tools (no model, a few hundred milliseconds). That is what makes partial runs safe
+— the expected values are re-proven for the tasks you skipped, so "skipped because
 unchanged" is a checked claim, not a remembered one.
 
 Its blind spot is the same as ever: the offline gate sees a tool's OUTPUT, never
-whether a model still reaches for it. So the rule is:
-
-- changed a tool's implementation or description → `--tools <that tool>`;
-- changed a shared module with unclear reach → `--tier full`.
-
+whether a model still reaches for it. So a changed tool means `--changed`; a
+changed shared module also means `--changed`, which will widen to the full suite on
+its own.
 ### Layout
 
 ```

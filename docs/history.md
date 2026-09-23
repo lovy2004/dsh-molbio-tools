@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.15.2 | — | 按改动自动选任务（`--changed`）；修 client bundle 的 CRLF 误报 | 57 |
 | 0.15.1 | — | benchmark 可按工具选择（`--tools`），`covers` 虚报守卫 | 57 |
 | 0.15.0 | — | benchmark 扩到 57/57 个工具（49 题，分 core/full 档）；**查出引物方向缺陷**；插件行为零变化 | 57 |
 | 0.14.0 | — | 文档重构（rules/workflow/roadmap/history）+ 首个可用性 benchmark；插件行为零变化 | 57 |

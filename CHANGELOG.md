@@ -10,6 +10,92 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.15.2] — 2026-09-23（`--changed`：按改动自动选任务；修 client bundle 的 CRLF 坑）
+
+**工具数、插件行为、benchmark 题目均未改动。** 这一版让"改哪里测哪里"成为默认，
+并修掉一个让"产物是否过期"这道守卫在 Windows 上喊狼来了的构建缺陷。
+
+### 1. `--changed`：从改动反推该跑哪些题
+
+```bash
+node benchmark/run.mjs --model --changed      # 只跑受影响的题；或告诉你"无事可跑"
+node benchmark/run.mjs --list  --changed      # 先看判断结果，零成本
+```
+
+它**不是手写映射表**，而是从代码量出来的：
+
+```
+改动的文件 → 它是哪个模块（包根目录的 .mjs 集合）
+           → 哪些模块（传递地）import 它
+           → 那些模块用到的每个工具
+           → 覆盖这些工具的每道题
+```
+
+实测：
+
+```
+$ touch crispr.mjs && node benchmark/run.mjs --list --changed
+1 of 49 task(s) selected — --tools molbio_grna_design --changed
+  (from --changed; 2 module(s) affected: crispr.mjs, index.mjs)
+
+$ touch lib.mjs && node benchmark/run.mjs --list --changed
+48 of 49 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
+```
+
+`lib.mjs` 选中几乎全部是**正确答案**而不是"收窄失败"：它是几乎每个工具都依赖的共享库。
+
+### 2. 首要目标是**不漏测**，所以不确定一律放大
+
+漏测的失效模式是"没跑的测试是绿的"，不可见。因此每一种不确定都回落到全量并**打印原因**：
+
+| 情况 | 结果 |
+|---|---|
+| 没有 git / 没有 HEAD / 读不到插件结构 | 全量 |
+| 认不出的文件（新模块、改名） | 全量 |
+| `index.mjs`（它绑定全部工具） | 全量 |
+| 受影响的工具没有任何任务覆盖 | 全量 |
+| **只被别的模块 import** 的模块（如 `svgio.mjs`） | 局部——它 importers 的题 |
+| 文档、CHANGELOG、`test/`、`benchmark/`、配置 | **`none`：无事可跑** |
+
+`none` **刻意不等于** `full`：一次文档提交如果触发 49 次模型调用，`--changed` 这个默认值
+就会被人关掉，然后全量又变成每次都跑——正是这个开关要终结的行为。它只在显式
+`--changed` 时可达，其余一切照旧 fail-safe；两个方向都由 `test/benchmark-changed.mjs` 断言。
+
+### 3. `--tools` 与 `--changed` 的两个算子
+
+| 写法 | 含义 |
+|---|---|
+| `--tools X` | 按名字选 X（**并集**语义） |
+| `--changed --tools X` | **交集**：在受影响集合里只留 X |
+
+交集只会**减少**运行量，永远不会掩盖改动（危险方向是放大），所以允许；
+输出里两个算子都打印，因为搞混它们就是"测了改动"和"测得比改动还少"的区别。
+
+### 4. 修：client bundle 的 CRLF 让"产物过期"守卫在 Windows 上误报
+
+`build/client-bundle-core.mjs` 在嵌入源码时按 `\n` 切行再逐行缩进，**没有先归一 CRLF**：
+以 `\r` 结尾的行会被缩进追加在回车**之后**，于是产物长出源码里没有的尾随空白行——
+**产物内容取决于 checkout 用的是 LF 还是 CRLF**。
+
+后果是一道守卫失去可信度：`build/client-bundle.mjs --check` 用 `previous === text` 比**字节**，
+而 Windows 上 `core.autocrlf` 会把产物物化成 CRLF，于是**内容完全相同也报 STALE**。
+一个总在喊狼来了的守卫，等于没有守卫——正是它挡住了 `npm test`（`contract.mjs` 的
+"产物新鲜度"那一条在本次会话里先报 FAIL，追下去才发现根因）。
+
+两处都修好：生成器归一 CRLF（产物平台无关），检查器比**内容**而非字节。修完后
+`node build/client-bundle.mjs` 重新生成的产物与已提交的那份**逐字节相同**——
+即 0.15.2 **不需要更新任何产物**，只是让守卫恢复了它本该有的信号。
+
+### 发版清单
+
+| 项 | 内容 |
+|---|---|
+| 工具数 / 插件 | 不变 / 未改 |
+| 客户端产物 | **未变**（修好后重建结果与已提交的一致，`git diff` 为空） |
+| 新增 | `benchmark/changed.mjs`、`test/benchmark-changed.mjs` |
+| 改 | `benchmark/run.mjs`（选择器 + `--changed`）、`build/client-bundle.mjs`、`build/client-bundle-core.mjs`、`benchmark/README.md`、`docs/workflow.md`、`package.json` |
+| 预检 | `npm test`（**14 项**全绿） |
+
 ## [0.15.1] — 2026-09-23（benchmark 可按工具选择：`--tools`）
 
 **工具数、插件行为、benchmark 题目本身都未改动。** 这一版只修一件事：

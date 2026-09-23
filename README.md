@@ -561,8 +561,11 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 跑 **core 档 14 题**，`npm run bench:full` 跑**全部 49 题（覆盖 57/57 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
-> benchmark 任务并重跑；没有改动就不必重跑。`test/benchmark-coverage.mjs` 会拦住"新工具
-> 没有任务"（断言 57/57 覆盖），`bench --offline` 会拦住"期望值过期"。完整对照表见
+> benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
+> `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
+> （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 57/57 覆盖），
+> `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
 > **benchmark 已经查出的一个真实缺陷**：`molbio_design_primers` 返回的引物对把

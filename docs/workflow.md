@@ -242,51 +242,89 @@ offline 证明"期望值仍然为真"，model 测量"模型是否仍然会用"�
 
 | 场景 | 命令 | 代价 |
 | --- | --- | --- |
+| **日常：改完就直接测** | `node benchmark/run.mjs --model --changed` | **只跑受影响的那几题**，或明确告诉你"无事可跑" |
 | 改了**一个**工具 | `node benchmark/run.mjs --model --tools <工具名>` | 该工具涉及的题 |
 | 改了**几个**工具 | `--tools a,b,c`（也接受 `molbio_` 前缀与 `primer_*` 通配） | 并集 |
 | 改了**一个**已知任务 | `--task <id>` | 一题 |
-| 改了**一个领域** | 按 `--list --tier full` 里该类别逐个 `--tools` | 几题 |
-| 改了**共享代码**（`lib.mjs`、`svgio.mjs` 等） | `node --run bench:full` | 49 题 |
+| 改了**共享模块**，想知道影响面 | `--list --changed`（不花钱） | 0 |
 | 发版前 | `node --run bench:full` | 49 题 |
-| 只是提交文档/客户端 | 不跑 | 0 |
+| 只是提交文档 | `--changed` 会回答"无事可跑" | 0 |
 
 ```bash
-# 我改了 molbio_primer_tm，只想跑它涉及的题
-node benchmark/run.mjs --model --tools primer_tm
-#   selected 1 of 49 task(s) — --tools molbio_primer_tm (skipping 48)
+# 改完代码的第一选择：让工具自己判断该跑什么
+node benchmark/run.mjs --list  --changed        # 先看判断结果，零成本
+node benchmark/run.mjs --model --changed        # 再花 tokens 跑那几题
 
-# 先看看会选到哪些题（不花 tokens）
-node benchmark/run.mjs --list --tools "primer_*"
+# 我明确知道自己改了 molbio_primer_tm
+node benchmark/run.mjs --model --tools primer_tm
 
 # 改断言之后：用记录下来的响应免费复算，不用重跑模型
-node benchmark/run.mjs --replay --tools primer_tm
+node benchmark/run.mjs --replay --changed
 ```
 
-`--tools` 认三种写法：`molbio_primer_tm`、`primer_tm`、`primer_*`；**匹配不到任何任务直接报错**
-（2 号退出码），因为那要么是拼错了，要么是该工具没有任务——后者
-`test/benchmark-coverage.mjs` 会当成缺口报出来。
+### `--changed` 怎么判断（以及它为什么不会漏）
 
-**`npm run bench`（无参数）仍然只跑 core 档 14 题。** 选了 `--tools` 就不看档位——
-你点名的工具，它所在的题一定跑，哪怕那题是 full-only。
+它**不是**一张手写的映射表，而是从代码里量出来的：
 
-### 关键：即使只跑一个工具，两道离线门仍然跑**全量**
+```
+改动的文件 → 它属于哪个模块（目录里的 .mjs 集合）
+           → 哪些模块（传递地）import 了它
+           → 那些模块用到的每一个工具
+           → 覆盖这些工具的每一道题
+```
+
+两个具体例子（实测输出）：
+
+```
+$ touch crispr.mjs && node benchmark/run.mjs --list --changed
+1 of 49 task(s) selected — --tools molbio_grna_design --changed
+  (from --changed; 2 module(s) affected: crispr.mjs, index.mjs)
+
+$ touch lib.mjs && node benchmark/run.mjs --list --changed
+48 of 49 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
+```
+
+注意 `crispr.mjs` 的影响面里有 `index.mjs`，而 `lib.mjs` 几乎选中全部——**这正是正确答案**：
+`lib.mjs` 是几乎每个工具都依赖的共享库，改它本来就该重测全部。
+
+**宁可多跑，绝不漏跑**，四条具体规则：
+
+1. **不可判定 → 全量**：没有 git / 没有 HEAD / 读不到插件结构，一律回落全量并打印原因；
+2. **认不出的文件 → 全量**：新模块、重命名的文件（`not in the plugin's module set`）；
+3. **`index.mjs` → 全量**：它是绑定全部工具的那个入口；
+4. **映射到的工具有题没覆盖 → 全量**（并由 `test/benchmark-coverage.mjs` 断言 57/57 覆盖）。
+
+反过来，**唯一会返回"无事可跑"的情况**是改动**可证明**不影响工具行为：`docs/`、
+`CHANGELOG.md`、`README.md`、`test/`、`benchmark/`、`package.json`。这不是走后门——
+它和 `--changed` 是同一个开关，不写 `--changed` 时一切都照旧跑。
+
+### `--changed` 与 `--tools` 的两个算子
+
+| 写法 | 含义 |
+| --- | --- |
+| `--changed` | **并集**？不——它只选"受影响的工具" |
+| `--tools X` | 只按名字选 X |
+| `--changed --tools X` | **交集**：在我改动的工具里，只跑 X |
+
+交集只能**减少**运行量，永远不会掩盖改动（危险方向是放大），所以它被允许；
+两者都打印自己的算子，因为搞混这两个就是"测了改动"和"测得比改动还少"的区别。
+
+### 仍然照跑全量的那一半
+
+`--changed` 只决定**跑哪些题**；只要开始跑，两道离线门仍然跑**全量**（几百毫秒、不调模型）：
 
 ```bash
-node benchmark/run.mjs --model --tools primer_tm
-# 内部先执行完整的 scoreSuiteOffline()：49 条任务的 where:"tool" 断言全部重算一遍
+node benchmark/run.mjs --model --changed
+# 内部先执行完整 scoreSuiteOffline()：49 条 where:"tool" 断言全部重算
 ```
 
-这不是浪费，而是这套"只跑一部分"能成立的前提。离线门几百毫秒、不调模型，它证明的是
-**"所有任务的期望值仍然等于工具的真实输出"**。于是可以安全地跳过一个任务的模型运行，
-当且仅当它没被改动——而"没被改动"这件事由离线门 + git 帮你确认，不靠记忆。
+这是"只跑一部分"能成立的**前提**——它把"跳过是因为没改"从记忆变成受检的断言。
+它的盲区照旧：离线门只看工具**输出**，看不见"模型还选不选得对"。所以：
 
-**反过来，这也是 `--tools` 唯一的盲区**：离线门只看**单次调用的输出**，看不见"模型还选不选得对"。
-所以：
+- 改工具实现/描述 → `--changed`（或 `--tools <它>`）；
+- **改共享模块** → `--changed` 会自动放大到全量，这正是它该做的事。
 
-- 改了某工具的**实现或描述** → `--tools <它>`；
-- 改了**共享模块**（影响面说不清）→ `--tier full`。
-
-### 新增/改动 benchmark 任务的三步
+**新增/改动 benchmark 任务的三步**
 
 1. 在 `benchmark/tasks/*.json` 加或改任务（`covers` 必须列出它练的工具）；
 2. 在 `benchmark/verifications.mjs` 的 `invocationsFor` 里加产生这些期望值的调用；

@@ -97,7 +97,7 @@ async function collect(entry, baseDir) {
   const visit = async (path, stack) => {
     if (modules.has(path)) return;
     if (stack.includes(path)) throw new Error(`import cycle: ${[...stack, path].map(short).join(' -> ')}`);
-    const source = await readFileAsync(path, 'utf8');
+    const source = (await readFileAsync(path, 'utf8')).replace(/\r\n/g, '\n');
     const parsed = parseModule(source, short(path));
     for (const entry of [...parsed.imports, ...parsed.reexports]) {
       if (EXTERNALS.has(entry.specifier)) continue;
@@ -168,7 +168,14 @@ export async function createGenerator({ entry, baseDir }) {
     }
     for (const path of order) {
       const parsed = modules.get(path);
-      const source = readFileSync(path, 'utf8');
+      // Normalize CRLF before embedding. The embedder INDENTS each source line,
+      // and a line ending in `\r` gets the indent appended AFTER the carriage
+      // return, so the artifact silently grows trailing-whitespace lines that the
+      // input never had — and the result depended on whether the checkout
+      // materialized the sources with LF or CRLF. Normalizing here makes the
+      // bundle byte-identical on every platform, which is what lets the
+      // staleness check be a content comparison.
+      const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
       const body = lower(path, source, modulePaths, externalBindings);
       parts.push(`\t\t__molbio_modules[${JSON.stringify(moduleId(path, baseDir))}] = () => {`);
       parts.push('\t\t\tconst exports = {};');

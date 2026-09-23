@@ -29,6 +29,7 @@ import { join, resolve } from 'node:path';
 
 import { findHarnessRoot, harnessVersion, launcherCommand } from './harness.mjs';
 import { PROFILE_NAME } from './profile.mjs';
+import { changedFiles, resolveChanged } from './changed.mjs';
 import { foldEvents, loadTasks, renderInstruction, scoreSuiteOffline, scoreTrace, tasksForTier } from './score.mjs';
 import { makeWorkspace } from './tools.mjs';
 import { FIXTURES } from './sequences.mjs';
@@ -295,7 +296,7 @@ export function renderMarkdown(report) {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 /**
- * Resolve a `--tools` / `--task` selection into the tasks to run.
+ * Resolve a `--tools` / `--task` / `--changed` selection into the tasks to run.
  *
  * ── Why this exists ────────────────────────────────────────────────────────
  *
@@ -306,21 +307,24 @@ export function renderMarkdown(report) {
  * the author of this file) ran the full suite every time, which is the wrong
  * cost for a one-tool change.
  *
- * `--tools` also closes a hole `--task` left open: editing a tool that several
- * tasks exercise used to mean finding all of them by hand.
- *
  * A name that matches nothing is a HARD ERROR rather than an empty run: the
  * likely causes are a typo or a tool that no task covers, and both should be
  * loud. (The second is also caught by `test/benchmark-coverage.mjs`.)
  *
- * @param {{tasks: object[], tools?: string, task?: string, tier: string}} options
- * @returns {{selected: object[], skipped: object[], tools: string[]}}
+ * `--changed` is the third form: derive the tools from the working tree via
+ * `benchmark/changed.mjs`, whose design leans toward running MORE than
+ * necessary. It composes with `--tools` by INTERSECTION — "of the tools I
+ * changed, test these" — which can only ever run less, never mask a change.
+ *
+ * @param {{tasks: object[], tools?: string, task?: string, changed?: boolean, tier: string,
+ *          files?: string[]|undefined}} options
+ * @returns {{selected: object[], skipped: object[], tools: string[], mode: string, reason?: string}}
  */
 export function selectTasks(options) {
   const { tasks } = options;
 
-  if (options.task !== undefined && options.tools !== undefined) {
-    throw new Error('benchmark: --task and --tools are mutually exclusive');
+  if (options.task !== undefined && (options.tools !== undefined || options.changed === true)) {
+    throw new Error('benchmark: --task cannot be combined with --tools or --changed');
   }
 
   if (options.task !== undefined) {
@@ -333,34 +337,97 @@ export function selectTasks(options) {
         `benchmark: no task with id "${options.task}"${near.length > 0 ? ` — did you mean ${near.map((id) => `"${id}"`).join(' or ')}?` : ''}`,
       );
     }
-    return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools: [] };
+    return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools: [], mode: 'task' };
+  }
+
+  if (options.changed === true) {
+    const decision = resolveChanged({ tasks, files: options.files ?? changedFiles() });
+    if (decision.mode === 'none') return { selected: [], skipped: tasks, tools: [], mode: 'none', reason: decision.reason };
+    if (decision.mode === 'full') {
+      // `--changed` alone falls back to the whole suite when it cannot narrow.
+      // But `--changed --tools X` still narrows: the user has named the tools
+      // they care about, and answering "everything" would ignore them.
+      if (options.tools === undefined) {
+        return { selected: tasks, skipped: [], tools: [], mode: 'full', reason: decision.reason };
+      }
+      const named = resolveToolNames(options.tools, tasks);
+      const narrowed = tasks.filter((task) => task.covers.some((tool) => named.includes(tool)));
+      return {
+        selected: narrowed,
+        skipped: tasks.filter((task) => !narrowed.includes(task)),
+        tools: named,
+        mode: 'tools',
+        reason: `--changed could not narrow (${decision.reason}); --tools chose the tasks instead`,
+      };
+    }
+
+    const affected = decision.tools;
+    let selected = decision.tasks;
+    let tools = affected;
+    // `--tools` alongside `--changed` INTERSECTS, and `--tools` alone UNIONS.
+    // The two operators are printed, because getting them confused is the
+    // difference between testing what you changed and testing less than that.
+    let operator = 'from --changed';
+    if (options.tools !== undefined) {
+      const wanted = resolveToolNames(options.tools, tasks);
+      const keep = wanted.filter((tool) => affected.includes(tool));
+      if (keep.length === 0) {
+        throw new Error(
+          `benchmark: --tools ${wanted.join(', ')} is disjoint from the tools the changed files affect\n` +
+            `  affected: ${affected.join(', ')}\n` +
+            '  Drop --tools to run all of them, or fix the tool names.',
+        );
+      }
+      selected = selected.filter((task) => task.covers.some((tool) => keep.includes(tool)));
+      tools = keep;
+      operator = `intersected with --tools (affected ${affected.length})`;
+    }
+    return {
+      selected,
+      skipped: tasks.filter((task) => !selected.includes(task)),
+      tools,
+      mode: 'partial',
+      operator,
+      reason: `${decision.modules.length} module(s) affected: ${decision.modules.join(', ')}`,
+    };
   }
 
   if (options.tools === undefined) {
     const selected = tasksForTier(tasks, options.tier);
-    return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools: [] };
+    return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools: [], mode: 'tier' };
   }
 
-  // Accept `molbio_primer_tm`, `primer_tm`, comma/space separated lists, and `*`
-  // globs — because the useful input is "the tools I just edited", copied from
-  // the file or the changelog, and making the caller normalize that is friction
-  // with no payoff.
-  const wanted = options.tools
+  const tools = resolveToolNames(options.tools, tasks);
+  const selected = tasks.filter((task) => task.covers.some((tool) => tools.includes(tool)));
+  return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools, mode: 'tools' };
+}
+
+/**
+ * Turn a `--tools` value into canonical tool names.
+ *
+ * Accepts `molbio_primer_tm`, `primer_tm`, comma/space separated lists, and `*`
+ * globs — because the useful input is "the tools I just edited", copied from the
+ * file or the changelog, and making the caller normalize that is friction with no
+ * payoff.
+ *
+ * @param {string} value the raw flag value.
+ * @param {object[]} tasks the suite, for the set of covered tools.
+ * @returns {string[]} canonical tool names.
+ */
+function resolveToolNames(value, tasks) {
+  const covered = new Set(tasks.flatMap((task) => task.covers));
+  const wanted = value
     .split(/[,\s]+/)
     .map((name) => name.trim())
     .filter((name) => name !== '');
   if (wanted.length === 0) throw new Error('benchmark: --tools needs at least one name');
 
-  const covered = new Set(tasks.flatMap((task) => task.covers));
   const resolveOne = (pattern) => {
     const bare = pattern.startsWith('molbio_') ? pattern : `molbio_${pattern}`;
     if (!pattern.includes('*')) return covered.has(bare) ? [bare] : [];
     const expression = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
     return [...covered].filter((tool) => expression.test(tool) || expression.test(tool.replace('molbio_', '')));
   };
-
-  /** Report a name the way the caller wrote it, not with a prefix they omitted. */
-  const asWritten = (pattern, resolved) => (pattern.startsWith('molbio_') ? resolved : resolved.replace('molbio_', ''));
 
   const tools = [];
   const unmatched = [];
@@ -377,21 +444,29 @@ export function selectTasks(options) {
         '  `node benchmark/run.mjs --list --tier full` prints every task and the tools it covers.',
     );
   }
-
-  const unique = [...new Set(tools)];
-  const selected = tasks.filter((task) => task.covers.some((tool) => unique.includes(tool)));
-  return {
-    selected,
-    skipped: tasks.filter((task) => !selected.includes(task)),
-    tools: unique.map((tool) => asWritten(options.tools, tool)),
-  };
+  return [...new Set(tools)].sort();
 }
-
-/** One line describing how a selection was narrowed, for the run header. */
-function describeSelection(options, tools) {
-  if (tools.length > 0) return ` — --tools ${tools.join(', ')}`;
-  if (options.task !== undefined) return ` — --task ${options.task}`;
-  return ` — tier ${options.tier} (add --tools <name> or --tier full for more)`;
+/**
+ * One line describing how a selection was narrowed, for a run header.
+ *
+ * `--changed` prints its REASON (which modules were affected, or why it fell
+ * back to everything) because the whole point of the flag is that its decisions
+ * are auditable. A bare "49 tasks selected" would leave the reader unable to
+ * tell a precise answer from a conservative one.
+ */
+function describeSelection(options, selection, tasks) {
+  const parts = [];
+  if (selection.tools.length > 0) {
+    parts.push(`--tools ${selection.tools.length <= 6 ? selection.tools.join(', ') : `${selection.tools.length} tool(s)`}`);
+  }
+  if (options && options.task !== undefined) parts.push(`--task ${options.task}`);
+  if (options && options.changed === true) parts.push('--changed');
+  if (parts.length === 0) parts.push(`tier ${options ? options.tier : 'core'}`);
+  const head = ` — ${parts.join(' ')}`;
+  const notes = [];
+  if (selection.operator !== undefined) notes.push(selection.operator);
+  if (selection.reason !== undefined && selection.reason !== '') notes.push(selection.reason);
+  return notes.length === 0 ? head : `${head} (${notes.join('; ')})`;
 }
 
 /** Parse the small flag set this CLI accepts, refusing anything else. */
@@ -400,6 +475,7 @@ function parseArgs(argv) {
     mode: undefined,
     task: undefined,
     tools: undefined,
+    changed: false,
     tier: 'core',
     keep: false,
     skipPreflight: false,
@@ -428,6 +504,7 @@ function parseArgs(argv) {
       }
     } else if (value === '--task') options.task = argv[++index];
     else if (value === '--tools') options.tools = argv[++index];
+    else if (value === '--changed') options.changed = true;
     else if (value === '--timeout') options.timeoutMs = Number(argv[++index]);
     else if (value === '--all' || value === '--tier') {
       // `--all` is the shorthand people reach for; `--tier full` is the explicit
@@ -455,13 +532,17 @@ async function main() {
   }
 
   if (options.mode === 'list') {
-    const selection = selectTasks({ tasks, tools: options.tools, task: options.task, tier: options.tier });
+    const selection = selectTasks({ tasks, tools: options.tools, task: options.task, changed: options.changed, tier: options.tier });
     for (const task of selection.selected) {
       console.log(`${task.id}  [${task.category}/${task.tier}]  covers: ${task.covers.join(', ')}`);
       console.log(`    ${renderInstruction(task).split('\n')[0].slice(0, 110)}`);
     }
+    if (selection.mode === 'none') {
+      console.log(`\nnothing to run — ${selection.reason}`);
+      return;
+    }
     const core = tasks.filter((task) => task.tier === 'core').length;
-    console.log(`\n${selection.selected.length} of ${tasks.length} task(s) selected` + describeSelection(options, selection.tools));
+    console.log(`\n${selection.selected.length} of ${tasks.length} task(s) selected${describeSelection(options, selection, tasks)}`);
     console.log(`tiers: ${core} core, ${tasks.length - core} full-only · tools covered by the suite: ${new Set(tasks.flatMap((task) => task.covers)).size}`);
     return;
   }
@@ -500,13 +581,13 @@ async function main() {
     }
     // Same selector as a model run, so "replay what I just changed" is the same
     // command shape as "run what I just changed".
-    const selection = selectTasks({ tasks, tools: options.tools, task: options.task, tier: options.tier });
+    const selection = selectTasks({ tasks, tools: options.tools, task: options.task, changed: options.changed, tier: options.tier });
     const replay = replayReport({
       report,
       taskList: { tasks },
       keep: selection.selected.length === tasks.length ? undefined : new Set(selection.selected.map((task) => task.id)),
     });
-    console.log(`replaying ${reportPath}${describeSelection(options, selection.tools)}`);
+    console.log(`replaying ${reportPath}${describeSelection(options, selection, tasks)}`);
     console.log(`  recorded: ${replay.before.passed}/${replay.before.total} passed (whole run)`);
     let changed = 0;
     for (const result of replay.results) {
@@ -544,15 +625,21 @@ async function main() {
     process.exit(2);
   }
 
-  const selection = selectTasks({ tasks, tools: options.tools, task: options.task, tier: options.tier });
+  const selection = selectTasks({ tasks, tools: options.tools, task: options.task, changed: options.changed, tier: options.tier });
   const selected = selection.selected;
+  if (selection.mode === 'none') {
+    // Not a failure: it is the answer. Printing it costs nothing and is the
+    // whole reason `--changed` is usable as a default.
+    console.error(`nothing to run — ${selection.reason}`);
+    process.exit(0);
+  }
   if (selected.length === 0) {
     console.error('benchmark: the selection matched no tasks');
     process.exit(2);
   }
   const core = tasks.filter((task) => task.tier === 'core').length;
   console.error(
-    `selected ${selected.length} of ${tasks.length} task(s)${describeSelection(options, selection.tools)}` +
+    `selected ${selected.length} of ${tasks.length} task(s)${describeSelection(options, selection, tasks)}` +
       ` (skipping ${selection.skipped.length}; tiers: ${core} core, ${tasks.length - core} full-only)`,
   );
 
