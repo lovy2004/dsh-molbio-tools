@@ -10,6 +10,41 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.13.1] — 2026-09-22（适配 DSH 0.1.7-alpha.2；修 preset 排序碰撞）
+
+**alpha.2 对插件是兼容的**，逐项实测过（不是"看代码觉得对"）：
+
+| 检查 | 结果 |
+|---|---|
+| 10 个套件（静态契约） | 全绿；`contract` 15/15、`drift-probe` 11/11、`preset-health` 30 行 |
+| 上游 `standard` preset（drift 基线） | **逐行未变**，本包行清单无需改动 |
+| `dsh-agent-preset` / `-registry` 的 Config schema | **未变**（仍只要求 `id`+`plugins` / `default`） |
+| **运行时**（scratch profile + 换端口起服务） | `agentPresets/list` 的 `broken` **为空**；`pluginInventory/list` 里 `tool-molbio` = **`fiberPhase: active`**，且**只**出现在 `molbio-lab`，其余四个 preset 与全局层都没有它 |
+
+最后一行是关键：上一轮的教训是**静态 `--dump-config` 看不出 preset 是否真的活着**，所以这次按
+`docs/maintainer.md` 的判据做了真实运行时验证，而不是只跑测试。
+
+### 修复：preset 的 `order: 2` 与上游 `ptc` 撞号
+
+上一轮给本包 preset 写的 `order: 2` **与 DSH 自带的 `ptc` 相同**（上游占用 standard=1、
+ptc=2、minimal=3、cordis=4）。注册表按 `order ?? Infinity` 排序、**平手时以
+`id.localeCompare` 兜底**，于是 `molbio-lab` 与 `ptc` 的先后变成字母序的偶然——实测它被排到了
+**最后**，而不是列表中该在的位置。
+
+改为 `order: 5`（上游之外的空号），顺序确定：standard → ptc → minimal → cordis → molbio-lab。
+
+`preset-health.mjs` 增加**排序碰撞守卫**：本包 preset 的 order 若与任何上游 preset 相同即 FAIL，
+并用突变实验证明它会失败（把 order 改回 2）：
+
+```
+preset-health FAILED: 1 preset order collision(s) with a shipped preset
+  - order 2 is already taken by the shipped preset "ptc" (ptc.patch.yml)
+```
+
+这条守卫防的是"肉眼看不出、只在选择器里顺序怪"的那类回归。
+
+工具仍 57；无版本目录；包版本 0.13.0 → **0.13.1**。
+
 ## [0.13.0] — 2026-09-18（适配 DSH 0.1.7-alpha.1：修掉面板读文件全坏 + preset 迁移；工具仍 57）
 
 **这一版是被 DSH 升级"考"出来的**，两个问题都属于本仓库最在意的那一类——**测试全绿，功能却坏了**。

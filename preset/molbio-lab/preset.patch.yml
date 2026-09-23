@@ -10,12 +10,16 @@
 # layer inserts. Because the BUNDLE registers it, `dsh plugin --profile <p> add
 # dsh-molbio-tools` puts the mode in the picker with no copy step and no
 # preset-root patch — see README「安装」.
+#
+# `order: 5` is deliberate: the shipped presets occupy 1..4 (standard, ptc,
+# minimal, cordis) and the registry sorts by `order` with an id tie-break, so a
+# shared number would let the picker order depend on alphabetical accident.
 - insert:
     - id: preset-molbio-lab
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: molbio-lab
-        order: 2
+        order: 5
         name: Molecular Biology Lab
         description: "分子生物学专属模式：标准编码能力 + 57 个 molbio_* 工具（序列分析、引物设计（含跨内含子 qPCR、盐/浓度旋钮与目标位置偏好）、TaqMan 水解探针设计与多重 PCR 互扰检查、克隆模拟与选酶（含 Golden Gate）、酶目录查询、甲基化敏感位点与双酶切 buffer 兼容检查、多序列比对（每个输入残基都会进比对结果）与保守性分析（含 sequence logo 图）、CRISPR gRNA 设计与脱靶搜索、SnapGene/GenBank 解析与质粒图谱、Sanger 测序验证、蛋白性质/密码子优化/螺旋轮投影与疏水性图、qPCR 与绘图、虚拟凝胶、实验台分析（FASTQ 质控、密码子使用、系统发生树（长叶名自动折行）、in-silico PCR、CpG/GC 组成）——生成的 SVG 图片自动用系统默认应用打开，文献/协议/实验记录）。"
         plugins:

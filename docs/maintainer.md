@@ -244,6 +244,18 @@ curl.exe -s -b jar -X POST http://127.0.0.1:3099/api/agentPresets/list `
 `/api/...` 的请求体必须带外层 envelope（`type`/`rpcId`/`method`/`payload.args`），
 只发 `{}` 只会得到 `arguments-invalid`。验证完删掉 scratch profile。
 
+### preset 的 `order` 不得与上游撞号
+
+`build/preset-patch.mjs` 里写死的 `order: 5` 是有意的：DSH 自带的 preset 占用
+**standard=1、ptc=2、minimal=3、cordis=4**，而注册表按
+`(a.order ?? Infinity) - (b.order ?? Infinity) || a.id.localeCompare(b.id)` 排序。
+撞号的后果不是报错，而是**选择器里的顺序变成字母序的偶然**——0.13.0 曾写成 `order: 2`
+（与 `ptc` 相同），实测 `molbio-lab` 被排到了**最后**。
+
+`test/preset-health.mjs` 现在会把本包 preset 的 order 与 `<harness>/…/dsh-web-app/presets/*.patch.yml`
+里每个上游 preset 的 order 对比，**相同即 FAIL**（并已用突变实验验证会失败）。
+DSH 若新增 preset 占了 5，把这里的 order 改成下一个空号即可。
+
 > **版本目录已删除（0.13.0）。** `preset/molbio-lab/plugins/dsh-molbio-tools-vN/` 整体不复存在。
 > 那套机制是为规避**相对文件 URL** 的 ESM 模块缓存：preset 行写相对路径，于是每次发版都要把
 > 全部 `.mjs` 复制进一个**新目录**（删除前累计 195 个文件 / 5.2 MB）。preset 行改用**包名**后，

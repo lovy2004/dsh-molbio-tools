@@ -46,10 +46,11 @@
 # `tool-molbio` row. Everything besides those — every comment, every row, every
 # config key, in upstream's ORDER — is upstream text copied verbatim.
 #
-# Baseline: the `standard` preset of dsh 0.1.7-alpha.1 (harness root
+# Baseline: the `standard` preset of dsh 0.1.7-alpha.2 (harness root
 # `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`, file
 # `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`, whose
-# rows live under the `preset-standard` row's `config.plugins:`).
+# rows live under the `preset-standard` row's `config.plugins:`). Verified
+# identical to 0.1.7-alpha.1 — the alpha.2 bump needed no row edit here.
 #
 # Keeping the text verbatim is not cosmetic: a preset mounts DSH's OWN
 # packages, so upstream drift here kills the whole preset at mount (the failure

@@ -69,6 +69,10 @@ export function buildPatch({ rows, description, displayName = 'Molecular Biology
     '# layer inserts. Because the BUNDLE registers it, `dsh plugin --profile <p> add',
     '# dsh-molbio-tools` puts the mode in the picker with no copy step and no',
     '# preset-root patch — see README「安装」.',
+    '#',
+    '# `order: 5` is deliberate: the shipped presets occupy 1..4 (standard, ptc,',
+    '# minimal, cordis) and the registry sorts by `order` with an id tie-break, so a',
+    '# shared number would let the picker order depend on alphabetical accident.',
   ].join('\n');
 
   return [
@@ -78,7 +82,7 @@ export function buildPatch({ rows, description, displayName = 'Molecular Biology
     "      name: '@deepseek-ai/dsh-agent-preset'",
     '      config:',
     '        id: molbio-lab',
-    '        order: 2',
+    '        order: 5',
     `        name: ${displayName}`,
     `        description: ${JSON.stringify(description)}`,
     '        plugins:',

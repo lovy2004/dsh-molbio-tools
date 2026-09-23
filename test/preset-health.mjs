@@ -34,7 +34,7 @@
  * installed DSH's shipped `standard` preset, with the harness root discovered
  * from the global npm prefix.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -491,7 +491,40 @@ async function main() {
     console.error('');
   }
 
-  if (failures.length > 0 || drift.length > 0 || relativeRow !== null || countDrift.length > 0) {
+  // The picker orders presets by `order ?? Infinity`, breaking ties with
+  // `id.localeCompare`. A number shared with a shipped preset therefore makes the
+  // displayed order depend on alphabetical accident — which is exactly how
+  // `order: 2` (colliding with the shipped `ptc`) sorted us LAST rather than
+  // second. Our preset must claim a number no shipped one holds.
+  const ownOrder = Number(/^ {0,10}order:\s*(\d+)\s*$/m.exec(compositionText)?.[1]);
+  const orderDrift = [];
+  if (Number.isFinite(ownOrder)) {
+    const presetsDir = join(packages, 'dsh-web-app', 'presets');
+    let shipped = [];
+    try {
+      shipped = (await readdir(presetsDir)).filter((name) => name.endsWith('.patch.yml'));
+    } catch {
+      /* a harness whose Web app ships presets elsewhere: fall through to a note */
+    }
+    for (const file of shipped) {
+      const text = await readFile(join(presetsDir, file), 'utf8');
+      // Only rows that DECLARE a preset: this package's own patch layer carries
+      // plugin rows too, and those must not be mistaken for presets.
+      const at = text.indexOf('@deepseek-ai/dsh-agent-preset');
+      if (at === -1) continue;
+      // Read the preset's OWN identity and order — the ones under `config:` —
+      // not the declaration row's `id` (which is `preset-<id>` by convention).
+      const body = text.slice(at);
+      const id = /^\s*id:\s*([a-z0-9][\w-]*)\s*$/m.exec(body)?.[1];
+      const order = Number(/^\s*order:\s*(\d+)\s*$/m.exec(body)?.[1]);
+      if (Number.isFinite(order) && order === ownOrder) orderDrift.push(`order ${order} is already taken by the shipped preset "${id}" (${file})`);
+    }
+    if (shipped.length === 0) {
+      console.error(`warning: no shipped preset files under ${presetsDir} — the order-collision check did not run`);
+    }
+  }
+
+  if (failures.length > 0 || drift.length > 0 || relativeRow !== null || countDrift.length > 0 || orderDrift.length > 0) {
     if (failures.length > 0) {
       console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
       for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
@@ -505,10 +538,15 @@ async function main() {
     if (countDrift.length > 0) {
       console.error(`preset-health FAILED: ${countDrift.length} tool-count claim(s) do not match the registered tools`);
     }
+    if (orderDrift.length > 0) {
+      console.error(`preset-health FAILED: ${orderDrift.length} preset order collision(s) with a shipped preset`);
+      for (const line of orderDrift) console.error(`  - ${line}`);
+    }
     process.exit(1);
   }
   console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, and the preset is the shipped standard plus the molbio rows`);
   console.log(`specifier OK: the preset names the package (${selfName}), so Node resolves it from the profile — no copied directory to keep in sync`);
+  console.log(`order OK: ${ownOrder} collides with no shipped preset`);
 }
 
 // `compositionDrift` is exported for `test/drift-probe.mjs`, which drives it
