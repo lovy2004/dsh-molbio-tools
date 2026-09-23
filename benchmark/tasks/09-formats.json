@@ -1,0 +1,61 @@
+{
+  "$comment": [
+    "Codon usage, phylogeny, and the two file-parsing tools.",
+    "",
+    "The parsing tools appear here as a CHAIN rather than alone: a model that",
+    "answers a question about a GenBank record without parsing it is doing",
+    "something else, and this task makes that visible. `codon-usage` and",
+    "`phylogeny` are separate because neither is reachable through another tool."
+  ],
+  "tasks": [
+    {
+      "id": "codon-usage",
+      "category": "bench-analysis",
+      "tier": "full",
+      "covers": ["molbio_codon_usage"],
+      "instruction": "This is a bacterial coding sequence. Tell me how well adapted it is to E. coli expression: give me the codon adaptation index, the effective number of codons, the GC3, and list any rare codons with their positions.\n\n{seq:cds}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_codon_usage"],
+      "assertions": [
+        { "where": "tool", "pattern": "CAI|codon adaptation|RSCU", "note": "the usage report's own header fields" },
+        { "where": "tool", "pattern": "\\bNc\\b|effective number", "note": "Nc is reported as data, not only drawn" },
+        { "where": "answer", "pattern": "CAI|codon adaptation" },
+        { "where": "answer", "pattern": "\\bNc\\b|effective number" },
+        { "where": "answer", "pattern": "GC3" }
+      ]
+    },
+    {
+      "id": "phylogeny",
+      "category": "bench-analysis",
+      "tier": "full",
+      "covers": ["molbio_phylogenetic_tree"],
+      "instruction": "Build a phylogenetic tree from these four sequences with neighbour joining, and tell me the topology: which two sequences group together most closely? Give me the p-distances between them as well.\n\nACGTACGTACGTACGTACGTACGTACGTACGT\nACGTACGTACGTACGTACGTACGTACGTACGA\nTTTTGGGGCCCCAAAATTTTGGGGCCCCAAAA\nTTTTGGGGCCCCAAAATTTTGGGGCCCCAAAT",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_phylogenetic_tree"],
+      "assertions": [
+        { "where": "tool", "pattern": "neighbour|NJ|neighbor" },
+        { "where": "answer", "pattern": "\\(|newick|Newick|tree" },
+        { "where": "answer", "pattern": "0\\.0[0-9]|0\\.1[0-9]|p-distance" }
+      ]
+    },
+    {
+      "id": "genbank-parse",
+      "category": "sequence-io",
+      "tier": "full",
+      "covers": ["molbio_parse_genbank", "molbio_parse_snapgene"],
+      "instruction": "My working directory holds the same 3162 bp plasmid in two formats: pUC118.gb (GenBank) and pUC118.dna (SnapGene). Parse both and tell me the plasmid name, its accession, its topology, and the ampicillin-resistance feature with its coordinates. Say whether the two files describe the same molecule.\n",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_parse_genbank", "molbio_parse_snapgene"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna", "pUC118.gb": "test/fixtures/pUC118.gb" },
+      "assertions": [
+        { "where": "tool", "pattern": "pUC118 \\(U07649\\): 3162 bp, circular" },
+        { "where": "tool", "pattern": "CDS 2102-2962", "note": "the AmpR feature's span, from the GenBank record" },
+        { "where": "tool", "pattern": "beta-lactamase", "note": "the /product qualifier" },
+        { "where": "answer", "pattern": "U07649" },
+        { "where": "answer", "pattern": "2102" },
+        { "where": "answer", "pattern": "2962" },
+        { "where": "answer", "pattern": "same|identical|match" }
+      ]
+    }
+  ]
+}

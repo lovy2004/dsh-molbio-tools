@@ -10,6 +10,96 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.15.0] — 2026-09-23（benchmark 覆盖全部 57 个工具；查出引物方向缺陷）
+
+**工具数与插件行为均未改动**（57 个工具，领域模块一行未改）。这一版把上一版建立的 benchmark
+从"12 个工具、15 题"扩到**57/57 个工具、49 题**，并把"改功能必须改 benchmark"写成机器守卫。
+
+### 1. 覆盖：12 → 57 个工具
+
+49 个任务分在 9 个文件里（`benchmark/tasks/*.json`，按文件名顺序拼接），每个任务声明
+`covers`。**新增守卫 `test/benchmark-coverage.mjs` 断言 57/57 全覆盖**——加工具不加任务
+直接红。它还守住 fixture 的**前提**（Golden Gate 载体必须无 BsaI 位点、诱变模板必须仍能
+设计出引物）与 tier/占位符健全性。
+
+**分档**：`core` 14 题（`npm run bench`，一个能力领域一个代表）、`full` 49 题
+（`npm run bench:full`）。分档的理由是成本差一个数量级，而该跑哪档取决于改了什么。
+
+### 2. 查出并记录一个真实的插件缺陷
+
+**`molbio_design_primers` 把 forward/reverse 标反了。** 这是 benchmark 第一次查出一个
+**功能性**缺陷（前几轮查出的全是 benchmark 自己的问题）：
+
+```
+tool F: ATTACTCCTGCTCTTCCCATAC   201-222   ← 等于正链 201-222
+tool R: CACTACTCCTCTGTACGCAC     105-124   ← 等于 rc(正链 105-124)
+amplicon: 105-222 (118 bp)
+```
+
+`F` 在 201-222、`R` 在 105-124，也就是 **F 在 R 的下游**——两条引物朝外延伸，
+**按工具打印的样子送进 `molbio_pcr_simulate` 得到 `0 product(s)`**。正确的那一对确实在
+这份输出里：把工具叫 `R` 的那条取反向互补，就是真正的正向引物；手工按扩增子跨度构造
+（`F = top(105-124)`、`R = rc(top(201-222))`）同一个模拟器报 `specific — 1 product(s) of
+118 bp`。**这是返回值的标注/朝向缺陷**，不是评分或 fixture 问题。
+
+发现过程值得记：**是模型发现并说出来的**（"the designer returned these two molecules with
+F/R reversed … the pair as printed does not amplify"），随后用 `pcr.mjs` 直接复核确认。
+
+**状态：只记录，未修。** 修它属于引物设计引擎的朝向处理，且需要自己的回归测试
+（"设计出的一对引物按原样必须模拟出恰好一个产物"）。在修好之前，`qpcr-primers` 任务
+**刻意不断言模型把哪条叫 forward**，只断言两条分子与扩增子大小。详见
+[benchmark/README.md](benchmark/README.md) 的 Findings。
+
+### 3. 又一轮"测的是 benchmark 自己"
+
+full tier 首跑 35/49。逐条查完，**没有一条失败是模型的错**：
+
+| 症状 | 真实原因 |
+|---|---|
+| 三条正确答案被判错（`qpcr-efficiency`/`hydropathy`/`conservation`） | 判分器的 `normalize()` 只折叠空白，不折叠 **Unicode 减号 U+2212**；`/-3\.3/` 匹配不了 `slope −3.30` |
+| `fasta-tools` 全线失败 | **runner 从没把任务点名的 `seqs.fa`/`reads.fq` 放进工作目录**，模型正确地拒绝瞎猜 |
+| `codon-optimize` 数量/长度全错 | 任务要求"顺便去掉 EcoRI 位点"，模型传了 `avoid_enzymes`（**更对的做法**），而我钉的是不传时的数字 |
+| `taqman-assay` 候选数、`conservation` 的 `source:` 标签 | 都取决于模型自己选的窗口/输入形式，**两种都对** |
+| `qpcr-primers` | 就是上面那个引物方向缺陷——模型是对的，工具是错的 |
+
+由此写下一条设计规则并写进 README：**钉住"请求所固定的东西"，不要钉"实现在某一组参数下
+恰好返回的东西"**。
+
+**修法**：`normalize()` 折叠 Unicode 减号与各种破折号；每个任务在自己的 scratch 工作区里
+跑（顺带解决"每次跑完仓库根目录多出一堆 SVG/FASTA/JSON"）；把上表里的断言逐条改成
+断言语义而非某次调用的数字。
+
+### 4. 新增的两个守卫与两个 npm script
+
+- `test/benchmark-coverage.mjs`：57/57 覆盖、fixture 前提、tier 健全、占位符全部可展开、
+  `NETWORK_TASKS` 里不许有 tool 断言（联网工具的结果无法钉住）。
+- `bench:full` / `bench:list:full`：跑/列出全部 49 题。
+
+`benchmark/verifications.mjs` 是新文件：一个任务的**期望文本**在 `tasks/`，产生它的
+**输入**在这里。分开放正是 `--offline` 能有意义的原因——两者不一致时会失败，而不是
+"断言了工具碰巧输出的任何东西"。
+
+### 5. 在线任务与其边界
+
+`molbio_pubmed_search` / `molbio_pubmed_abstract` 打的是活的 PubMed API，**返回什么取决于
+今天的 PubMed**，没有可钉住的值。它们的任务因此**只断言最终回答**（出现 PMID、出现标题），
+并在 `verifications.mjs` 的 `NETWORK_TASKS` 里登记；守卫会拒绝"登记为在线却仍有 tool
+断言"的任务。实测这两个工具在 headless profile 里**可用**（`dsh-web-search-deepseek` +
+`dsh-web-fetch-http` 随 base 挂载，凭据已就位）。
+
+### 发版清单
+
+| 项 | 内容 |
+|---|---|
+| 工具数 | 57（不变） |
+| 插件改动 | **无**（`index.mjs` 与所有领域模块未改） |
+| 客户端产物 | **无需重建** |
+| preset | 未改 |
+| 新增 | `benchmark/tasks/`（9 个文件）、`benchmark/verifications.mjs`、`benchmark/fixtures.mjs`、`benchmark/_probe-all.mjs`、`test/benchmark-coverage.mjs`、`test/fixtures/pUC118.gb` |
+| 改 | `benchmark/{README.md,run.mjs,score.mjs,sequences.mjs}`、`docs/{rules,workflow}.md`、`README.md`、`package.json`、`.gitignore` |
+| 删 | `benchmark/tasks.json`（拆成 `benchmark/tasks/*.json`） |
+| 预检 | `npm test`（13 项，含三道 benchmark 零成本门） |
+
 ## [0.14.0] — 2026-09-23（项目规范化 + 首个可用性 benchmark）
 
 **工具数不变（57），插件行为零变化**——这一版不新增也不修改任何工具，改的是**这个项目怎么

@@ -21,170 +21,112 @@
  * outcome: the model knew the biology well enough to answer without the tool.
  * That is why the verdicts are not collapsed.
  *
- * ── The offline half ───────────────────────────────────────────────────────
+ * ── The offline half ────────────────────────────────────────────────────────
  *
- * `scoreSuiteOffline()` grades the SUITE itself, with no model involved:
- * every `where: "tool"` assertion is checked against the value the shipped tool
- * returns for this task's inputs. An assertion that is stale, mis-scoped, or
- * simply wrong therefore fails in a few hundred milliseconds instead of after
- * an expensive model run — and a suite that cannot fail on the shipped tools
- * cannot be trusted to grade a model.
+ * `scoreSuiteOffline()` grades the SUITE itself, with no model involved: every
+ * `where: "tool"` assertion is checked against what the shipped tool RENDERS for
+ * this task's inputs (`benchmark/verifications.mjs` supplies those inputs). An
+ * assertion that is stale, mis-scoped, or simply wrong therefore fails in a few
+ * hundred milliseconds instead of after an expensive model run — and a suite
+ * that cannot fail on the shipped tools cannot be trusted to grade a model.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import { loadTools, seedFixtures } from './tools.mjs';
-import { expandInstruction, NAMED_SEQUENCES } from './sequences.mjs';
+import { loadTools, seedFixtures, seedText } from './tools.mjs';
+import { FIXTURES, expandInstruction } from './sequences.mjs';
+import { NETWORK_TASKS, invocationsFor, setupFor, usePlasmid, useWorkspaceRoot } from './verifications.mjs';
 
 /** The package root, from this module's own location. */
 export const REPO_ROOT = resolve(import.meta.dirname, '..');
 
+// ── the task suite ──────────────────────────────────────────────────────────
+
 /**
  * Read and validate the task suite.
  *
- * Validation is strict and fails loudly: a task with no assertions would
- * otherwise pass silently and inflate a pass rate.
+ * Tasks live in `benchmark/tasks/*.json`, one file per domain, concatenated in
+ * FILE NAME order. The split is about reviewability, not mechanism: a single
+ * file covering all 57 tools ran past 60 KB and became unreviewable, and a
+ * reviewer of a biology benchmark should be able to open the primer file and see
+ * only primer tasks.
  *
- * @param {string} [path] tasks.json location.
- * @returns {Promise<{tasks: object[], path: string}>}
+ * Validation is strict and fails loudly. A task with no assertions would pass
+ * silently and inflate a pass rate; a task with no `covers` would leave its tool
+ * invisible to the coverage guard; a task with no `tier` would be ambiguous about
+ * whether `npm run bench` runs it.
+ *
+ * @param {string} [dir] the tasks directory.
+ * @returns {Promise<{tasks: object[], dir: string, files: string[]}>}
  */
-export async function loadTasks(path = join(REPO_ROOT, 'benchmark', 'tasks.json')) {
-  const document = JSON.parse(await readFile(path, 'utf8'));
-  const tasks = document.tasks;
-  if (!Array.isArray(tasks) || tasks.length === 0) throw new Error(`${path}: no tasks`);
+export async function loadTasks(dir = join(REPO_ROOT, 'benchmark', 'tasks')) {
+  const files = (await readdir(dir)).filter((name) => name.endsWith('.json')).sort();
+  if (files.length === 0) throw new Error(`${dir}: no task files`);
+  const tasks = [];
   const seen = new Set();
-  for (const task of tasks) {
-    if (typeof task.id !== 'string' || task.id === '') throw new Error(`${path}: a task has no id`);
-    if (seen.has(task.id)) throw new Error(`${path}: duplicate task id "${task.id}"`);
-    seen.add(task.id);
-    if (typeof task.instruction !== 'string' || task.instruction.trim() === '') {
-      throw new Error(`${path}: task "${task.id}" has no instruction`);
-    }
-    if (!Array.isArray(task.assertions) || task.assertions.length === 0) {
-      throw new Error(`${path}: task "${task.id}" has no assertions — it could not fail`);
-    }
-    for (const assertion of task.assertions) {
-      if (assertion.where !== 'answer' && assertion.where !== 'tool') {
-        throw new Error(`${path}: task "${task.id}" has an assertion with where="${String(assertion.where)}"`);
+  for (const file of files) {
+    const document = JSON.parse(await readFile(join(dir, file), 'utf8'));
+    const entries = document.tasks;
+    if (!Array.isArray(entries) || entries.length === 0) throw new Error(`${file}: no tasks`);
+    for (const task of entries) {
+      if (typeof task.id !== 'string' || task.id === '') throw new Error(`${file}: a task has no id`);
+      if (seen.has(task.id)) throw new Error(`${file}: duplicate task id "${task.id}"`);
+      seen.add(task.id);
+      if (typeof task.instruction !== 'string' || task.instruction.trim() === '') {
+        throw new Error(`${file}: task "${task.id}" has no instruction`);
       }
-      if (typeof assertion.pattern !== 'string' || assertion.pattern === '') {
-        throw new Error(`${path}: task "${task.id}" has an assertion with no pattern`);
+      if (!Array.isArray(task.assertions) || task.assertions.length === 0) {
+        throw new Error(`${file}: task "${task.id}" has no assertions — it could not fail`);
       }
-      try {
-        new RegExp(assertion.pattern, 'i');
-      } catch (error) {
-        throw new Error(`${path}: task "${task.id}" has an invalid regex ${JSON.stringify(assertion.pattern)}: ${String(error)}`);
+      if (task.tier !== 'core' && task.tier !== 'full') {
+        throw new Error(`${file}: task "${task.id}" must declare tier "core" or "full"`);
+      }
+      if (!Array.isArray(task.covers) || task.covers.length === 0) {
+        throw new Error(
+          `${file}: task "${task.id}" declares no \`covers\` — the tool it exercises would be invisible to the coverage guard`,
+        );
+      }
+      for (const tool of task.covers) {
+        if (typeof tool !== 'string' || !tool.startsWith('molbio_')) {
+          throw new Error(`${file}: task "${task.id}" lists an unrecognised \`covers\` entry "${String(tool)}"`);
+        }
+      }
+      for (const assertion of task.assertions) {
+        if (assertion.where !== 'answer' && assertion.where !== 'tool') {
+          throw new Error(`${file}: task "${task.id}" has an assertion with where="${String(assertion.where)}"`);
+        }
+        if (typeof assertion.pattern !== 'string' || assertion.pattern === '') {
+          throw new Error(`${file}: task "${task.id}" has an assertion with no pattern`);
+        }
+        try {
+          new RegExp(assertion.pattern, 'i');
+        } catch (error) {
+          throw new Error(`${file}: task "${task.id}" has an invalid regex ${JSON.stringify(assertion.pattern)}: ${String(error)}`);
+        }
+      }
+      for (const key of ['expect_tools', 'forbid_tools', 'expect_absent']) {
+        if (task[key] !== undefined && !Array.isArray(task[key])) {
+          throw new Error(`${file}: task "${task.id}" has a non-array ${key}`);
+        }
       }
     }
-    for (const key of ['expect_tools', 'forbid_tools', 'expect_absent']) {
-      if (task[key] !== undefined && !Array.isArray(task[key])) {
-        throw new Error(`${path}: task "${task.id}" has a non-array ${key}`);
-      }
-    }
+    tasks.push(...entries);
   }
-  return { tasks, path };
+  return { tasks, dir, files };
 }
 
 /**
- * Wrap a single `where: "tool"` assertion into the tool call that satisfies it.
+ * The tasks a tier runs.
  *
- * The suite writes assertions as regexes against the observed text, which keeps
- * authoring cheap, but the requirement is usually about ONE tool's result. A
- * small table keeps the assertion text and the required call in agreement
- * instead of relying on the author to remember both.
+ * `core` is a small always-run subset with one representative per capability
+ * area; `full` is every task. The tiers exist because the cost differs by an
+ * order of magnitude and the right default depends on what changed — see
+ * docs/workflow.md for the rule that ties a change to a tier.
  */
-export const ASSERTION_TOOL = {
-  orientation: 'molbio_reverse_complement',
-  'qpcr-primers': 'molbio_design_primers',
-  'plasmid-single-cutter': 'molbio_unique_cutters',
-  'double-digest-buffer': 'molbio_double_digest',
-  'methylation-block': 'molbio_methylation_check',
-  'qpcr-ddct': 'molbio_qpcr_analysis',
-  'align-mismatch': 'molbio_align',
-  'gc-cpg-islands': 'molbio_gc_composition',
-  'fastq-qc': 'molbio_fastq_qc',
-  'translate-orf': 'molbio_translate',
-  'enzyme-catalog': 'molbio_enzyme_lookup',
-};
-
-/**
- * The arguments the offline grader runs to satisfy a task's `tool` assertions.
- *
- * This is the bridge that makes the offline half possible: the task carries the
- * EXPECTED text, and this table carries the INPUT that must produce it. Both
- * are needed, and keeping the input here (rather than inferring it) is what
- * turns "the expected value is stale" into a failing check with a legible diff.
- *
- * The argument names differ per tool and were read off the tool schemas, not
- * guessed: `molbio_unique_cutters` takes `vector` (a sequence) or
- * `vector_path`, while the digest tools accept a literal `sequence`.
- *
- * @param {object} task a suite entry.
- * @param {{sequence?: string}} [fixture] the parsed pUC118 sequence, when the task uses it.
- * @returns {Array<{tool: string, args: object}>}
- */
-export function offlineInvocations(task, fixture = {}) {
-  const plasmid = () => {
-    if (fixture.sequence === undefined) {
-      throw new Error(`benchmark: task ${task.id} needs the pUC118 fixture, which was not loaded`);
-    }
-    return fixture.sequence;
-  };
-  const templates = {
-    orientation: () => [{ tool: 'molbio_reverse_complement', args: { sequence: 'ATGCGTACGTTAGCCTAGGCAT' } }],
-    'qpcr-primers': () => [
-      { tool: 'molbio_design_primers', args: { template: NAMED_SEQUENCES.qpcr_template, amplicon_min: 80, amplicon_max: 150, tm_min: 58, tm_max: 62, max_results: 1 } },
-    ],
-    'plasmid-single-cutter': () => [{ tool: 'molbio_unique_cutters', args: { vector: plasmid() } }],
-    'double-digest-buffer': () => [{ tool: 'molbio_double_digest', args: { sequence: plasmid(), first: 'EcoRI', second: 'HindIII', circular: true } }],
-    'methylation-block': () => [{ tool: 'molbio_methylation_check', args: { sequence: plasmid(), enzymes: ['BamHI', 'KpnI'], circular: true } }],
-    'qpcr-ddct': () => [
-      {
-        tool: 'molbio_qpcr_analysis',
-        args: {
-          target_treated: [22.1, 22.3, 22.0],
-          target_control: [25.0, 25.2, 24.9],
-          reference_treated: [18.0, 18.1, 18.0],
-          reference_control: [18.2, 18.1, 18.3],
-        },
-      },
-    ],
-    'align-mismatch': () => [
-      // `sequence1` is the READ on purpose: the resolver is free to pick either
-      // argument order (the tool reports identity symmetrically), and the task's
-      // tool assertion accepts both. Running the reference first here would mean
-      // `--offline` only ever exercises one of the two orders the scorer allows.
-      { tool: 'molbio_align', args: { sequence1: NAMED_SEQUENCES.align_read, sequence2: NAMED_SEQUENCES.align_reference } },
-    ],
-    'gc-cpg-islands': () => [
-      { tool: 'molbio_gc_composition', args: { sequence: NAMED_SEQUENCES.puc118_cpg_region, criteria: 'gardiner', min_length: 200, gc_threshold: 50, cpg_oe_threshold: 0.6 } },
-    ],
-    'fastq-qc': () => [{ tool: 'molbio_fastq_qc', args: { fastq: FASTQ_FIXTURE } }],
-    'translate-orf': () => [
-      { tool: 'molbio_translate', args: { sequence: 'GGGATGGCTGCTGCTGCTGCTGCTGCTGCTGCTTAACCC', frames: '1', min_orf_aa: 5 } },
-    ],
-    'enzyme-catalog': () => [{ tool: 'molbio_enzyme_lookup', args: { enzymes: ['BsaI', 'EcoRI'] } }],
-  };
-  const build = templates[task.id];
-  return build === undefined ? [] : build();
+export function tasksForTier(tasks, tier) {
+  return tier === 'full' ? tasks : tasks.filter((task) => task.tier === 'core');
 }
-
-/** The FASTQ the `fastq-qc` task pastes into its instruction. */
-export const FASTQ_FIXTURE = [
-  '@r1',
-  'ACGTACGTACGTACGTACGT',
-  '+',
-  'IIIIIIIIIIIIIIIIIIII',
-  '@r2',
-  'TTTTTTTTTTTTTTTTTTTT',
-  '+',
-  '!!!!!!!!!!!!!!!!!!!!',
-  '@r3',
-  'GGGGCCCCAAAATTTTGGGG',
-  '+',
-  'IIIIIHHHHH#####IIIII',
-].join('\n');
 
 // ── trace handling ──────────────────────────────────────────────────────────
 
@@ -258,9 +200,23 @@ export function foldEvents(events) {
   return { final, calls, results, errors, usage, truncated, resultBytes, resultsTruncated };
 }
 
-/** Whitespace-collapsed text, the form every regex is matched against. */
+/**
+ * Whitespace-collapsed text, the form every regex is matched against.
+ *
+ * ASCII `-` is ALSO substituted for the Unicode minus sign (U+2212) and the
+ * several dash characters models reach for when writing a negative number.
+ *
+ * This is not cosmetic. A final answer saying "slope −3.30" is exactly as
+ * correct as "slope -3.3", but `/-3\.3/` cannot match U+2212 — and the first
+ * full-tier run lost THREE tasks to that alone (`qpcr-efficiency`, `hydropathy`,
+ * and `conservation`'s column identity), each of which the model had answered
+ * correctly. Normalizing here rather than in every pattern means a negative
+ * number can be written in a task assertion the obvious way.
+ */
 export function normalize(text) {
-  return String(text ?? '').replace(/\s+/g, ' ');
+  return String(text ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\u2212\u2010-\u2015\uFE63\uFF0D]/g, '-');
 }
 
 /**
@@ -268,7 +224,7 @@ export function normalize(text) {
  *
  * @param {object} task a suite entry.
  * @param {object} trace the result of {@link foldEvents}.
- * @returns {{id: string, category: string, tools_ok: boolean, args_ok: boolean, answer_ok: boolean, passed: boolean, failures: object[], toolCalls: string[], evidence: object}}
+ * @returns {{id: string, category: string, tier: string, tools_ok: boolean, args_ok: boolean, answer_ok: boolean, passed: boolean, failures: object[], toolCalls: string[], evidence: object}}
  */
 export function scoreTrace(task, trace) {
   const called = trace.calls.map((call) => call.tool);
@@ -313,6 +269,7 @@ export function scoreTrace(task, trace) {
   return {
     id: task.id,
     category: task.category ?? 'uncategorised',
+    tier: task.tier ?? 'full',
     tools_ok: toolsOk,
     args_ok: argsOk,
     answer_ok: answerOk,
@@ -336,38 +293,71 @@ export function scoreTrace(task, trace) {
  * The haystack is the tool's **rendered** text — the same projection the model
  * reads and the same one the live scorer sees in `tool_result.result` — not the
  * raw output value. That distinction is not cosmetic: the first version of this
- * grader stringified the raw JSON, so an assertion like
- * `"gc_percent": 50` passed offline while the live run, which only ever sees the
- * rendered `GC content: 50%`, could never match it. The offline half was
- * therefore validating a format that does not exist at runtime, and it hid the
- * difference behind a green check.
+ * grader stringified the raw JSON, so an assertion like `"gc_percent": 50`
+ * passed offline while the live run, which only ever sees the rendered
+ * `GC content: 50%`, could never match it. The offline half was therefore
+ * validating a format that does not exist at runtime, and it hid the difference
+ * behind a green check.
+ *
+ * The invocation for each task comes from `benchmark/verifications.mjs`, so a
+ * task's expected text and the input that produces it live in one place.
  *
  * @param {{only?: string, workspace?: string}} [options]
- * @returns {Promise<{ok: boolean, checked: number, tasks: object[]}>}
+ * @returns {Promise<{ok: boolean, checked: number, tasks: object[], network: string[]}>}
  */
 export async function scoreSuiteOffline(options = {}) {
-  const { tasks, path } = await loadTasks();
+  const { tasks, dir } = await loadTasks();
   const workspaceRoot = options.workspace ?? resolve(REPO_ROOT, 'benchmark', '.offline-workspace');
   const harness = loadTools({ workspaceRoot });
   await seedFixtures(harness.memFs, { 'pUC118.dna': join(REPO_ROOT, 'test', 'fixtures', 'pUC118.dna') });
-  // Parsed once: the digest tasks take a literal sequence, and reading it from
-  // the same fixture the file-based tools use keeps the two paths identical.
-  const fixture = await harness.run('molbio_parse_snapgene', { path: join(workspaceRoot, 'pUC118.dna') });
+  // The path-taking tools resolve against the session workspace, and the tasks
+  // that read a whole `.dna` file rely on the same fixture the file-based tools
+  // use — so the two paths cannot drift apart.
+  const plasmid = await harness.run('molbio_parse_snapgene', { path: join(workspaceRoot, 'pUC118.dna') });
+  useWorkspaceRoot(workspaceRoot);
+  usePlasmid(plasmid);
+  // Every fixture file the file-reading tools need, seeded once.
+  seedText(harness.memFs, 'seqs.fa', FIXTURES.FASTA_TEXT);
+  seedText(harness.memFs, 'reads.fq', FIXTURES.FASTQ_TEXT);
+  seedText(harness.memFs, 'read.seq', FIXTURES.SANGER_TEXT);
 
   const report = [];
+  const network = [];
   for (const task of tasks) {
     if (options.only !== undefined && options.only !== task.id) continue;
+    for (const [relative, text] of Object.entries(setupFor(task))) seedText(harness.memFs, relative, text);
+
     const toolAssertions = task.assertions.filter((assertion) => assertion.where === 'tool');
     if (toolAssertions.length === 0) {
       report.push({ id: task.id, checked: 0, failures: [], note: 'answer-only task: nothing to verify offline' });
       continue;
     }
-    const invocations = offlineInvocations(task, fixture);
-    if (invocations.length === 0) {
+    if (NETWORK_TASKS.has(task.id)) {
+      // Live-API tools have no recorded value to pin. A task in this set must
+      // therefore assert ONLY on the answer, or the offline gate would claim to
+      // have verified something it never ran.
       report.push({
         id: task.id,
         checked: 0,
-        failures: [{ detail: `task ${task.id} asserts on a tool result but has no offline invocation — add one to offlineInvocations()` }],
+        failures: [
+          {
+            detail: `task ${task.id} is listed in NETWORK_TASKS but still carries ${toolAssertions.length} \`where: "tool"\` assertion(s) — a live-API result cannot be pinned`,
+          },
+        ],
+      });
+      network.push(task.id);
+      continue;
+    }
+    const invocations = invocationsFor(task);
+    if (invocations === undefined) {
+      report.push({
+        id: task.id,
+        checked: 0,
+        failures: [
+          {
+            detail: `task ${task.id} asserts on a tool result but benchmark/verifications.mjs declares no invocation for it — add one, or list the task in NETWORK_TASKS`,
+          },
+        ],
       });
       continue;
     }
@@ -393,7 +383,7 @@ export async function scoreSuiteOffline(options = {}) {
   }
 
   const failed = report.filter((entry) => entry.failures.length > 0);
-  return { ok: failed.length === 0, checked: report.length, tasks: report, path };
+  return { ok: failed.length === 0, checked: report.length, tasks: report, dir, network };
 }
 
 /** Expand a task's placeholders into the instruction the model receives. */

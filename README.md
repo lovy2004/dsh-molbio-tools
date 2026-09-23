@@ -557,7 +557,19 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 | [docs/history.md](docs/history.md) | **已经发生了什么**、每个 bug 换来了哪条规则 |
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
-`npm run bench:offline` 零成本校验期望值，`npm run bench` 用真实模型跑整套任务。
+`npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 49 题（覆盖 57/57 个工具）**。
+
+> **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
+> benchmark 任务并重跑；没有改动就不必重跑。`test/benchmark-coverage.mjs` 会拦住"新工具
+> 没有任务"（断言 57/57 覆盖），`bench --offline` 会拦住"期望值过期"。完整对照表见
+> [docs/workflow.md](docs/workflow.md) 第 2 节。
+
+> **benchmark 已经查出的一个真实缺陷**：`molbio_design_primers` 返回的引物对把
+> forward/reverse **标反了**（`F` 在 201-222、`R` 在 105-124，即 F 在 R 下游），
+> 按原样送进 `molbio_pcr_simulate` **不产生产物**。已用工具直接复核，详见
+> [benchmark/README.md](benchmark/README.md) 的 Findings。**尚未修复**——
+> 它需要自己的回归测试（设计出的一对引物按原样必须能模拟出恰好一个产物）。
 
 其它文档：
 

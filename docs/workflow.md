@@ -202,7 +202,70 @@ node benchmark/run.mjs --offline # benchmark 的期望值是否仍等于工具�
 
 ---
 
-## 2. 客户端产物（browser half）
+## 2. 改动 ↔ benchmark：什么时候必须跑，什么时候不必
+
+**规则：新增或改动任何工具行为，必须新增/更新对应的 benchmark 任务并重跑；没有改动就不必重跑。**
+
+benchmark 不是"每天跑一遍"的门禁，而是**行为的验收测试**——它花真实 tokens，所以只在行为
+变化时跑。判断依据是"这次改动会不会改变某个任务观察到的输出"：
+
+| 这次改了什么 | benchmark 要不要动 | 为什么 |
+| --- | --- | --- |
+| 新增一个工具 | **必须**：加任务 + `verifications.mjs` 的 invocation | `test/benchmark-coverage.mjs` 会**直接 FAIL**（`57/57 tools covered` 是断言） |
+| 改工具的参数、默认值、输出字段、渲染文本 | **必须**：更新受影响任务的断言，重跑 `--offline`，再重跑该任务 | 断言比对的是**渲染文本**，改了文本就改了对错 |
+| 改工具的描述或参数说明（prompt 面） | **必须**：重跑对应任务 | 这正是 benchmark 唯一能测的东西——模型是否还选得对 |
+| 改 `preset/molbio-lab/agent.cordis.yml`（行清单） | **必须**：先 `node test/benchmark-profile.mjs`，再重建 profile | 行清单变了，benchmark 的 headless profile 是**推导**出来的，守卫会 FAIL |
+| 改 `lib.mjs` 这类同时属于浏览器半的模块 | 看影响：若改变了某个工具的输出 → 必须；仅内部重构 → 不必 | 判据仍是"任务观察到的文本会不会变" |
+| 改文档、注释、`CHANGELOG` | **不必** | 不改变任何任务观察到的输出 |
+| 改客户端半（`build/`、`lib/client.js`） | **不必** | benchmark 不加载客户端产物 |
+| 改测试、CI、`.gitignore` | **不必** | 同上 |
+
+> **`benchmark/_probe*.mjs` 必须跟着改。** 它们是"期望值从哪来"的可复现记录：
+> 改了工具输出却只改 `tasks/` 里的断言，等于把 benchmark 变成"照抄当前输出"——
+> `bench --offline` 照样绿，但它证明的东西就没有了。同理，改了任务断言要顺手
+> 用 `node benchmark/_freeze-trace.mjs <report.json>` 把真实响应重新冻结进
+> `test/fixtures/benchmark-traces.json`，否则判分器的回归守卫会拦下你。
+
+**两道零成本的门永远要绿**（它们在 `npm test` 里，无论改了什么都会跑）：
+
+```bash
+node benchmark/run.mjs --offline    # 每条 where:"tool" 断言是否仍等于工具的真实渲染输出
+node test/benchmark-coverage.mjs    # 57/57 工具有任务覆盖、fixture 前提仍成立、tier 与占位符健全
+node test/benchmark-score.mjs       # 判分器对冻结的真实响应仍判对，且仍能判错
+```
+
+`--offline` 是**便宜的**（几百毫秒、不调模型），所以它进 `npm test`；
+`--model` 是**贵的**，所以它按需跑。**两者的分工是刻意的**：
+offline 证明"期望值仍然为真"，model 测量"模型是否仍然会用"。前者证明后者有意义。
+
+### 跑哪一档
+
+| 场景 | 命令 | 代价 |
+| --- | --- | --- |
+| 改了**一个**工具 | `node benchmark/run.mjs --model --task <id>` | 一题 |
+| 改了**一个领域**（如引物全部） | `--model --task` 逐个，或按文件看 `bench:list` | 几题 |
+| 改了共享代码（`lib.mjs`、`utils`） | `node --run bench:full` | 49 题 |
+| 发版前 | `node --run bench:full` | 49 题 |
+| 只是提交文档/客户端 | 不跑 | 0 |
+
+`npm run bench`（`--model`）默认只跑 **core 档**（14 题，一题一个能力领域的代表），
+`npm run bench:full` 跑全部 **49 题**（覆盖 57/57 工具）。
+
+### 新增/改动 benchmark 任务的三步
+
+1. 在 `benchmark/tasks/*.json` 加或改任务（`covers` 必须列出它练的工具）；
+2. 在 `benchmark/verifications.mjs` 的 `invocationsFor` 里加产生这些期望值的调用；
+   期望值一律用 `node benchmark/_probe.mjs` / `_probe-all.mjs` **实测**，不要凭记忆写；
+3. `node benchmark/run.mjs --offline` 必须先绿，再跑 `--model`。
+   若一条断言在 `--offline` 失败，是**断言的错**，不是模型的错——先把断言修对。
+
+`node test/benchmark-coverage.mjs` 会拦住"新工具没有任务""任务没有 offline invocation"
+"fixture 前提失效"这三类漂移；`test/benchmark-score.mjs` 用**真实响应的冻结副本**
+（`test/fixtures/benchmark-traces.json`）拦住"断言退化成给措辞打分"。
+
+---
+
+## 3. 客户端产物（browser half）
 
 浏览器半由 `build/client-bundle.mjs` 从**包根的同一份 `.mjs` 源文件**生成到
 `lib/client.js`，并同时为面板专用包产出 `packages/molbio-panel/lib/client.js`。改完源码后：
@@ -255,7 +318,7 @@ entry 的 `apply()` 抛了异常**，加载器拒绝 boot——不是"面板没�
 
 ---
 
-## 3. 发布流程
+## 4. 发布流程
 
 ### 发布前预检（0.7.1 事故之后加的硬步骤）
 
@@ -357,7 +420,7 @@ npm publish --access public
 
 ---
 
-## 4. 新增一个工具要走完什么
+## 5. 新增一个工具要走完什么
 
 1. 实现放进对应领域的模块（`design.mjs` / `cloning.mjs` / …），纯计算 + 无依赖；
 2. 在 `index.mjs` 里用 `define({...})` 注册：`parameters` 是 object-rooted 原生 schema、

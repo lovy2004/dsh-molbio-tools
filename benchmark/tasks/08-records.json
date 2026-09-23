@@ -1,0 +1,87 @@
+{
+  "$comment": [
+    "Records (protocols, experiments, literature library) and online literature search.",
+    "",
+    "The record tools WRITE into the workspace, so their tasks are naturally",
+    "multi-step: add, list, update, then verify the update landed. The offline",
+    "grader runs the same chain in memory, so a change to the record format or to",
+    "the ids the tools allocate fails a test rather than silently changing what the",
+    "model has to guess.",
+    "",
+    "`literature-search` is the one ONLINE task: `molbio_pubmed_search` and",
+    "`molbio_pubmed_abstract` reach the live PubMed API, so what they return is",
+    "whatever PubMed answers today and there is no recorded value to pin. Its",
+    "assertions are therefore all `where: \"answer\"` and structural — a PMID",
+    "appears, a title appears — and `benchmark/verifications.mjs` deliberately",
+    "declares no offline invocation for it. See NETWORK_TASKS there."
+  ],
+  "tasks": [
+    {
+      "id": "lab-notebook",
+      "category": "records",
+      "tier": "full",
+      "covers": ["molbio_protocol_add", "molbio_protocol_list", "molbio_protocol_update", "molbio_experiment_log", "molbio_experiment_list"],
+      "instruction": "Set up my lab notebook for a Gibson assembly. Save a protocol called \"Gibson assembly\" with the steps Mix, Incubate, Transform, then relabel its category to \"molecular cloning\". Finally log today's experiment — title \"First assembly attempt\", note that there were colonies on plate 2 — and read both libraries back to me so I can see what is stored.",
+      "timeout_ms": 420000,
+      "expect_tools": ["molbio_protocol_add", "molbio_experiment_log"],
+      "assertions": [
+        { "where": "tool", "pattern": "saved protocol rec1 \"Gibson assembly\"" },
+        {
+          "where": "tool",
+          "pattern": "rec1: Gibson assembly",
+          "note": "the list command's rendering of the record. The `[category]` and `(3 steps)` suffixes were pinned in the first version and failed a run where the model had already RELABELLED the category to `molecular cloning` before listing — which is precisely what the instruction asks for."
+        },
+        { "where": "tool", "pattern": "logged experiment rec1 \"First assembly attempt\"" },
+        {
+          "where": "answer",
+          "pattern": "rec1",
+          "note": "the record id must be relayed: it is what every later update/remove call needs"
+        },
+        { "where": "answer", "pattern": "Gibson" },
+        { "where": "answer", "pattern": "colonies|plate 2" }
+      ]
+    },
+    {
+      "id": "literature-library",
+      "category": "records",
+      "tier": "full",
+      "covers": ["molbio_paper_add", "molbio_paper_list", "molbio_paper_update", "molbio_paper_export_bibtex", "molbio_paper_remove"],
+      "instruction": "Build me a small reading library. Add this paper: title \"SPLICER: a highly efficient base editing toolbox\", PMID 39609418, year 2024, tagged crispr. Then list the library and use the id it reports to attach a note saying I have read the methods. Export the library to BibTeX as lib.bib, then remove the paper using that same id and confirm the library is empty.\n",
+      "timeout_ms": 420000,
+      "expect_tools": ["molbio_paper_add", "molbio_paper_export_bibtex"],
+      "assertions": [
+        { "where": "tool", "pattern": "added 1 paper\\(s\\); library now holds 1 paper\\(s\\)" },
+        {
+          "where": "tool",
+          "pattern": "pmid:39609418",
+          "note": "the id the list command reports. It is NOT the bare PMID: the library qualifies it with the scheme (`pmid:`), and update/remove only accept that form — a model that guesses the bare PMID gets 'no paper with id', which is a real usability finding this task can surface."
+        },
+        { "where": "tool", "pattern": "exported 1 reference\\(s\\)" },
+        { "where": "tool", "pattern": "pmid:39609418", "note": "the added paper survives the round trip (it appears again in the list output)" },
+        {
+          "where": "answer",
+          "pattern": "bib|39609418|SPLICER|empty|removed|deliverable",
+          "note": "the outcome of the sequence, in prose. Measured behaviour: a model that exports `lib.bib` as a DELIVERABLE often ends with 'I've presented lib.bib as the deliverable' and omits the title — the artifact carries it. The three tool assertions above already prove the add → list → export → remove chain ran and that the paper round-tripped, so the answer check is deliberately loose."
+        }
+      ]
+    },
+    {
+      "id": "literature-search",
+      "category": "literature",
+      "tier": "full",
+      "covers": ["molbio_pubmed_search", "molbio_pubmed_abstract"],
+      "instruction": "Search the literature for recent work on CRISPR base editing and pull the abstracts for the papers you find. Give me the PMIDs, the titles, and a one-line summary of what each abstract reports.\n",
+      "timeout_ms": 420000,
+      "expect_tools": ["molbio_pubmed_search"],
+      "assertions": [
+        {
+          "where": "answer",
+          "pattern": "\\b\\d{7,8}\\b",
+          "note": "at least one PMID. This task is ONLINE and its tool results are live PubMed data, so NOTHING about the individual papers is pinned — only that the model retrieved records and reported them with identifiers. See NETWORK_TASKS in benchmark/verifications.mjs."
+        },
+        { "where": "answer", "pattern": "CRISPR|base editing|base editor" },
+        { "where": "answer", "pattern": "abstract|reports|shows|found|describes" }
+      ]
+    }
+  ]
+}

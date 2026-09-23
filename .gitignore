@@ -11,14 +11,20 @@ benchmark/reports/
 benchmark/.offline-workspace/
 benchmark/_probe-workspace/
 
-# Each benchmark task runs with the PACKAGE ROOT as its working directory (the
-# tools resolve their outputs against the session workspace), so the file-writing
-# tasks drop their SVG/FASTA here. They are run artifacts, not sources: the tools
-# that produce them are covered by test/smoke.mjs and test/svgpng.mjs, which keep
-# their outputs out of the tree on purpose.
+# Each benchmark task now runs in its OWN scratch workspace under the system temp
+# directory, so run artifacts should no longer land here. These patterns stay as
+# a backstop for a task run by hand (`node benchmark/run.mjs --model --task <id>`
+# with a custom cwd) and for anything the tools write during development: the
+# list is the full set of extensions the toolset can emit.
 /*.svg
 /*.fasta
 /*.fa
+/*.fq
 /*.gb
 /*.gbk
 /*.ab1
+/*.seq
+/*.nwk
+/*.bib
+/*.csv
+/*.json

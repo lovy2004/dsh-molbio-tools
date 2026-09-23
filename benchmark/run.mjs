@@ -23,12 +23,28 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { findHarnessRoot, harnessVersion, launcherCommand } from './harness.mjs';
 import { PROFILE_NAME } from './profile.mjs';
-import { foldEvents, loadTasks, renderInstruction, scoreSuiteOffline, scoreTrace } from './score.mjs';
+import { foldEvents, loadTasks, renderInstruction, scoreSuiteOffline, scoreTrace, tasksForTier } from './score.mjs';
+import { makeWorkspace } from './tools.mjs';
+import { FIXTURES } from './sequences.mjs';
+
+/**
+ * The workspace files a task's tools read but no `fixtures` entry declares.
+ *
+ * These are the files whose NAMES appear in an instruction, so the model is told
+ * to open them — which means they have to exist in the run's working directory.
+ * `verifications.mjs` seeds the same texts for the offline grader (through
+ * `setupFor`), so the two paths see identical inputs.
+ */
+const FILE_FIXTURES = {
+  'fasta-tools': { 'seqs.fa': FIXTURES.FASTA_TEXT, 'reads.fq': FIXTURES.FASTQ_TEXT },
+  'sanger-verify': { 'read.seq': FIXTURES.SANGER_TEXT },
+};
 
 /** Where reports land. Gitignored: a report is a measurement, not a source. */
 export const REPORT_DIR = resolve(import.meta.dirname, 'reports');
@@ -161,6 +177,57 @@ export async function verifyInstructionDelivery(options) {
   };
 }
 
+/**
+ * Re-grade recorded responses with the CURRENT task definitions.
+ *
+ * This is the tool that keeps this directory honest, and it exists because the
+ * alternative is intolerable: fixing an assertion and finding out whether the fix
+ * was right used to cost a full model run (~8M tokens, ~30 minutes). A report
+ * carries every task's rendered tool text and final answer, which is exactly
+ * what `scoreTrace` reads, so the whole suite can be re-scored offline.
+ *
+ * The distinction it makes visible: a run says "the model did X", replay says
+ * "with today's assertions, X scores Y". When the two disagree, the assertion
+ * changed, not the world.
+ *
+ * @param {{report: object, only?: string}} options
+ * @returns {{results: object[], before: object}}
+ */
+export function replayReport(options) {
+  const { tasks } = options.taskList;
+  const results = [];
+  for (const recorded of options.report.results) {
+    if (options.only !== undefined && options.only !== recorded.id) continue;
+    const task = tasks.find((entry) => entry.id === recorded.id);
+    if (task === undefined) {
+      results.push({ id: recorded.id, category: '(removed)', tier: '-', tools_ok: true, args_ok: true, answer_ok: true, passed: false, failures: [{ kind: 'tool', detail: 'this task no longer exists in the suite' }], toolCalls: recorded.toolCalls ?? [], evidence: {} });
+      continue;
+    }
+    const trace = {
+      final: recorded.answer ?? '',
+      calls: (recorded.toolCalls ?? []).map((tool) => ({ tool, input: {} })),
+      results: recorded.toolResults ?? [],
+      errors: [],
+      usage: recorded.usage ?? {},
+      truncated: recorded.truncated === true,
+      resultBytes: (recorded.toolResults ?? []).reduce((total, entry) => total + Buffer.byteLength(entry.result ?? '', 'utf8'), 0),
+      resultsTruncated: recorded.evidence?.tool_evidence_truncated === true,
+    };
+    results.push(scoreTrace(task, trace));
+  }
+  return {
+    results,
+    before: { total: options.report.summary.total, passed: options.report.summary.passed },
+  };
+}
+
+/** The most recent suite report, for a `--replay` with no explicit path. */
+async function newestReport() {
+  if (!existsSync(REPORT_DIR)) return undefined;
+  const names = (await readdir(REPORT_DIR)).filter((name) => name.endsWith('-suite.json')).sort();
+  return names.length === 0 ? undefined : join(REPORT_DIR, names[names.length - 1]);
+}
+
 // ── reporting ───────────────────────────────────────────────────────────────
 
 /** A stable, legible timestamp for a report file name. */
@@ -229,7 +296,14 @@ export function renderMarkdown(report) {
 
 /** Parse the small flag set this CLI accepts, refusing anything else. */
 function parseArgs(argv) {
-  const options = { mode: undefined, task: undefined, keep: false, skipPreflight: false, timeoutMs: undefined };
+  const options = {
+    mode: undefined,
+    task: undefined,
+    tier: 'core',
+    keep: false,
+    skipPreflight: false,
+    timeoutMs: undefined,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--offline') options.mode = 'offline';
@@ -237,9 +311,21 @@ function parseArgs(argv) {
     else if (value === '--list') options.mode = 'list';
     else if (value === '--keep') options.keep = true;
     else if (value === '--skip-preflight') options.skipPreflight = true;
-    else if (value === '--task') options.task = argv[++index];
+    else if (value === '--replay') {
+      options.mode = 'replay';
+      options.reportPath = argv[++index];
+    } else if (value === '--task') options.task = argv[++index];
     else if (value === '--timeout') options.timeoutMs = Number(argv[++index]);
-    else if (value === '--help' || value === '-h') options.mode = 'help';
+    else if (value === '--all' || value === '--tier') {
+      // `--all` is the shorthand people reach for; `--tier full` is the explicit
+      // form. Both mean "every task".
+      if (value === '--all') options.tier = 'full';
+      else {
+        const tier = argv[++index];
+        if (tier !== 'core' && tier !== 'full') throw new Error(`benchmark: --tier takes "core" or "full" (got "${String(tier)}")`);
+        options.tier = tier;
+      }
+    } else if (value === '--help' || value === '-h') options.mode = 'help';
     else throw new Error(`benchmark: unknown option "${value}"`);
   }
   return options;
@@ -256,11 +342,14 @@ async function main() {
   }
 
   if (options.mode === 'list') {
-    for (const task of tasks) {
-      console.log(`${task.id}  [${task.category}]  ${task.expect_tools?.join(',') ?? 'no tools expected'}`);
+    const selected = options.task === undefined ? tasksForTier(tasks, options.tier) : tasks.filter((task) => task.id === options.task);
+    for (const task of selected) {
+      console.log(`${task.id}  [${task.category}/${task.tier}]  ${task.expect_tools?.join(',') ?? 'no tools expected'}`);
       console.log(`    ${renderInstruction(task).split('\n')[0].slice(0, 110)}`);
     }
-    console.log(`\n${tasks.length} task(s)`);
+    const core = tasks.filter((task) => task.tier === 'core').length;
+    console.log(`\n${selected.length} of ${tasks.length} task(s) (tier=${options.tier}; ${core} core, ${tasks.length - core} full-only)`);
+    console.log(`tools covered: ${new Set(tasks.flatMap((task) => task.covers)).size}`);
     return;
   }
 
@@ -268,11 +357,51 @@ async function main() {
     const result = await scoreSuiteOffline({ only: options.task });
     for (const entry of result.tasks) {
       const status = entry.failures.length === 0 ? 'ok  ' : 'FAIL';
-      console.log(`${status} ${entry.id} (${entry.checked} tool assertion(s))`);
+      console.log(`${status} ${entry.id} (${entry.checked} tool assertion(s))${entry.note === undefined ? '' : ` — ${entry.note}`}`);
       for (const failure of entry.failures) console.log(`       ${failure.detail}`);
     }
-    console.log(result.ok ? `\noffline suite OK: ${result.checked} task(s) verified against the shipped tools` : '\noffline suite FAILED');
+    if (result.network.length > 0) {
+      console.log(`\nonline-only (no offline invocation, answer assertions only): ${result.network.join(', ')}`);
+    }
+    console.log(
+      result.ok
+        ? `\noffline suite OK: ${result.checked} task(s) checked against the shipped tools`
+        : '\noffline suite FAILED',
+    );
     process.exit(result.ok ? 0 : 1);
+  }
+
+  if (options.mode === 'replay') {
+    const reportPath = options.reportPath ?? (await newestReport());
+    if (reportPath === undefined) {
+      console.error('benchmark: no report to replay — run `node benchmark/run.mjs --model` first, or pass --replay <report.json>');
+      process.exit(2);
+    }
+    const report = JSON.parse(await readFile(reportPath, 'utf8'));
+    if (!Array.isArray(report.results?.[0]?.toolResults)) {
+      console.error(
+        `benchmark: ${reportPath} predates the recorded tool text, so assertions cannot be re-checked against it.\n` +
+          'Reports written from this version on carry `toolResults`; re-run the tasks you care about once.',
+      );
+      process.exit(2);
+    }
+    const replay = replayReport({ report, taskList: { tasks }, only: options.task });
+    console.log(`replaying ${reportPath}`);
+    console.log(`  recorded: ${replay.before.passed}/${replay.before.total} passed`);
+    let changed = 0;
+    for (const result of replay.results) {
+      const was = report.results.find((entry) => entry.id === result.id);
+      const flipped = was !== undefined && was.passed !== result.passed;
+      if (flipped) changed += 1;
+      const status = result.failures.length === 0 ? 'PASS' : 'FAIL';
+      const mark = flipped ? (result.passed ? '  <- now passes' : '  <- NOW FAILS') : '';
+      console.log(`  ${status} ${result.id}${mark}`);
+      for (const failure of result.failures) console.log(`        ${failure.detail}`);
+    }
+    const passed = replay.results.filter((result) => result.passed).length;
+    console.log(`\n  now     : ${passed}/${replay.results.length} passed (${changed} changed)`);
+    console.log('  Nothing here ran a model: this re-scores recorded responses with the current tasks.');
+    process.exit(passed === replay.results.length ? 0 : 1);
   }
 
   // ── model mode ────────────────────────────────────────────────────────────
@@ -291,7 +420,7 @@ async function main() {
     process.exit(2);
   }
 
-  const selected = options.task === undefined ? tasks : tasks.filter((task) => task.id === options.task);
+  const selected = options.task === undefined ? tasksForTier(tasks, options.tier) : tasks.filter((task) => task.id === options.task);
   if (selected.length === 0) {
     console.error(`benchmark: no task with id "${String(options.task)}"`);
     process.exit(2);
@@ -299,6 +428,17 @@ async function main() {
 
   const startedAt = new Date().toISOString();
   const launcher = await launcherCommand(harnessRoot);
+
+  // Every task runs in its own scratch workspace so its file-writing tools drop
+  // their SVGs and FASTAs there instead of into the package root.
+  //
+  // The first full-tier run did NOT do this, and the consequences were subtle in
+  // two directions at once: `fasta-tools` named `seqs.fa` and `reads.fq` in its
+  // instruction, found neither in the workspace, and correctly refused to guess
+  // ("I can't complete this as asked — the two input files aren't in the
+  // workspace") — scored as a model failure when the runner had simply never
+  // created them. Meanwhile every plot landed in the repository root.
+  const workspace = await makeWorkspace({ prefix: 'molbio-bench-' });
 
   // A suite run is only readable if the task text arrives intact; a one-call
   // probe is far cheaper than discovering it from fifteen confusing failures.
@@ -319,11 +459,21 @@ async function main() {
   const results = [];
   for (const [index, task] of selected.entries()) {
     const instruction = renderInstruction(task);
+    const cwd = join(workspace.path, task.id);
+    await mkdir(cwd, { recursive: true });
+    // The task's own declared fixtures, then the shared fixture texts whose
+    // names its instruction mentions (`seqs.fa`, `reads.fq`, `read.seq`).
+    for (const [relative, source] of Object.entries(task.fixtures ?? {})) {
+      await copyFile(resolve(import.meta.dirname, '..', source), join(cwd, relative));
+    }
+    for (const [relative, text] of Object.entries(FILE_FIXTURES[task.id] ?? {})) {
+      await writeFile(join(cwd, relative), text, 'utf8');
+    }
     process.stderr.write(`[${index + 1}/${selected.length}] ${task.id} … `);
     const run = await runTask({
       instruction,
       launcher,
-      cwd: resolve(import.meta.dirname, '..'),
+      cwd,
       timeoutMs: options.timeoutMs ?? task.timeout_ms,
       profile: PROFILE_NAME,
     });
@@ -337,6 +487,10 @@ async function main() {
       truncated: trace.truncated,
       usage: trace.usage,
       answer: trace.final,
+      // The RENDERED tool text, kept so an assertion can be fixed and
+      // re-verified against the same run instead of spending another one.
+      // `--keep` additionally stores the raw event stream.
+      toolResults: trace.results.map((result) => ({ tool: result.tool, status: result.status, result: result.result })),
       stderr: run.stderr.trim(),
       events: options.keep ? run.events : undefined,
     });

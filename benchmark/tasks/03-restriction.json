@@ -1,0 +1,97 @@
+{
+  "$comment": [
+    "Restriction mapping and digestion.",
+    "",
+    "The core digest task (`double-digest-buffer`) uses the synthetic 512 bp construct",
+    "because its three fragments are small enough to check by eye; this file covers",
+    "the plasmid-scale path on the real pUC118 fixture, plus the in-silico PCR and",
+    "gel tasks that belong to the same bench workflow."
+  ],
+  "tasks": [
+    {
+      "id": "plasmid-digest",
+      "category": "restriction",
+      "tier": "full",
+      "covers": ["molbio_restriction_sites"],
+      "instruction": "I have pUC118.dna in my working directory. Show me the restriction map for EcoRI, HindIII and PvuII on the circular plasmid: where each enzyme cuts, and what fragments each one produces. Then tell me which of the three cuts the plasmid more than once.",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_restriction_sites"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "assertions": [
+        { "where": "tool", "pattern": "EcoRI \\(G\\^AATTC\\):[\\s\\S]*?cut at 927", "note": "EcoRI's single cut on pUC118" },
+        { "where": "tool", "pattern": "HindIII \\(A\\^AGCTT\\):[\\s\\S]*?cut at 876" },
+        { "where": "tool", "pattern": "PvuII \\(CAG\\^CTG\\):[\\s\\S]*?cut at 785" },
+        { "where": "tool", "pattern": "PvuII[\\s\\S]*?2 fragment\\(s\\): 2840, 322 bp", "note": "PvuII is the double cutter" },
+        { "where": "answer", "pattern": "PvuII" },
+        { "where": "answer", "pattern": "2840" },
+        { "where": "answer", "pattern": "322" }
+      ]
+    },
+    {
+      "id": "double-digest-buffer",
+      "category": "restriction",
+      "tier": "core",
+      "covers": ["molbio_double_digest"],
+      "instruction": "I have a 512 bp linear construct in the workspace as a sequence I will paste, but simpler: use the sequence below. Cut it with EcoRI and HindIII together. Do these two enzymes share a reaction buffer, and what fragment sizes should I see on the gel?\n\n{seq:construct}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_double_digest"],
+      "assertions": [
+        { "where": "tool", "pattern": "shared buffer\\(s\\):[^\\n]*CutSmart", "note": "a shared buffer, so a single-tube digest is fine" },
+        {
+          "where": "tool",
+          "pattern": "→ 206, 205, 101 bp",
+          "note": "THREE fragments, not two: the two site insertions add 6 bp each, so the two sites are 206 bp apart and the digest yields three pieces. This was probed, not reasoned about — the first draft of the fixture documented '200 + 300 bp' and was wrong."
+        },
+        { "where": "answer", "pattern": "206" },
+        { "where": "answer", "pattern": "205" },
+        { "where": "answer", "pattern": "101" }
+      ]
+    },
+    {
+      "id": "pcr-simulation",
+      "category": "pcr",
+      "tier": "full",
+      "covers": ["molbio_pcr_simulate"],
+      "instruction": "Check whether this primer pair amplifies the template I am pasting, and tell me the product size and coordinates. Use the forward primer as given and the reverse primer as given — both are written 5' to 3' as I would order them.\n\nTemplate (512 bp):\n{seq:construct}\n\nForward primer: {seq:pcr_forward}\nReverse primer: {seq:pcr_reverse}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_pcr_simulate"],
+      "assertions": [
+        { "where": "tool", "pattern": "1 product\\(s\\) of 201 bp" },
+        { "where": "tool", "pattern": "201 bp: 101-120 → 282-301", "note": "the amplicon's coordinates on the top strand" },
+        { "where": "tool", "pattern": "specific", "note": "the tool's verdict word for a single clean product" },
+        { "where": "answer", "pattern": "201" },
+        { "where": "answer", "pattern": "101" },
+        { "where": "answer", "pattern": "301" }
+      ]
+    },
+    {
+      "id": "gel-preview",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_virtual_gel"],
+      "instruction": "I am running an EcoRI+HindIII double digest of pUC118.dna (full length 3162 bp, in your working directory) on a 1 kb ladder gel. Draw me the expected band pattern, and tell me how many bands I should see and whether the small fragment will be visible.",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_virtual_gel"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "[0-9]+ band\\(s\\)",
+          "note": "the gel report names a band count. The value is not pinned: the model chooses how many lanes to draw, and the first version pinned `2 band(s)` from a single-lane draft."
+        },
+        {
+          "where": "answer",
+          "pattern": "3111|3\\.1 kb|3\\.1kb|3162 ?- ?51",
+          "note": "the backbone fragment. Accepted as the exact size or its conventional `~3.1 kb` shorthand: both are correct, and demanding the digits graded how the model chose to round."
+        },
+        { "where": "answer", "pattern": "\\b51\\b", "note": "the small fragment's exact size — pinned, because it explains the whole answer" },
+        {
+          "where": "answer",
+          "pattern": "1 band|one band|2 band|two band|1 fragment|2 fragment|single .{0,12}band",
+          "note": "the band count. The model is EXPECTED to distinguish the two theoretical fragments from the single band a 1 kb-ladder gel actually resolves, so both counts are accepted."
+        },
+        { "where": "answer", "pattern": "not visible|too small|will not|won't|below|faint|run off|dye front|below detection" }
+      ]
+    }
+  ]
+}

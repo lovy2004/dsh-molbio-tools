@@ -1,0 +1,149 @@
+{
+  "$comment": [
+    "Protein analysis, bench analysis and plotting.",
+    "",
+    "`reading-frames` is the one task whose point is a TOOL CHOICE rather than a",
+    "value: the model must call the translator in all-frames mode with an ORF floor,",
+    "not just translate frame 1. Its assertion therefore pins the ORF line the",
+    "all-frames mode emits, which frame-1-only output does not contain."
+  ],
+  "tasks": [
+    {
+      "id": "protein-props",
+      "category": "protein",
+      "tier": "full",
+      "covers": ["molbio_protein_props"],
+      "instruction": "I have a peptide and I need its basic physico-chemical parameters before I order it: molecular weight, isoelectric point, and the extinction coefficient I should use for a A280 measurement.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_protein_props"],
+      "assertions": [
+        { "where": "tool", "pattern": "33 aa · MW 3935\\.62 Da · pI 10\\.63" },
+        { "where": "tool", "pattern": "A280 extinction: 1490 M⁻¹cm⁻¹" },
+        { "where": "tool", "pattern": "GRAVY -0\\.403" },
+        { "where": "answer", "pattern": "3935|3936" },
+        { "where": "answer", "pattern": "10\\.6" },
+        { "where": "answer", "pattern": "1490" }
+      ]
+    },
+    {
+      "id": "peptide-digest",
+      "category": "protein",
+      "tier": "full",
+      "covers": ["molbio_peptide_digest"],
+      "instruction": "Plan a trypsin digest of this peptide for mass spectrometry, with no missed cleavages, and give me the monoisotopic [M+H]+ mass of every peptide.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_peptide_digest"],
+      "assertions": [
+        { "where": "tool", "pattern": "trypsin digest, 0 missed cleavage\\(s\\), monoisotopic \\[M\\+H\\]\\+ masses: 7 peptide\\(s\\)" },
+        {
+          "where": "tool",
+          "pattern": "1-2 MK \\[M\\+H\\]\\+ 278\\.1533",
+          "note": "one space, not the two the raw render uses: every regex is matched against whitespace-COLLAPSED text, so a pattern built from the un-collapsed output cannot match. The first version of this assertion carried the raw double space and failed offline."
+        },
+        { "where": "tool", "pattern": "27-33 LGLIEVQ \\[M\\+H\\]\\+ 771\\.4611" },
+        { "where": "answer", "pattern": "\\b7\\b|seven" },
+        { "where": "answer", "pattern": "278\\.15" },
+        { "where": "answer", "pattern": "771\\.46" }
+      ]
+    },
+    {
+      "id": "helical-wheel",
+      "category": "protein",
+      "tier": "full",
+      "covers": ["molbio_helical_wheel"],
+      "instruction": "Is this 14-residue peptide amphipathic? Draw the helical wheel projection and give me the hydrophobic moment and the residue-class breakdown.\n\nLKKLLKKLLKKLLK",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_helical_wheel"],
+      "assertions": [
+        { "where": "tool", "pattern": "helical wheel for residues 1-14 \\(14 residues, 100°/residue, 3\\.6 per turn\\)" },
+        { "where": "tool", "pattern": "hydrophobic moment μH 0\\.758" },
+        { "where": "tool", "pattern": "residue classes: hydrophobic 7, polar 0, acidic 0, basic 7" },
+        { "where": "tool", "pattern": "candidate amphipathic helix", "note": "the tool's own verdict word" },
+        { "where": "answer", "pattern": "0\\.75|0\\.76" },
+        { "where": "answer", "pattern": "amphipathic" }
+      ]
+    },
+    {
+      "id": "hydropathy",
+      "category": "protein",
+      "tier": "full",
+      "covers": ["molbio_hydropathy_plot"],
+      "instruction": "Plot the Kyte-Doolittle hydropathy profile of this peptide with the standard window and tell me whether it contains a candidate transmembrane stretch. Report the GRAVY value too.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_hydropathy_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "Kyte-Doolittle hydropathy: 33 aa, window 9, threshold 1\\.6" },
+        { "where": "tool", "pattern": "GRAVY -0\\.4" },
+        { "where": "tool", "pattern": "no window average reaches the 1\\.6 threshold" },
+        { "where": "answer", "pattern": "-0\\.4" },
+        { "where": "answer", "pattern": "no .{0,20}(peak|stretch|span|transmembrane)|not .{0,20}(hydrophobic|membrane)" }
+      ]
+    },
+    {
+      "id": "codon-optimize",
+      "category": "bench-analysis",
+      "tier": "full",
+      "covers": ["molbio_codon_optimize"],
+      "instruction": "Optimize this coding sequence for E. coli expression and tell me the GC content of the result and how long it is. Also remove any EcoRI site from it while you are at it, since I want to clone with EcoRI.\n\n{seq:cds}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_codon_optimize"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "e_coli codon-optimized DNA: [0-9]+ bp, GC [0-9.]+%",
+          "note": "the optimized construct's own reported length and GC. The VALUES are not pinned: the task asks for the EcoRI-avoidance pass, and passing `avoid_enzymes` legitimately changes which synonymous codons are chosen, hence both numbers. The first version pinned the no-avoidance result (261 bp / 84.3%) and failed a correct `avoid_enzymes` answer — and 84.3% GC would in fact be a poor answer to give a user who wants to express the protein."
+        },
+        { "where": "answer", "pattern": "GC|gc content" },
+        { "where": "answer", "pattern": "avoid|no EcoRI|without EcoRI|EcoRI site" }
+      ]
+    },
+    {
+      "id": "reading-frames",
+      "category": "bench-analysis",
+      "tier": "full",
+      "covers": ["molbio_translate"],
+      "instruction": "I do not know which frame this ORF is in. Translate all six frames and report every open reading frame of at least 20 amino acids, with the frame it is in and its coordinates.\n\nGGG{seq:cds}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_translate"],
+      "assertions": [
+        { "where": "tool", "pattern": "ORFs \\(>= min_orf_aa\\):" },
+        { "where": "tool", "pattern": "frame 1, bases 4-90, 28 aa: MAAAEEEFFFKKKGGGRRRYYYDDDLLL" },
+        { "where": "tool", "pattern": "frame -1 \\(30 aa, 0 stop\\(s\\), no stop\\)", "note": "a reverse-strand frame with no stop codon — the reason all six were requested" },
+        { "where": "answer", "pattern": "MAAAEEEFFFKKKGGGRRRYYYDDDLLL" },
+        { "where": "answer", "pattern": "\\b28\\b" },
+        { "where": "answer", "pattern": "-1|reverse" }
+      ]
+    },
+    {
+      "id": "qpcr-efficiency",
+      "category": "qpcr",
+      "tier": "full",
+      "covers": ["molbio_qpcr_efficiency"],
+      "instruction": "Here is a qPCR standard curve: dilution factors 1, 10, 100, 1000 with Ct values 15.0, 18.3, 21.6, 24.9. Fit the curve, give me the slope, the R² and the amplification efficiency, and tell me whether the efficiency is good enough to trust the assay.\n\n",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_qpcr_efficiency"],
+      "assertions": [
+        { "where": "tool", "pattern": "standard curve from 4 points: Ct = 15 \\+ -3\\.3·log10\\(relative quantity\\)" },
+        { "where": "tool", "pattern": "R² = 1 · efficiency = 100\\.92%" },
+        { "where": "answer", "pattern": "-3\\.3" },
+        { "where": "answer", "pattern": "100\\.9|101\\b" },
+        { "where": "answer", "pattern": "R²|R2|R\\^2" }
+      ]
+    },
+    {
+      "id": "plotting",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "I have fold-change data from two conditions: control = 1 with SD 0.1, knockdown = 6.65 with SD 0.9. Draw me a bar chart with error bars, and then draw a second scatter chart of x = 1,2,3,4 against y = 2.1,3.9,6.2,7.8 with a fitted line. Name the files fold.svg and fit.svg.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "fold\\.svg \\(bar, 2 points\\)" },
+        { "where": "tool", "pattern": "fit\\.svg \\(scatter, 4 points\\)" },
+        { "where": "answer", "pattern": "fold\\.svg" },
+        { "where": "answer", "pattern": "fit\\.svg" }
+      ]
+    }
+  ]
+}

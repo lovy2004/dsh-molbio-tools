@@ -24,7 +24,25 @@ L = 需要新机制或外部资源）。
 本仓库的历史偏好很明确：**优先修"已经在产品里、但不报错的错"**，而不是再加一个功能。
 理由见 v20 计划的开头——工具集的价值取决于输出能不能被信任。
 
-### 2.1 比对后处理套件（M）
+### 2.0 `molbio_design_primers` 的引物朝向（**最高优先级——已确认的功能缺陷**）
+
+benchmark 查出的真实缺陷：返回的引物对把 forward/reverse **标反了**，`F` 在下游
+（201-222）、`R` 在上游（105-124），按原样送进 `molbio_pcr_simulate` **不产生产物**。
+正确的两条分子就在同一份输出里（把叫 `R` 的那条取反向互补即真正的正向引物）。
+证据与复核方法见 [benchmark/README.md](../benchmark/README.md) 的 Findings。
+
+- 修的地方：引物设计引擎返回 `forward`/`reverse` 时的朝向处理；
+- **必须同时补回归测试**：设计出的每一对，按原样送进模拟器必须得到**恰好一个产物**。
+  这类"每个数字都对、但两个数字之间的关系错了"的缺陷，只有把两个工具**串起来**才看得见；
+- 修好之后，`qpcr-primers` 任务可以把"哪条是 forward"重新钉回去。
+
+### 2.1 `molbio_methylation_check` 的表与 NEB 不一致（**数据复核**）
+
+工具把 BamHI 判为 `impaired by dam`（`GGATCC` 内含 `GATC`），而 NEB 列 BamHI 为对 dam
+**不敏感**。需要对着 REBASE 复核整张表——尤其是"仅因位点包含 `GATC` 就判 Dam 敏感"
+的那一类酶。详见 [benchmark/README.md](../benchmark/README.md) 的 Findings。
+
+### 2.2 比对后处理套件（M）
 
 `conservationAnalysis` 已给出共识/逐列 identity/熵，缺的是**修剪与覆盖度视图**：
 IUPAC 共识、缺口比例修剪、同一性矩阵、逐列覆盖度。survey 第 6 名。

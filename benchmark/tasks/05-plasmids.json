@@ -1,0 +1,91 @@
+{
+  "$comment": [
+    "Plasmid files, maps, sequencing verification and CRISPR design.",
+    "",
+    "The map tools write an SVG and report only a one-line summary, so their tasks",
+    "are graded mostly on the model's prose: the tool proves the file was written,",
+    "and the answer proves the model read the numbers out of it. That split is",
+    "deliberate — asserting on the SVG would duplicate `test/svgpng.mjs`, which",
+    "already owns picture correctness."
+  ],
+  "tasks": [
+    {
+      "id": "plasmid-map-file",
+      "category": "plasmids",
+      "tier": "full",
+      "covers": ["molbio_plasmid_map_file"],
+      "instruction": "Draw me a circular map of pUC118.dna (in my working directory) and mark the EcoRI and HindIII cut sites. Tell me how long the plasmid is, whether it is circular, and how many annotated features it carries.",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_plasmid_map_file"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "assertions": [
+        { "where": "tool", "pattern": "pUC118, 3162 bp, circular, 10 feature\\(s\\), 2 enzyme cut mark\\(s\\)" },
+        {
+          "where": "answer",
+          "pattern": "3[,.]?162",
+          "note": "the plasmid length. The comma form (`3,162 bp`) is not cosmetic: a model writing a number for a human uses a thousands separator, and the first version's `/3162/` failed an otherwise perfect answer. Same rule as the Unicode minus — normalize what is formatting, grade what is content."
+        },
+        { "where": "answer", "pattern": "circular" },
+        { "where": "answer", "pattern": "\\b10\\b|ten" }
+      ]
+    },
+    {
+      "id": "plasmid-map-draw",
+      "category": "plasmids",
+      "tier": "full",
+      "covers": ["molbio_plasmid_map"],
+      "instruction": "Render a circular plasmid map from this 512 bp sequence. Call it \"mini\", give it one feature — a CDS from position 10 to 200 labelled testCDS — and mark the EcoRI site. Then tell me what the map shows.\n\n{seq:construct}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_plasmid_map"],
+      "assertions": [
+        { "where": "tool", "pattern": "mini, 512 bp, circular, 1 feature\\(s\\)" },
+        { "where": "tool", "pattern": "1 restriction enzyme cut site\\(s\\) marked" },
+        { "where": "answer", "pattern": "\\b512\\b" },
+        { "where": "answer", "pattern": "testCDS|CDS" },
+        { "where": "answer", "pattern": "EcoRI" }
+      ]
+    },
+    {
+      "id": "sanger-verify",
+      "category": "sequencing",
+      "tier": "full",
+      "covers": ["molbio_verify_sanger"],
+      "instruction": "There is a Sanger read in my working directory called read.seq. Check it against this 512 bp reference: first the reference as-is, then the same reference with the base at position 150 changed to an A. Tell me the verdict, the identity, and the difference for each case.\n\nReference:\n{seq:construct}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_verify_sanger"],
+      "assertions": [
+        { "where": "tool", "pattern": "verdict: match[\\s\\S]*?identity 100%" },
+        { "where": "tool", "pattern": "verdict: differences_found[\\s\\S]*?identity 99\\.67%" },
+        { "where": "tool", "pattern": "mismatch @ref 150: A → G", "note": "the planted difference, reported against the reference" },
+        { "where": "answer", "pattern": "match" },
+        { "where": "answer", "pattern": "99\\.6" },
+        { "where": "answer", "pattern": "\\b150\\b" }
+      ]
+    },
+    {
+      "id": "crispr-guide",
+      "category": "crispr",
+      "tier": "full",
+      "covers": ["molbio_grna_design"],
+      "instruction": "Design the three best SpCas9 guide RNAs on this plasmid (pUC118.dna is in my working directory). For each, give me the protospacer, its strand and coordinates, the GC content and the score. Tell me how many candidate guides the scan found in total.\n\nReference sequence is the whole circular plasmid.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_grna_design"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "391 candidate\\(s\\) for NGG over (sequence|pUC118) \\(3162 bp\\)",
+          "note": "the scan total. The subject label is `sequence` when the model passes the sequence inline and `pUC118` when it passed a file path — both are the same scan, and the first version pinned only the first spelling."
+        },
+        { "where": "tool", "pattern": "CTGACGGGCTTGTCTGCTCC CGG \\(reverse 85-104\\)", "note": "the top-ranked guide and its strand/coordinates" },
+        { "where": "tool", "pattern": "score 100" },
+        {
+          "where": "answer",
+          "pattern": "391|candidate",
+          "note": "the scan total or at least the candidate question, in prose. The guide SEQUENCE is not pinned to the answer: the tool can also write the guides to a CSV, and a model that delivers the CSV and summarises it has produced the requested artifact — the tool assertion above already proves the scan ran and what it found."
+        },
+        { "where": "answer", "pattern": "reverse|antisense|minus|bottom" }
+      ]
+    }
+  ]
+}

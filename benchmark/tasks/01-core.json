@@ -1,0 +1,248 @@
+{
+  "$comment": [
+    "CORE tier — always run.",
+    "",
+    "These are the tasks that answer 'can a model use this toolset at all', one per",
+    "capability area, and they are what `npm run bench` runs by default. They are",
+    "also the tasks whose failure modes are the least ambiguous: a wrong answer here",
+    "means the model did not reach for a tool it needed.",
+    "",
+    "Every expected value was produced by running the shipped tool (see",
+    "benchmark/_probe.mjs and _probe-all.mjs), never typed from memory. `covers`",
+    "names the tools the task exercises; benchmark/verifications.mjs carries the",
+    "inputs that reproduce the `where: \"tool\"` expectations, and",
+    "test/benchmark-coverage.mjs fails if any registered tool is missing from every",
+    "`covers` list."
+  ],
+  "tasks": [
+    {
+      "id": "orientation",
+      "category": "core-computation",
+      "tier": "core",
+      "covers": ["molbio_reverse_complement", "molbio_gc_content"],
+      "instruction": "I have this DNA oligo: ATGCGTACGTTAGCCTAGGCAT. I need to order the reverse-complement strand. Give me the reverse-complement sequence and tell me the GC content of the original oligo.",
+      "timeout_ms": 120000,
+      "expect_tools": ["molbio_reverse_complement"],
+      "assertions": [
+        { "where": "tool", "pattern": "reverse complement:[ ]*ATGCCTAGGCTAACGTACGCAT", "note": "reverse complement of the 22 nt input" },
+        { "where": "tool", "pattern": "GC content:[ ]*50%", "note": "GC percent of the original" },
+        { "where": "answer", "pattern": "ATGCCTAGGCTAACGTACGCAT" },
+        { "where": "answer", "pattern": "50", "note": "GC percent restated in prose" }
+      ]
+    },
+    {
+      "id": "plasmid-single-cutter",
+      "category": "cloning",
+      "tier": "core",
+      "covers": ["molbio_unique_cutters"],
+      "instruction": "There is a pUC118.dna file in your working directory. I want to linearise the whole plasmid with a single restriction digest — one cut, nothing else. Which enzymes can do that, and can you confirm one of them with its exact cut position?",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_unique_cutters"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "assertions": [
+        { "where": "tool", "pattern": "ideal single cutters[^:]*: 33", "note": "pUC118 has 33 unique cutters in the catalogue" },
+        { "where": "tool", "pattern": "EcoRI \\(G\\^AATTC\\) at 927", "note": "EcoRI cuts once, at position 927" },
+        { "where": "tool", "pattern": "HindIII \\(A\\^AGCTT\\) at 876" },
+        { "where": "answer", "pattern": "EcoRI|HindIII|BamHI|KpnI|Acc65I" }
+      ]
+    },
+    {
+      "id": "methylation-block",
+      "category": "restriction",
+      "tier": "core",
+      "covers": ["molbio_methylation_check"],
+      "instruction": "My digest of pUC118.dna (working directory) with BamHI is barely working — almost no cut, even though the site is definitely in the sequence. Someone suggested Dam methylation. Work out what is going on: check the plasmid's Dam and Dcm sites, and tell me what the methylation analysis says about BamHI and which enzymes the tool considers usable on this plasmid.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_methylation_check"],
+      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "assertions": [
+        { "where": "tool", "pattern": "impaired:[^\\n]*BamHI", "note": "the tool flags BamHI" },
+        {
+          "where": "answer",
+          "pattern": "impaired|blocked|Dam|dam",
+          "note": "the methylation verdict must be reported. NOTE what is deliberately NOT asserted: there is no assertion that the model AGREES with the tool. Measured behaviour is that it runs molbio_methylation_check, then cross-checks NEB over the web, finds the plugin's quick-reference table disagrees (the table marks BamHI impaired by dam; NEB lists BamHI as dam-insensitive), and reports the disagreement. That is the right thing to do with a hand-transcribed table, so this task grades whether the model CONSULTED the analysis; the table discrepancy is logged in benchmark/README.md as a plugin-data question instead of being scored as a model failure."
+        }
+      ]
+    },
+    {
+      "id": "qpcr-ddct",
+      "category": "qpcr",
+      "tier": "core",
+      "covers": ["molbio_qpcr_analysis"],
+      "instruction": "Here are my qPCR Ct values from a knockdown experiment. Target gene: treated 22.1, 22.3, 22.0; control 25.0, 25.2, 24.9. Reference gene: treated 18.0, 18.1, 18.0; control 18.2, 18.1, 18.3. What is the fold change in the target gene in the treated samples relative to control, by the delta-delta Ct method?",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_qpcr_analysis"],
+      "assertions": [
+        { "where": "tool", "pattern": "ΔΔCt = -2\\.7333" },
+        { "where": "tool", "pattern": "fold change[^=]*= 6\\.6499" },
+        { "where": "answer", "pattern": "6\\.65|6\\.649|6\\.6\\b", "note": "fold change, rounded however the model likes" },
+        { "where": "answer", "pattern": "2\\.73|\\-2\\.7333" }
+      ]
+    },
+    {
+      "id": "align-mismatch",
+      "category": "alignment",
+      "tier": "core",
+      "covers": ["molbio_align"],
+      "instruction": "I sequenced a 60 bp amplified region and want to know whether it matches my reference. Align the read against the reference and tell me the identity percentage, how many differences there are, and where the first mismatch is.\n\nReference (200 bp):\n{seq:align_reference}\n\nRead (60 bp), which is reference positions 51-110 with one base changed:\n{seq:align_read}",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_align"],
+      "assertions": [
+        { "where": "tool", "pattern": "identity 98\\.33% over 60 aligned columns" },
+        {
+          "where": "tool",
+          "pattern": "mismatch @seq1 (31|81) / seq2 (31|81): (A vs C|C vs A)",
+          "note": "exactly one difference, at read position 31 and reference position 81. The assertion is deliberately AGNOSTIC about which argument is which: a model may pass `sequence1 = read`, and `molbio_align` reports identity symmetrically, so pinning `seq1 81 / seq2 31` graded an incidental argument order rather than the alignment. Both orders and both polarities are accepted; a missing or extra difference is not."
+        },
+        { "where": "answer", "pattern": "98\\.3" },
+        { "where": "answer", "pattern": "\\b81\\b" },
+        { "where": "answer", "pattern": "\\b31\\b" }
+      ]
+    },
+    {
+      "id": "translate-orf",
+      "category": "core-computation",
+      "tier": "core",
+      "covers": ["molbio_translate"],
+      "instruction": "Translate this DNA in frame 1 and find the open reading frames of at least 5 amino acids. Tell me the protein sequence and the length of the longest ORF in amino acids.\n\nGGGATGGCTGCTGCTGCTGCTGCTGCTGCTGCTTAACCC",
+      "timeout_ms": 120000,
+      "expect_tools": ["molbio_translate"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "ORFs \\(>= min_orf_aa\\):[\\s\\S]*?MAAAAAAAAA",
+          "note": "an ORF of the expected protein was found at all"
+        },
+        {
+          "where": "answer",
+          "pattern": "MAAAAAAAAA?",
+          "note": "the ORF's protein. The exact `A` count is not pinned to one digit: the tool reports `10 aa` for `MAAAAAAAAA` (ten residues) and a model that counts the nine residues before the stop codon writes `MAAAAAAAA` — both describe the same ORF, and which convention is 'right' is a genuine ambiguity the tool itself does not resolve (it renders `MAAAAAAAAA*P` for the frame and `10 aa` for the ORF)."
+        },
+        { "where": "answer", "pattern": "\\b(9|10)\\b", "note": "the ORF length in either convention" }
+      ]
+    },
+    {
+      "id": "enzyme-catalog",
+      "category": "restriction",
+      "tier": "core",
+      "covers": ["molbio_enzyme_lookup"],
+      "instruction": "Explain how BsaI and EcoRI differ: their recognition sites, how many bases away from the site they cut, and what kind of overhang each leaves.",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_enzyme_lookup"],
+      "assertions": [
+        { "where": "tool", "pattern": "BsaI: type IIS GGTCTC\\(1/5\\), cut 7/5, 4 bp 5' overhang" },
+        { "where": "tool", "pattern": "EcoRI: cut G\\^AATTC" },
+        { "where": "answer", "pattern": "GGTCTC" },
+        {
+          "where": "answer",
+          "pattern": "AATTC",
+          "note": "EcoRI's site, matched WITHOUT its leading G on purpose: the model legitimately writes the cut notation `G^AATTC` (and the spaced `G^A A T T C`), neither of which contains the contiguous literal `GAATTC`. Pinning that literal graded typography rather than the answer."
+        },
+        { "where": "answer", "pattern": "\\b4\\b|four", "note": "both enzymes leave a 4 nt overhang" }
+      ]
+    },
+    {
+      "id": "qpcr-primers",
+      "category": "primers",
+      "tier": "core",
+      "covers": ["molbio_design_primers"],
+      "instruction": "Design one qPCR primer pair on this 400 bp template. I want an amplicon between 80 and 150 bp, primer Tm between 58 and 62 degrees, and I only need the best candidate. Give me both primer sequences, their positions, and the amplicon size.\n\nTemplate:\n{template:400:7}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_design_primers"],
+      "forbid_tools": ["molbio_design_taqman"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "candidate primer pair\\(s\\), best first",
+          "note": "the designer produced candidates at all"
+        },
+        {
+          "where": "tool",
+          "pattern": "#1 amplicon 105-222 \\(118 bp\\)",
+          "note": "the tool's TOP-RANKED amplicon. NOTE what is not asserted: the direction the model reads the pair in. The tool prints `F` at 201-222 and `R` at 105-124 — F is DOWNSTREAM of R — and a model may legitimately report the opposite role assignment (or the reverse complement of a primer). The tool's own orientation inconsistency is a recorded plugin bug (benchmark/README.md Findings), not something this task should grade the model on."
+        },
+        { "where": "answer", "pattern": "ATTACTCCTGCTCTTCCCATAC|GTATGGGAAGAGCAGGAGTAAT", "note": "one of the two molecules that make up the top-ranked pair, in either reading" },
+        { "where": "answer", "pattern": "CACTACTCCTCTGTACGCAC|GTGCGTACAGAGGAGTAGTG", "note": "the other one" },
+        { "where": "answer", "pattern": "118|119", "note": "an amplicon size inside the requested window" }
+      ]
+    },
+    {
+      "id": "fastq-qc",
+      "category": "bench-analysis",
+      "tier": "core",
+      "covers": ["molbio_fastq_qc"],
+      "instruction": "I have three FASTQ reads and I am worried about the quality of the last one. Run read-level QC and tell me: the mean per-base quality, the Q30 percentage, and whether any read has a quality collapse towards its 3' end.\n\nReads:\n{seq:qc_reads}",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_fastq_qc"],
+      "assertions": [
+        { "where": "tool", "pattern": "3 read\\(s\\), 60 bases" },
+        { "where": "tool", "pattern": "quality: mean Phred 23\\.42, Q30 58\\.33%" },
+        { "where": "tool", "pattern": "drops below Q30 from position 1 \\(below Q20 from 11\\)", "note": "the 3' collapse the user is worried about" },
+        {
+          "where": "answer",
+          "pattern": "23\\.4|58\\.3|Q30|quality",
+          "note": "the QC numbers, or at least the QC verdict, in prose. A model that exports the report as a deliverable and says 'the answers are in the attached report' has done the work but left the numbers out of the summary; that is a REPORTING observation, and it is recorded in benchmark/README.md rather than being the whole verdict — the tool assertions above already prove the analysis ran on the right data."
+        }
+      ]
+    },
+    {
+      "id": "gc-cpg-islands",
+      "category": "composition",
+      "tier": "core",
+      "covers": ["molbio_gc_composition"],
+      "instruction": "Tell me about the GC composition of this 402 bp sequence: overall GC percent, and whether it contains any CpG island under the Gardiner-Garden criteria. If there is one, give me its coordinates, its length, and its own GC percent.\n\n{seq:puc118_cpg_region}",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_gc_composition"],
+      "assertions": [
+        { "where": "tool", "pattern": "402 bp: GC 47\\.51%", "note": "overall GC of the fragment" },
+        { "where": "tool", "pattern": "island 1-200 \\(200 bp\\): GC 57%", "note": "the island's own GC, not the fragment's" },
+        { "where": "answer", "pattern": "47\\.[0-9]", "note": "overall GC stated in prose" },
+        { "where": "answer", "pattern": "\\b57\\b", "note": "island GC stated in prose — the two numbers must be told apart" }
+      ]
+    },
+    {
+      "id": "dilution-math",
+      "category": "bench-math",
+      "tier": "core",
+      "covers": ["molbio_lab_math"],
+      "instruction": "I have a 10x stock and I need 1000 microlitres of a 0.5x working solution. How much of the stock do I need, and how much diluent?",
+      "timeout_ms": 180000,
+      "expect_tools": ["molbio_lab_math"],
+      "assertions": [
+        { "where": "tool", "pattern": "v1 = c2·v2/c1", "note": "the tool's own worked relation" },
+        { "where": "answer", "pattern": "\\b50\\b", "note": "50 volume units of stock" },
+        { "where": "answer", "pattern": "950", "note": "the remainder is diluent" }
+      ]
+    },
+    {
+      "id": "restraint-simple-math",
+      "category": "restraint",
+      "tier": "core",
+      "covers": ["molbio_lab_math"],
+      "instruction": "No bioinformatics needed for this one, I just want to sanity-check my arithmetic: if I dilute 10 microlitres of a 50 mM solution into a final volume of 500 microlitres, what is the final concentration in mM?",
+      "timeout_ms": 180000,
+      "expect_absent": ["molbio_design_primers", "molbio_grna_design", "molbio_align"],
+      "assertions": [
+        { "where": "answer", "pattern": "\\b1 mM|1\\.0 mM|=\\s*1\\b", "note": "10 uL x 50 mM / 500 uL = 1 mM" }
+      ]
+    },
+    {
+      "id": "restraint-clarify",
+      "category": "restraint",
+      "tier": "core",
+      "covers": ["molbio_verify_sanger"],
+      "instruction": "Can you check my sequencing result for me?",
+      "timeout_ms": 180000,
+      "expect_absent": ["molbio_verify_sanger", "molbio_align"],
+      "assertions": [
+        { "where": "answer", "pattern": "read|trace|\\.ab1|\\.seq|reference|plasmid|file|path", "note": "the missing input must be asked for" },
+        { "where": "answer", "pattern": "no |not |nothing|can't|cannot|isn't|absent|zero|missing", "note": "the model must say it has nothing to work with rather than guess" },
+        {
+          "where": "answer",
+          "pattern": "[a-zA-Z]{4}[\\s\\S]{500,}",
+          "note": "a clarification, not a one-line refusal: at least 500 characters of substance. The first version demanded a literal `?`, which failed a perfectly clear bulleted request for the missing files — the headless composition has no question answerer, so the model is told to ask in prose and does so without question marks."
+        }
+      ]
+    }
+  ]
+}

@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.15.0 | — | benchmark 扩到 57/57 个工具（49 题，分 core/full 档）；**查出引物方向缺陷**；插件行为零变化 | 57 |
 | 0.14.0 | — | 文档重构（rules/workflow/roadmap/history）+ 首个可用性 benchmark；插件行为零变化 | 57 |
 | 0.13.1 | — | 在 DSH 0.1.7-alpha.2 上验证通过；修 preset order 撞号 | 57 |
 | 0.13.0 | — | 适配 DSH 0.1.7-alpha.1（面板文件读取失效、preset 进 bundle）；删除版本目录 | 57 |
@@ -31,6 +32,40 @@
 | 0.6.0 | v16 | Sequence logo + CRISPR gRNA 设计 | 44 → 46 |
 | 0.5.0 | v15 | 多序列比对（渐进仿射缺口 NW + UPGMA）与保守性分析 | — |
 | — | v12–v14 | Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view | — |
+
+---
+
+## v0.15.0（2026-09-23，包 0.15.0）
+
+benchmark 从 12 个工具、15 题扩到 **57/57 个工具、49 题**，并把"改功能必须改 benchmark"
+变成机器守卫（`test/benchmark-coverage.mjs` 断言全覆盖）。完整条目见
+[CHANGELOG 0.15.0](../CHANGELOG.md)。这里留两件事。
+
+**(1) benchmark 第一次查出一个真实的功能缺陷。**
+`molbio_design_primers` 返回的引物对把 forward/reverse **标反了**：它打印的 `F` 落在
+201-222（下游），`R` 落在 105-124（上游），两条引物朝外延伸，**按原样送进
+`molbio_pcr_simulate` 得到 0 个产物**。正确的那一对就在同一份输出里——把工具叫 `R` 的
+那条取反向互补即真正的正向引物。
+
+值得记的是**发现方式**：是模型自己指出来的（"the designer returned these two molecules
+with F/R reversed … the pair as printed does not amplify"），然后用 `pcr.mjs` 直接复核
+确认。**这是 benchmark 存在的意义**——一个只跑手算已知值的测试套件永远不会发现它，
+因为每个单独的数字都对，错的是两个数字之间的关系。
+
+**只记录，未修**：修它属于引物设计引擎的朝向处理，需要自己的回归测试。在修好之前，
+`qpcr-primers` 任务刻意**不断言模型把哪条叫 forward**——否则就是在惩罚一个发现了
+真 bug 的模型。
+
+**(2) full tier 首跑 35/49，但没有一条失败是模型的错。** 与 v0.14.0 同一课的续集：
+
+- `normalize()` 只折叠空白、不折叠 **Unicode 减号**，于是三条正确答案被判错
+  （`slope −3.30` 匹配不了 `/-3\.3/`）；
+- **runner 从没把任务点名的文件放进工作目录**，模型正确地拒绝瞎猜，却被记成失败；
+- 任务要求"顺便去掉 EcoRI 位点"，模型传了 `avoid_enzymes`（**更对**），而我钉的是
+  不传时的长度与 GC。
+
+由此写进 README 的设计规则：**钉住"请求所固定的东西"，不要钉"实现在某一组参数下恰好
+返回的东西"**。这三条都是"断言比工具的契约更窄"，而不是模型的行为问题。
 
 ---
 

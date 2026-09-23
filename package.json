@@ -1,6 +1,6 @@
 {
   "name": "dsh-molbio-tools",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Zero-dependency molecular-biology plugin bundle for the DeepSeek Harness: sequence analysis, primer design (incl. cross-intron qPCR primers, TaqMan hydrolysis probes and multiplex compatibility), in-silico PCR, cloning simulation, SnapGene .dna parsing and plasmid maps, Sanger verification, protein tools (incl. helical wheel and hydropathy plots), methylation-aware restriction analysis with double-digest buffer checks, qPCR analysis and plotting, multiple sequence alignment that conserves every input residue, conservation analysis, sequence logos, codon-usage analysis, phylogenetic trees with bootstrap support, Newick I/O and long-name label wrapping, CpG-island/GC-skew composition analysis, read-level FASTQ QC, CRISPR gRNA design with off-target search, an opt-in hand-off that shows a generated plot to the model as an attached image, plus a browser-side right-sidebar panel (plasmid maps and sequence logos drawn in the Web GUI) and a literature/protocol/experiment record system.",
   "type": "module",
   "main": "index.mjs",
@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build:client": "node build/client-bundle.mjs",
-    "test": "node --run test:unit && node test/contract.mjs && node test/drift-probe.mjs && node test/preset-health.mjs && node test/benchmark-profile.mjs && node test/benchmark-score.mjs && node --run bench:offline",
+    "test": "node --run test:unit && node test/contract.mjs && node test/drift-probe.mjs && node test/preset-health.mjs && node test/benchmark-profile.mjs && node test/benchmark-score.mjs && node test/benchmark-coverage.mjs && node --run bench:offline",
     "test:unit": "node test/smoke.mjs && node test/svgpng.mjs && node test/svgio.mjs && node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && node test/client-mount.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:svgpng": "node test/svgpng.mjs",
@@ -27,9 +27,12 @@
     "test:preset": "node test/preset-health.mjs",
     "test:benchmark-profile": "node test/benchmark-profile.mjs",
     "test:benchmark-score": "node test/benchmark-score.mjs",
+    "test:benchmark-coverage": "node test/benchmark-coverage.mjs",
     "bench": "node benchmark/run.mjs --model",
+    "bench:full": "node benchmark/run.mjs --model --tier full",
     "bench:offline": "node benchmark/run.mjs --offline",
     "bench:list": "node benchmark/run.mjs --list",
+    "bench:list:full": "node benchmark/run.mjs --list --tier full",
     "bench:profile": "node benchmark/profile.mjs",
     "bench:profile:check": "node benchmark/profile.mjs --check"
   },
@@ -70,8 +73,7 @@
     "cordis.patch.yml",
     "preset",
     "benchmark",
-    "test",
-    "docs",
+    "test",    "docs",
     "CHANGELOG.md",
     "README.md"
   ],

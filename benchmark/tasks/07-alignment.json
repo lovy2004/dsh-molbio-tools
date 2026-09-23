@@ -1,0 +1,117 @@
+{
+  "$comment": [
+    "Alignment, conservation, logos, sequence files and composition.",
+    "",
+    "The two composition tasks use DIFFERENT criteria on purpose: `gc-cpg-islands`",
+    "(core) uses Gardiner-Garden on a fragment with a real island, and this file's",
+    "`composition-skew` uses the same tool's window/skew path on the synthetic",
+    "construct — so a change to either criteria path is visible in one of them."
+  ],
+  "tasks": [
+    {
+      "id": "msa-align",
+      "category": "alignment",
+      "tier": "full",
+      "covers": ["molbio_msa_align"],
+      "instruction": "Align these three sequences — the third one is truncated at the end, so handle that — and give me the aligned block plus the mean pairwise identity.\n\nAGGTGACCTCGCCCCTGCACTGTTACTGAAGTTTCTTTGCATGCATGCTACGCTAGAGTA\nAGGTGACCTCGCCCCTGCACTGTTACTGAAGTTTCTTTGCATGCATGCTACGCTAGAGTG\nAGGTGACCTCGCCCCTGCACTGTTACTGAAGTTTCTTTGCATGCATGCTACGCTAGA",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_msa_align"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "progressive multiple sequence alignment: 3 sequences, 60 columns",
+          "note": "the column count is pinned because it is the v20 invariant made visible: the truncated third input keeps all its residues and is padded with terminal gaps, so the alignment is 60 columns and not 57. The IDENTITY percentage is NOT pinned — the offline grader feeds these as three separate sequences, but a model may instead pass an already-padded `alignment`, and the tool then reports a different (equally correct) mean."
+        },
+        {
+          "where": "tool",
+          "pattern": "seq3 [A-Z-]*--",
+          "note": "the truncated sequence is padded with terminal gaps rather than losing residues"
+        },
+        { "where": "answer", "pattern": "9[5-8]\\.[0-9]|97\\.2" },
+        { "where": "answer", "pattern": "\\b60\\b" }
+      ]
+    },
+    {
+      "id": "conservation",
+      "category": "alignment",
+      "tier": "full",
+      "covers": ["molbio_conservation"],
+      "instruction": "Tell me how conserved these three short sequences are: the consensus, the fraction of conserved columns, and which positions vary.\n\nACGTACGTAC\nACGTACGTAC\nACGTTCGTAC",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_conservation"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "conservation over 3 sequences × 10 columns",
+          "note": "the source label (`source: msa` vs `source: alignment`) is NOT pinned: a model that pre-aligns these ten-mers and passes `alignment` is doing the equivalent thing, and the tool reports both paths. What is pinned is that the conservation analysis ran on 3×10 columns."
+        },
+        { "where": "tool", "pattern": "consensus ACGTACGTAC" },
+        { "where": "tool", "pattern": "1 variable position\\(s\\)" },
+        { "where": "tool", "pattern": "column 5: consensus A, identity 0\\.667", "note": "the single variable column and its identity" },
+        { "where": "answer", "pattern": "ACGTACGTAC" },
+        { "where": "answer", "pattern": "\\b5\\b" }
+      ]
+    },
+    {
+      "id": "sequence-logo",
+      "category": "alignment",
+      "tier": "full",
+      "covers": ["molbio_sequence_logo"],
+      "instruction": "Draw a sequence logo for these alignment columns and tell me the total information content and which column is the most conserved.\n\nACGTACGTAC\nACGTACGTAC\nACGTTCGTAC",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_sequence_logo"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "sequence logo written to [^\\n]*logo\\.svg[^\\n]*\\(3 sequences x 10 columns, bits, small-sample corrected",
+          "note": "`logo\\.svg[^\\n]*` rather than `logo\\.svg \\(`: the tool appends the second suffix to a name that already carries one when `output_path` is given, so the real text is `logo.svg.svg (…`. The pattern tolerates that instead of pinning the tool's filename quirk."
+        },
+        { "where": "tool", "pattern": "total information 11\\.87 bits" },
+        { "where": "tool", "pattern": "most conserved column 1" },
+        { "where": "answer", "pattern": "11\\.8|11\\.87" },
+        { "where": "answer", "pattern": "column 1\\b|\\b1\\b" }
+      ]
+    },
+    {
+      "id": "fasta-tools",
+      "category": "sequence-io",
+      "tier": "full",
+      "covers": ["molbio_fasta_fastq"],
+      "instruction": "There are two sequence files in my working directory: seqs.fa (FASTA) and reads.fq (FASTQ). For the FASTA, give me the per-entry statistics. For the FASTQ, run the quality report and tell me the mean quality. Then convert the FASTQ to FASTA.\n",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_fasta_fastq"],
+      "assertions": [
+        { "where": "tool", "pattern": "fasta stats: 3 entries, 60 bases" },
+        { "where": "tool", "pattern": "scaffold \\(20 bp, GC 60%\\)" },
+        {
+          "where": "tool",
+          "pattern": "fastq (qc|convert): 2 entries, 24 bases",
+          "note": "the FASTQ was read. Which of the two FASTQ-capable paths the model takes is its choice: `molbio_fasta_fastq action=qc` and `molbio_fastq_qc` are both correct answers to 'run the quality report', and the first version pinned only the former."
+        },
+        { "where": "answer", "pattern": "\\b3\\b|three" },
+        { "where": "answer", "pattern": "\\b40\\b", "note": "the mean quality the model reported, from either path" }
+      ]
+    },
+    {
+      "id": "composition-skew",
+      "category": "composition",
+      "tier": "full",
+      "covers": ["molbio_gc_composition"],
+      "instruction": "Analyse the GC composition of this 512 bp sequence in 100 bp windows with a 50 bp step. Give me the overall GC, any CpG island you find, and the cumulative GC-skew minimum and maximum.\n\n{seq:construct}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_gc_composition"],
+      "assertions": [
+        { "where": "tool", "pattern": "512 bp: GC 50\\.2%" },
+        { "where": "tool", "pattern": "island 101-300 \\(200 bp\\): GC 53%, CpG obs/exp 1\\.068" },
+        { "where": "tool", "pattern": "cumulative GC skew minimum at 151 \\(-0\\.331\\)" },
+        { "where": "tool", "pattern": "maximum at 401 \\(0\\.0931\\)" },
+        {
+          "where": "answer",
+          "pattern": "50\\.2|512",
+          "note": "the sequence length or its overall GC. The first version pinned `50\\.2` and `151` separately and failed a correct answer that reported the island and the skew reading without reciting the global GC — the question asks for the island and the skew extrema, not a full table dump."
+        },
+        { "where": "answer", "pattern": "151|skew|ori|origin" }
+      ]
+    }
+  ]
+}

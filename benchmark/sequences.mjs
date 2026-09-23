@@ -3,25 +3,30 @@
  *
  * The DNA the benchmark tasks use, in one place.
  *
- * `tasks.json` is JSON on purpose — it is data, it diffs cleanly, and a reviewer
- * can read a task without reading code. The cost is that a task cannot compute
- * anything, and two tasks here need *generated* input:
+ * `tasks/*.json` is JSON on purpose — it is data, it diffs cleanly, and a
+ * reviewer can read a task without reading code. The cost is that a task cannot
+ * compute anything, and several tasks need *generated* input:
  *
  *  - a pseudo-random 400 bp primer-design template (a hand-typed 400-mer
- *    invites typos), and
- *  - the reference (200 bp) plus the read (`ALIGN_READ`) for the alignment
- *    task, where the read must be DERIVED from the reference or the "exactly one
- *    mismatch at reference position 81" claim silently becomes false.
+ *    invites typos);
+ *  - the reference (200 bp) plus the read (`ALIGN_READ`) for the alignment task,
+ *    where the read must be DERIVED from the reference or the "exactly one
+ *    mismatch at reference position 81" claim silently becomes false;
+ *  - the synthetic construct, vector and inserts in `fixtures.mjs`.
  *
  * Those live here as pure functions, and the runner expands a task's
- * placeholders before handing the instruction to the model. Deriving the read
- * is the point: the ground truth is then a property of this module, so the
+ * placeholders before handing the instruction to the model. Deriving the read is
+ * the point: the ground truth is then a property of this module, so the
  * instruction and the expected mismatch position cannot disagree.
  *
  * Placeholder syntax is `{name}` or `{name:arg}`; an unknown name or a missing
- * or extra argument is a hard error, so a typo in `tasks.json` fails the run
+ * or extra argument is a hard error, so a typo in a task file fails the run
  * instead of sending the model the literal text `{seq:typo}`.
  */
+
+import { FIXTURES, reverseComplementOf } from './fixtures.mjs';
+
+export { FIXTURES, reverseComplementOf };
 
 /** Deterministic pseudo-random DNA (the generator `test/smoke.mjs` uses). */
 export function makeTemplate(n, seed = 42) {
@@ -66,11 +71,14 @@ export const QPCR_TEMPLATE = makeTemplate(400, 7);
  */
 export const PUCI18_CPG_REGION = 'TCGCGCGTTTCGGTGATGACGGTGAAAACCTCTGACACATGCAGCTCCCGGAGACGGTCACAGCTTGTCTGTAAGCGGATGCCGGGAGCAGACAAGCCCGTCAGGGCGCGTCAGCGGGTGTTGGCGGGTGTCGGGGCTGGCTTAACTATGCGGCATCAGAGCAGATTGTACTGAGAGTGCACCATAAAATTGTAAACGTTAATATTTTGTTAAAATTCGCGTTAAATTTTTGTTAAATCAGCTCATTTTTTAACCAATAGGCCGAAATCGGCAAAATCCCTTATAAATCAAAAGAATAGCCCGAGATAGGGTTGAGTGTTGTTCCAGTTTGGAACAAGAGTCCACTATTAAAGAACGTGGACTCCAACGTCAAAGGGCGAAAAACCGTCTATCAGGGCGATG';
 
+/** 1-based mutation the searched mutagenesis template admits a pair for. */
+export const MUTAGENESIS_MUTATION = FIXTURES.MUTAGENESIS_MUTATION;
+
 /**
  * The named zero-argument sequences, addressable as `{seq:name}`.
  *
- * Exported because the offline grader (`score.mjs`) has to run the SAME inputs
- * the task text carries: a second copy of these sequences would let the
+ * Exported because the offline grader (`verifications.mjs`) has to run the SAME
+ * inputs the task text carries: a second copy of these sequences would let the
  * instruction and the expectation diverge without either one looking wrong.
  */
 export const NAMED_SEQUENCES = {
@@ -78,6 +86,41 @@ export const NAMED_SEQUENCES = {
   align_read: ALIGN_READ,
   qpcr_template: QPCR_TEMPLATE,
   puc118_cpg_region: PUCI18_CPG_REGION,
+  construct: FIXTURES.CONSTRUCT,
+  pcr_forward: FIXTURES.CONSTRUCT.slice(100, 120),
+  pcr_reverse: reverseComplementOf(FIXTURES.CONSTRUCT.slice(281, 301)),
+  gg_vector: FIXTURES.GG_VECTOR,
+  intron_genomic: FIXTURES.INTRON_GENOMIC,
+  gg_insert_1: FIXTURES.GG_INSERTS[0],
+  gg_insert_2: FIXTURES.GG_INSERTS[1],
+  clone_insert: FIXTURES.CLONE_INSERT,
+  cds: FIXTURES.CDS,
+  mutagenesis_template: FIXTURES.MUTAGENESIS_TEMPLATE,
+  sanger_read: FIXTURES.SANGER_READ,
+  /**
+   * The three FASTQ reads the `fastq-qc` task pastes in.
+   *
+   * Named so the instruction and the offline grader use ONE copy: the first
+   * version of that task hard-coded the reads in the instruction while the
+   * grader read `reads.fq`, whose contents are different — so the offline check
+   * "verified" a 2-read file against a 3-read expectation and passed only
+   * because nobody had run it yet. Read r3 carries quality-0 bases, which is the
+   * 3' collapse the task asks about.
+   */
+  qc_reads: [
+    '@r1',
+    'ACGTACGTACGTACGTACGT',
+    '+',
+    'IIIIIIIIIIIIIIIIIIII',
+    '@r2',
+    'TTTTTTTTTTTTTTTTTTTT',
+    '+',
+    '!!!!!!!!!!!!!!!!!!!!',
+    '@r3',
+    'GGGGCCCCAAAATTTTGGGG',
+    '+',
+    'IIIIIHHHHH#####IIIII',
+  ].join('\n'),
 };
 
 /** Named sequences that take an integer argument. */

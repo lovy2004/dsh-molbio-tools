@@ -1,0 +1,107 @@
+{
+  "$comment": [
+    "Cloning: extraction, mutagenesis, primer tails, assembly simulation.",
+    "",
+    "Two of these tasks have a property worth knowing before reading a failure:",
+    "`clone-primers` and `clone-simulate` both get told about an insert that",
+    "carries INTERNAL EcoRI/HindIII sites, and the tools report that clearly",
+    "instead of silently producing an undigestible product. So a low score here is",
+    "usually about whether the model relays the warning, not about arithmetic."
+  ],
+  "tasks": [
+    {
+      "id": "region-extract",
+      "category": "cloning",
+      "tier": "full",
+      "covers": ["molbio_extract_region"],
+      "instruction": "Pull the region from position 101 to 200 out of this 512 bp sequence and give me the subsequence. Also confirm which restriction site sits at the very start of what you extracted.\n\n{seq:construct}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_extract_region"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "extracted (vector|sequence) 101-200 \\(100 bp\\)",
+          "note": "the tool ran with the sequence it was given. Measured behaviour worth knowing: in the full-tier run the model called `molbio_extract_region` THREE times and every call came back `Error: provide either `vector` (a sequence) or `vector_path`` — it never found the parameter, then reconstructed the region by hand and verified it with `molbio_align` (which it did correctly). This assertion is therefore a genuine TOOL-SELECTION/argument finding: the parameter is named `vector`, the description says 'a sequence', and the model reached for something else. Recorded in benchmark/README.md."
+        },
+        { "where": "tool", "pattern": "GAATTCAGACCTGCAATGGG", "note": "the extracted subsequence starts with the EcoRI site" },
+        { "where": "answer", "pattern": "EcoRI" },
+        { "where": "answer", "pattern": "GAATTC" }
+      ]
+    },
+    {
+      "id": "mutagenesis",
+      "category": "cloning",
+      "tier": "full",
+      "covers": ["molbio_mutagenesis_primers"],
+      "instruction": "I want to change the A at position 200 of this template to a G by QuikChange-style site-directed mutagenesis. Design the primer pair and tell me what the change does to the protein.\n\n{seq:mutagenesis_template}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_mutagenesis_primers"],
+      "assertions": [
+        { "where": "tool", "pattern": "mutation span 200-200 on the mutated template \\(400 bp\\)" },
+        { "where": "tool", "pattern": "amino-acid change \\(frame 1 assumption\\): Q → R" },
+        { "where": "tool", "pattern": "F CAGAGTGACAACGACATTGCTAGCC", "note": "the designed forward primer" },
+        { "where": "tool", "pattern": "R GGCTAGCAATGTCGTTGTCACTCTG" },
+        { "where": "answer", "pattern": "Q.{0,6}R|Gln.{0,6}Arg", "note": "the amino-acid consequence" }
+      ]
+    },
+    {
+      "id": "clone-primers",
+      "category": "cloning",
+      "tier": "full",
+      "covers": ["molbio_clone_primers"],
+      "instruction": "Design cloning primers to amplify this insert so I can ligate it into a vector cut with EcoRI and HindIII — add the sites plus protection bases. Tell me the full primer sequences, and warn me about anything that would go wrong in the digest.\n\n{seq:clone_insert}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_clone_primers"],
+      "assertions": [
+        { "where": "tool", "pattern": "cloning primers \\(restriction\\)" },
+        { "where": "tool", "pattern": "GATAGAATTC", "note": "the forward primer's protection bases + EcoRI site" },
+        { "where": "tool", "pattern": "AATAAAGCTT", "note": "the reverse primer's tail" },
+        {
+          "where": "tool",
+          "pattern": "WARNING: EcoRI also cuts INSIDE the template",
+          "note": "the insert carries an internal EcoRI site — the tool says so, and relaying it is the point of the task"
+        },
+        { "where": "answer", "pattern": "GAATTC" },
+        { "where": "answer", "pattern": "AAGCTT" },
+        { "where": "answer", "pattern": "inside|internal|would be digested|cuts" }
+      ]
+    },
+    {
+      "id": "clone-simulate",
+      "category": "cloning",
+      "tier": "full",
+      "covers": ["molbio_clone_simulate"],
+      "instruction": "Simulate a restriction cloning reaction: use EcoRI and HindIII to put this insert into my 512 bp vector. Add the enzyme sites to the insert for me. Tell me the size of the final plasmid and the fragments each enzyme gives on the finished construct.\n\nVector:\n{seq:construct}\n\nInsert:\n{seq:clone_insert}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_clone_simulate"],
+      "assertions": [
+        { "where": "tool", "pattern": "restriction clone simulated: final plasmid 624 bp \\(Δ \\+112 bp\\)" },
+        { "where": "tool", "pattern": "enzyme recognition sites were added to the bare insert by the tool" },
+        { "where": "tool", "pattern": "EcoRI: final 568\\+56 bp vs vector 512 bp" },
+        { "where": "answer", "pattern": "624" },
+        { "where": "answer", "pattern": "568" },
+        { "where": "answer", "pattern": "56\\b" }
+      ]
+    },
+    {
+      "id": "golden-gate",
+      "category": "cloning",
+      "tier": "full",
+      "covers": ["molbio_golden_gate"],
+      "instruction": "I want to assemble two fragments into my vector by Golden Gate with BsaI. The vector is a bare backbone — the region to replace is positions 451-500. Design the junctions and give me the fragments to order, then tell me the size and the overhangs.\n\nVector:\n{seq:gg_vector}\n\nFragment 1:\n{seq:gg_insert_1}\n\nFragment 2:\n{seq:gg_insert_2}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_golden_gate"],
+      "assertions": [
+        { "where": "tool", "pattern": "Golden Gate assembly with BsaI \\(GGTCTC\\(1/5\\)\\): final plasmid 1226 bp \\(Δ \\+304 bp\\)" },
+        { "where": "tool", "pattern": "2 fragment\\(s\\) to order; 3 junction\\(s\\) designed" },
+        { "where": "tool", "pattern": "GGTCTCAAACC", "note": "fragment 1's 5' flank and junction" },
+        { "where": "tool", "pattern": "overhangs AACC / AAGC" },
+        {
+          "where": "answer",
+          "pattern": "BsaI|assembl|plasmid|fragment|overhang|FASTA|deliverable",
+          "note": "the task was addressed in prose. Measured behaviour: a model that saves the final plasmid as FASTA and draws the map sometimes closes with 'both files are attached' and omits the size — the artifacts carry it. The three tool assertions above already pin the assembly arithmetic (1226 bp, 2 fragments, 3 junctions, the overhangs), so the answer check stays loose rather than punishing a delivered file."
+        }
+      ]
+    }
+  ]
+}

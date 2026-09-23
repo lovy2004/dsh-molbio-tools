@@ -112,7 +112,30 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 ---
 
-## 6. 与官方插件规范的对照（以及三处已标注的偏差）
+## 6. 功能变了就必须动 benchmark（没变就不必跑）
+
+**新增或改动任何工具行为 → 必须新增/更新对应的 benchmark 任务并重跑；没有改动 → 不必重跑。**
+判据是**任务观察到的输出会不会变**，完整的对照表与分档命令见
+[workflow.md](workflow.md) 第 2 节。
+
+这条规则有两道**机器守卫**，它们让"忘了"变成"红"：
+
+- `test/benchmark-coverage.mjs` 断言 **57/57 个已注册工具都被至少一个任务覆盖**。
+  新增工具而没加任务 = **直接 FAIL**。它同时守住 fixture 的前提（Golden Gate 的载体必须
+  无 BsaI 位点、诱变模板必须仍能设计出引物）与 tier/占位符的健全性。
+- `test/benchmark-score.mjs` 用**真实模型响应的冻结副本**（`test/fixtures/benchmark-traces.json`）
+  回放判分器，并证明判分器**仍然会失败**。它拦住的是本仓库真的发生过的那类退化：
+  六条断言在给**措辞**打分而不是给**内容**打分（字面量 `GAATTC` vs 模型写的切点记法
+  `G^AATTC`、要求"2 bands"而模型正确地分开了理论片段数与可见条带数、要求字面 `?` 而
+  headless 组合没有问答器……）。
+
+配套的**零成本**门（在 `npm test` 里，任何改动都会跑）：`bench --offline` 把每条
+`where: "tool"` 断言拿去和**工具真实渲染出来的文本**比对。**离线绿是离线跑模型的前提**——
+期望值本身错了的话，跑出来的分数是在给 benchmark 自己打分。
+
+---
+
+## 7. 与官方插件规范的对照（以及三处已标注的偏差）
 
 本插件受"零依赖、随 preset 分发"约束，注册**裸工具定义**（无法 import `defineTool`），
 因此自行实现了官方约定中的等价行为，并逐项对照过
@@ -141,7 +164,7 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 ---
 
-## 7. 自动查看（auto-view）的平台边界
+## 8. 自动查看（auto-view）的平台边界
 
 图片工具写完 SVG 后通过 `view.mjs` 直接调用操作系统默认应用打开（Windows
 `Invoke-Item`、macOS `open`、桌面 Linux `xdg-open`/`$BROWSER`、WSL 经 `wslpath`
@@ -154,12 +177,12 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 ---
 
-## 8. 守卫必须被证明会失败
+## 9. 守卫必须被证明会失败
 
 **"没人见过失败的守卫不算守卫。"** 新增或修改任何 drift / health / contract 检查时，
 必须同时给出**能驱动它失败**的输入：`test/drift-probe.mjs` 就是为此存在的，
-`preset-health` 的 order 检查、specifier 检查、`contract.mjs` 的"空白容忍"自检
-都各自带一个突变实验。
+`preset-health` 的 order 检查、specifier 检查、`contract.mjs` 的"空白容忍"自检、
+`test/benchmark-score.mjs` 的"判分器仍能失败"都各自带一个突变实验。
 
 出处：0.1.6-alpha.1 的旧 drift 检查只比 id、对真故障只打印 note 并退出 0；
 `contract.mjs` 曾把断言绑在 minifier 的空格上，放宽成"不绑格式"时如果没有自检，

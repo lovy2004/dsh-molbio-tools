@@ -1,0 +1,101 @@
+{
+  "$comment": [
+    "Primer, probe and multiplex design.",
+    "",
+    "These tasks deliberately ask for design WORK rather than a design TOOL: the",
+    "instruction names the organism-level goal (a qPCR pair, a TaqMan assay, a",
+    "multiplex panel) and lets the model choose. That is what makes them a test of",
+    "tool selection, not just of argument filling."
+  ],
+  "tasks": [
+    {
+      "id": "primer-qc",
+      "category": "primers",
+      "tier": "full",
+      "covers": ["molbio_primer_check", "molbio_primer_tm"],
+      "instruction": "I have these two primers already ordered and I want to know whether they are any good together before I run them. Report the Tm of the forward primer, and flag anything structurally worrying about the pair.\n\nForward: ATTACTCCTGCTCTTCCCATAC\nReverse: CACTACTCCTCTGTACGCAC",
+      "timeout_ms": 240000,
+      "expect_tools": ["molbio_primer_check"],
+      "assertions": [
+        { "where": "tool", "pattern": "primer1: 22 bp, GC 45\\.45%", "note": "the forward primer's own metrics" },
+        { "where": "tool", "pattern": "primer2: 20 bp, GC 55%" },
+        { "where": "tool", "pattern": "self-any 7 \\(≤8\\)", "note": "the reverse primer's self-complementarity, right at the Primer3 limit" },
+        { "where": "tool", "pattern": "pair \\(dimer\\): score 14", "note": "the pair's dimer score" },
+        { "where": "answer", "pattern": "53\\.9|54\\b", "note": "the forward primer's Tm, 53.97 °C" }
+      ]
+    },
+    {
+      "id": "taqman-assay",
+      "category": "primers",
+      "tier": "full",
+      "covers": ["molbio_design_taqman"],
+      "instruction": "Design a TaqMan (5' nuclease) assay on this template. I want primers plus a hydrolysis probe between them, and I want the probe to sit at least a few degrees above the primers in Tm.\n\nTemplate:\n{template:400:7}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_design_taqman"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "[0-9]+ TaqMan assay candidate\\(s\\), best first",
+          "note": "the tool returned assay candidates. The count is NOT pinned: it depends on the Tm-margin and amplicon windows the model chooses, and every one of those choices is a legitimate reading of the request."
+        },
+        {
+          "where": "tool",
+          "pattern": "AGTTGAATGGGTAAGCCGGCA",
+          "note": "the probe the tool places in the top-ranked amplicon. The amplicon is not pinned either: a model that reads 'a few degrees above the primers' as a hard filter will reject #1 (its probe is BELOW the primers) and choose a later, genuinely qualifying assay — which is a better answer than the one this task first encoded."
+        },
+        {
+          "where": "tool",
+          "pattern": "vs the hotter primer",
+          "note": "the probe-vs-primer Tm margin, which the tool reports per candidate"
+        },
+        { "where": "answer", "pattern": "probe|Probe" }
+      ]
+    },
+    {
+      "id": "intron-qpcr",
+      "category": "primers",
+      "tier": "full",
+      "covers": ["molbio_design_intron_primers"],
+      "instruction": "I need a qPCR assay that will NOT amplify contaminating genomic DNA. Here is the genomic sequence and the two exon coordinates — design a pair where the forward primer spans the exon-exon junction. Tell me the spliced amplicon size and how far apart the primers sit on the genome.\n\n{seq:intron_genomic}\n\nExons: 1-400 and 701-1100 (1-based).",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_design_intron_primers"],
+      "assertions": [
+        { "where": "tool", "pattern": "forward primer spans an exon-exon junction", "note": "the property that makes the assay genomic-DNA-proof" },
+        { "where": "tool", "pattern": "spliced amplicon 320-406 \\(87 bp\\), genomic span 387 bp" },
+        { "where": "tool", "pattern": "junction 12\\+6 bp", "note": "bases contributed on each side of the junction" },
+        {
+          "where": "answer",
+          "pattern": "splic|junction|genomic|intron|87|387",
+          "note": "the transcript-spanning property must be explained. The two exact numbers are NOT pinned to the prose: measured behaviour is that a model may state the design (which primer spans the junction, and why genomic DNA cannot amplify) without reciting the spliced/genomic size pair — the tool assertions above already pin both, so requiring them again in prose double-counts one fact."
+        }
+      ]
+    },
+    {
+      "id": "multiplex-panel",
+      "category": "primers",
+      "tier": "full",
+      "covers": ["molbio_multiplex_check"],
+      "instruction": "I want to run these two primer pairs in the same multiplex tube. The first pair is on target A (template below), the second on target B. Check them against each other and tell me whether they interfere — dimers, unintended annealing, or bands I will not be able to tell apart.\n\nTarget A template:\n{template:400:7}\n\nPair A: forward ATTACTCCTGCTCTTCCCATAC (Tm 58.4), reverse CACTACTCCTCTGTACGCAC (Tm 58.9)\nPair B: forward GGGTTTCCCAAATTTGGGCCCA, reverse TTTGGGCCCAAATTTGGGAAAC\nTemplate B:\n{template:400:8}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_multiplex_check"],
+      "assertions": [
+        { "where": "tool", "pattern": "multiplex panel: 2 target\\(s\\) on 2 template\\(s\\), 4 primer\\(s\\)" },
+        {
+          "where": "tool",
+          "pattern": "primer-primer interactions above the dimer threshold: [0-9]+",
+          "note": "the interaction scan ran and reported a count. The COUNT and the specific pair are not pinned: the panel's interactions depend on the templates the model assembles (`template:400:8` is this task's convention, not the model's only option), and the first version pinned one measured pair at 70.73 °C."
+        },
+        {
+          "where": "tool",
+          "pattern": "unintended annealing: [0-9]+ primer\\(s\\) affected",
+          "note": "the mispriming scan ran"
+        },
+        {
+          "where": "answer",
+          "pattern": "dimer|interfere|conflict|anneal",
+          "note": "the panel verdict. Note the measured behaviour this task must tolerate: a model that FIRST checks each pair on its own template often finds — correctly — that a pair as written does not amplify at all, and answers that instead. That is a better answer than 'no dimer conflict', not a worse one."
+        }
+      ]
+    }
+  ]
+}
