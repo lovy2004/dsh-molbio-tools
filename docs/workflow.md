@@ -242,14 +242,49 @@ offline 证明"期望值仍然为真"，model 测量"模型是否仍然会用"�
 
 | 场景 | 命令 | 代价 |
 | --- | --- | --- |
-| 改了**一个**工具 | `node benchmark/run.mjs --model --task <id>` | 一题 |
-| 改了**一个领域**（如引物全部） | `--model --task` 逐个，或按文件看 `bench:list` | 几题 |
-| 改了共享代码（`lib.mjs`、`utils`） | `node --run bench:full` | 49 题 |
+| 改了**一个**工具 | `node benchmark/run.mjs --model --tools <工具名>` | 该工具涉及的题 |
+| 改了**几个**工具 | `--tools a,b,c`（也接受 `molbio_` 前缀与 `primer_*` 通配） | 并集 |
+| 改了**一个**已知任务 | `--task <id>` | 一题 |
+| 改了**一个领域** | 按 `--list --tier full` 里该类别逐个 `--tools` | 几题 |
+| 改了**共享代码**（`lib.mjs`、`svgio.mjs` 等） | `node --run bench:full` | 49 题 |
 | 发版前 | `node --run bench:full` | 49 题 |
 | 只是提交文档/客户端 | 不跑 | 0 |
 
-`npm run bench`（`--model`）默认只跑 **core 档**（14 题，一题一个能力领域的代表），
-`npm run bench:full` 跑全部 **49 题**（覆盖 57/57 工具）。
+```bash
+# 我改了 molbio_primer_tm，只想跑它涉及的题
+node benchmark/run.mjs --model --tools primer_tm
+#   selected 1 of 49 task(s) — --tools molbio_primer_tm (skipping 48)
+
+# 先看看会选到哪些题（不花 tokens）
+node benchmark/run.mjs --list --tools "primer_*"
+
+# 改断言之后：用记录下来的响应免费复算，不用重跑模型
+node benchmark/run.mjs --replay --tools primer_tm
+```
+
+`--tools` 认三种写法：`molbio_primer_tm`、`primer_tm`、`primer_*`；**匹配不到任何任务直接报错**
+（2 号退出码），因为那要么是拼错了，要么是该工具没有任务——后者
+`test/benchmark-coverage.mjs` 会当成缺口报出来。
+
+**`npm run bench`（无参数）仍然只跑 core 档 14 题。** 选了 `--tools` 就不看档位——
+你点名的工具，它所在的题一定跑，哪怕那题是 full-only。
+
+### 关键：即使只跑一个工具，两道离线门仍然跑**全量**
+
+```bash
+node benchmark/run.mjs --model --tools primer_tm
+# 内部先执行完整的 scoreSuiteOffline()：49 条任务的 where:"tool" 断言全部重算一遍
+```
+
+这不是浪费，而是这套"只跑一部分"能成立的前提。离线门几百毫秒、不调模型，它证明的是
+**"所有任务的期望值仍然等于工具的真实输出"**。于是可以安全地跳过一个任务的模型运行，
+当且仅当它没被改动——而"没被改动"这件事由离线门 + git 帮你确认，不靠记忆。
+
+**反过来，这也是 `--tools` 唯一的盲区**：离线门只看**单次调用的输出**，看不见"模型还选不选得对"。
+所以：
+
+- 改了某工具的**实现或描述** → `--tools <它>`；
+- 改了**共享模块**（影响面说不清）→ `--tier full`。
 
 ### 新增/改动 benchmark 任务的三步
 

@@ -10,6 +10,68 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.15.1] — 2026-09-23（benchmark 可按工具选择：`--tools`）
+
+**工具数、插件行为、benchmark 题目本身都未改动。** 这一版只修一件事：
+**改一个工具不该逼你跑全量。**
+
+### 1. `--tools`：按工具选任务
+
+```bash
+node benchmark/run.mjs --model --tools primer_tm    # 只跑涉及 molbio_primer_tm 的题
+node benchmark/run.mjs --list  --tools "primer_*"   # 先看会选到哪些题，不花 tokens
+node benchmark/run.mjs --replay --tools primer_tm   # 用记录下来的响应免费复算
+```
+
+认三种写法：`molbio_primer_tm` / `primer_tm` / `primer_*`；也接受逗号或空格分隔的多项。
+**匹配不到任何任务直接报错（退出码 2）**——那要么是拼错了，要么是该工具没有任务。
+
+**为什么这是必要的而不是锦上添花**：之前的唯一选择器是 `--task <id>`，于是"测一个工具"
+要先自己查出哪个任务覆盖它。结果就是**每次改动都跑全量**——而这正是上一版写下的规则
+（"改动的工具跑它自己的 benchmark"）在实践中最容易被绕开的地方。选择单位应该是
+**你改动的工具**，不是"恰好覆盖它的那个任务 id"。
+
+选了 `--tools` 就**不看 tier**：你点名的工具，它所在的题一定跑，哪怕那题是 full-only。
+
+### 2. 即使只跑一个工具，两道离线门仍跑**全量**
+
+`--model --tools <一个工具>` 内部先执行完整的 `scoreSuiteOffline()`：49 条任务的
+`where:"tool"` 断言全部重算。这是几百毫秒、不调模型的一步，而它正是"只跑一部分"能成立的
+前提——**它把"跳过是因为没改"从记忆变成受检的断言**。代价是它在离线侧永远不省；
+收益是不必为了"保险"而跑全量。
+
+**它的盲区照旧**：离线门只看单次调用的**输出**，看不见"模型还选不选得对"。所以规则是
+改了某工具的实现/描述 → `--tools <它>`；改了共享模块（影响面说不清）→ `--tier full`。
+
+### 3. `covers` 不能虚报（守卫加强）
+
+`--tools` 是按每个任务声明的 `covers` 选的，所以**虚报比漏报更危险**：一条
+`covers: [X]` 而从不跑 X 的任务，会让 `--tools X` 跑一个根本没测 X 的题并报"通过"。
+
+`test/benchmark-coverage.mjs` 新增断言：**每个 `covers` 里的工具，必须真的被那条任务
+要求（`expect_tools`）或被它的离线调用执行到**。加上这条后立刻查出两条虚报并修掉：
+`orientation` 声称覆盖 `molbio_gc_content` 却没要求它（已改成要求），
+`restraint-simple-math` 把 `molbio_lab_math` 算进覆盖（其实它是一个**克制性**任务，
+正确答案是不调工具，已改为 `covers: []`）。
+
+为此 `covers` 允许为空数组（表示"这条题刻意不要求任何工具"），但
+`covers: []` 与 `expect_tools` 非空并存仍然报错。
+
+### 4. 报错变干净
+
+用法错误（`--tools` 拼错、`--task` 不存在、两个互斥选项同时给）现在打印一行消息并
+`exit 2`，不再是一段 stack trace。`--replay` 后面的报告路径改成可选值，
+于是 `--replay --tools X` 不会把 `--tools` 当成文件名吞掉。
+
+### 发版清单
+
+| 项 | 内容 |
+|---|---|
+| 工具数 / 插件 | 不变 / 未改 |
+| benchmark 题目 | 未改（仅 `orientation` 与 `restraint-simple-math` 的 `covers`/`expect_tools` 元数据） |
+| 改 | `benchmark/run.mjs`（选择器 + `--tools`）、`benchmark/score.mjs`（`covers` 校验）、`test/benchmark-coverage.mjs`（虚报守卫）、`benchmark/README.md`、`docs/workflow.md` |
+| 预检 | `npm test`（13 项全绿） |
+
 ## [0.15.0] — 2026-09-23（benchmark 覆盖全部 57 个工具；查出引物方向缺陷）
 
 **工具数与插件行为均未改动**（57 个工具，领域模块一行未改）。这一版把上一版建立的 benchmark

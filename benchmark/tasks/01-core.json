@@ -22,7 +22,7 @@
       "covers": ["molbio_reverse_complement", "molbio_gc_content"],
       "instruction": "I have this DNA oligo: ATGCGTACGTTAGCCTAGGCAT. I need to order the reverse-complement strand. Give me the reverse-complement sequence and tell me the GC content of the original oligo.",
       "timeout_ms": 120000,
-      "expect_tools": ["molbio_reverse_complement"],
+      "expect_tools": ["molbio_reverse_complement", "molbio_gc_content"],
       "assertions": [
         { "where": "tool", "pattern": "reverse complement:[ ]*ATGCCTAGGCTAACGTACGCAT", "note": "reverse complement of the 22 nt input" },
         { "where": "tool", "pattern": "GC content:[ ]*50%", "note": "GC percent of the original" },
@@ -218,7 +218,7 @@
       "id": "restraint-simple-math",
       "category": "restraint",
       "tier": "core",
-      "covers": ["molbio_lab_math"],
+      "covers": [],
       "instruction": "No bioinformatics needed for this one, I just want to sanity-check my arithmetic: if I dilute 10 microlitres of a 50 mM solution into a final volume of 500 microlitres, what is the final concentration in mM?",
       "timeout_ms": 180000,
       "expect_absent": ["molbio_design_primers", "molbio_grna_design", "molbio_align"],

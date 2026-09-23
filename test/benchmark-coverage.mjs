@@ -29,7 +29,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { loadTasks, tasksForTier } from '../benchmark/score.mjs';
-import { invocationsFor } from '../benchmark/verifications.mjs';
+import { invocationsFor, usePlasmid, useWorkspaceRoot } from '../benchmark/verifications.mjs';
 import { FIXTURES, NAMED_SEQUENCES, expandInstruction } from '../benchmark/sequences.mjs';
 import { loadTools } from '../benchmark/tools.mjs';
 
@@ -60,7 +60,7 @@ assert.deepEqual(phantom, [], `these \`covers\` entries name tools that are not 
 
 console.log(`coverage: ${covered.size}/${registered.size} tools covered by ${tasks.length} task(s)`);
 
-// ── (2) tools referenced by selection rules are real ────────────────────────
+// ── (2) tools referenced by selection rules are real, and `covers` is not a lie ──
 
 for (const task of tasks) {
   for (const key of ['expect_tools', 'forbid_tools', 'expect_absent']) {
@@ -74,6 +74,32 @@ for (const task of tasks) {
     assert.ok(task.covers.includes(tool), `${task.id} requires ${tool} but does not list it in \`covers\``);
   }
 }
+
+// `covers` is what `--tools` selects on, so an over-claim is worse than a gap: it
+// would let `--tools X` run a task that never exercises X and report a pass.
+// Every covered tool must therefore appear either in the task's selection rules
+// or in the invocations its `where: "tool"` assertions are checked against.
+//
+// The builders need the pUC118 fixture bound before they can run, so bind a stub
+// here and collect EVERY over-claim rather than dying on the first one — fixing
+// them one assertion-failure at a time is how this check would get disabled.
+useWorkspaceRoot(join(import.meta.dirname, '..', 'benchmark', '.coverage-workspace'));
+usePlasmid({ sequence: 'A'.repeat(3162), length: 3162, topology: 'circular', features: [] });
+const overClaims = [];
+for (const task of tasks) {
+  const invocations = invocationsFor(task, {});
+  if (invocations === undefined) continue; // NETWORK_TASKS and its kin; checked below
+  for (const tool of task.covers) {
+    const required = ['expect_tools', 'expect_absent', 'forbid_tools'].some((key) => (task[key] ?? []).includes(tool));
+    const invoked = invocations.some((invocation) => invocation.tool === tool);
+    if (!required && !invoked) {
+      overClaims.push(
+        `${task.id} claims to cover ${tool} but neither requires it nor runs it — \`--tools ${tool.replace('molbio_', '')}\` would run a task that does not exercise it`,
+      );
+    }
+  }
+}
+assert.deepEqual(overClaims, [], 'the suite over-claims coverage (see the list above)');
 
 // ── (3) tiers ───────────────────────────────────────────────────────────────
 

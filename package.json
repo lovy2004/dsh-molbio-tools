@@ -1,6 +1,6 @@
 {
   "name": "dsh-molbio-tools",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Zero-dependency molecular-biology plugin bundle for the DeepSeek Harness: sequence analysis, primer design (incl. cross-intron qPCR primers, TaqMan hydrolysis probes and multiplex compatibility), in-silico PCR, cloning simulation, SnapGene .dna parsing and plasmid maps, Sanger verification, protein tools (incl. helical wheel and hydropathy plots), methylation-aware restriction analysis with double-digest buffer checks, qPCR analysis and plotting, multiple sequence alignment that conserves every input residue, conservation analysis, sequence logos, codon-usage analysis, phylogenetic trees with bootstrap support, Newick I/O and long-name label wrapping, CpG-island/GC-skew composition analysis, read-level FASTQ QC, CRISPR gRNA design with off-target search, an opt-in hand-off that shows a generated plot to the model as an attached image, plus a browser-side right-sidebar panel (plasmid maps and sequence logos drawn in the Web GUI) and a literature/protocol/experiment record system.",
   "type": "module",
   "main": "index.mjs",

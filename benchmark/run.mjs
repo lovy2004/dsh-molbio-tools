@@ -190,14 +190,14 @@ export async function verifyInstructionDelivery(options) {
  * "with today's assertions, X scores Y". When the two disagree, the assertion
  * changed, not the world.
  *
- * @param {{report: object, only?: string}} options
+ * @param {{report: object, taskList: {tasks: object[]}, keep?: Set<string>}} options
  * @returns {{results: object[], before: object}}
  */
 export function replayReport(options) {
   const { tasks } = options.taskList;
   const results = [];
   for (const recorded of options.report.results) {
-    if (options.only !== undefined && options.only !== recorded.id) continue;
+    if (options.keep !== undefined && !options.keep.has(recorded.id)) continue;
     const task = tasks.find((entry) => entry.id === recorded.id);
     if (task === undefined) {
       results.push({ id: recorded.id, category: '(removed)', tier: '-', tools_ok: true, args_ok: true, answer_ok: true, passed: false, failures: [{ kind: 'tool', detail: 'this task no longer exists in the suite' }], toolCalls: recorded.toolCalls ?? [], evidence: {} });
@@ -294,15 +294,123 @@ export function renderMarkdown(report) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Resolve a `--tools` / `--task` selection into the tasks to run.
+ *
+ * ── Why this exists ────────────────────────────────────────────────────────
+ *
+ * The suite's whole point is that a tool's benchmark runs when THAT TOOL
+ * changes, so the default unit of work should be "the tools I touched", not
+ * "the whole catalog". Without a selector, the only way to test one tool was to
+ * work out which task covers it and name that task — so in practice people (and
+ * the author of this file) ran the full suite every time, which is the wrong
+ * cost for a one-tool change.
+ *
+ * `--tools` also closes a hole `--task` left open: editing a tool that several
+ * tasks exercise used to mean finding all of them by hand.
+ *
+ * A name that matches nothing is a HARD ERROR rather than an empty run: the
+ * likely causes are a typo or a tool that no task covers, and both should be
+ * loud. (The second is also caught by `test/benchmark-coverage.mjs`.)
+ *
+ * @param {{tasks: object[], tools?: string, task?: string, tier: string}} options
+ * @returns {{selected: object[], skipped: object[], tools: string[]}}
+ */
+export function selectTasks(options) {
+  const { tasks } = options;
+
+  if (options.task !== undefined && options.tools !== undefined) {
+    throw new Error('benchmark: --task and --tools are mutually exclusive');
+  }
+
+  if (options.task !== undefined) {
+    const selected = tasks.filter((task) => task.id === options.task);
+    if (selected.length === 0) {
+      const near = tasks
+        .map((task) => task.id)
+        .filter((id) => id.includes(options.task) || options.task.includes(id));
+      throw new Error(
+        `benchmark: no task with id "${options.task}"${near.length > 0 ? ` — did you mean ${near.map((id) => `"${id}"`).join(' or ')}?` : ''}`,
+      );
+    }
+    return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools: [] };
+  }
+
+  if (options.tools === undefined) {
+    const selected = tasksForTier(tasks, options.tier);
+    return { selected, skipped: tasks.filter((task) => !selected.includes(task)), tools: [] };
+  }
+
+  // Accept `molbio_primer_tm`, `primer_tm`, comma/space separated lists, and `*`
+  // globs — because the useful input is "the tools I just edited", copied from
+  // the file or the changelog, and making the caller normalize that is friction
+  // with no payoff.
+  const wanted = options.tools
+    .split(/[,\s]+/)
+    .map((name) => name.trim())
+    .filter((name) => name !== '');
+  if (wanted.length === 0) throw new Error('benchmark: --tools needs at least one name');
+
+  const covered = new Set(tasks.flatMap((task) => task.covers));
+  const resolveOne = (pattern) => {
+    const bare = pattern.startsWith('molbio_') ? pattern : `molbio_${pattern}`;
+    if (!pattern.includes('*')) return covered.has(bare) ? [bare] : [];
+    const expression = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+    return [...covered].filter((tool) => expression.test(tool) || expression.test(tool.replace('molbio_', '')));
+  };
+
+  /** Report a name the way the caller wrote it, not with a prefix they omitted. */
+  const asWritten = (pattern, resolved) => (pattern.startsWith('molbio_') ? resolved : resolved.replace('molbio_', ''));
+
+  const tools = [];
+  const unmatched = [];
+  for (const pattern of wanted) {
+    const found = resolveOne(pattern);
+    if (found.length === 0) unmatched.push(pattern);
+    else tools.push(...found);
+  }
+  if (unmatched.length > 0) {
+    throw new Error(
+      `benchmark: no task covers ${unmatched.map((name) => `"${name}"`).join(', ')}\n` +
+        '  Either the name is a typo, or the tool has no task (which\n' +
+        '  `node test/benchmark-coverage.mjs` reports as a gap).\n' +
+        '  `node benchmark/run.mjs --list --tier full` prints every task and the tools it covers.',
+    );
+  }
+
+  const unique = [...new Set(tools)];
+  const selected = tasks.filter((task) => task.covers.some((tool) => unique.includes(tool)));
+  return {
+    selected,
+    skipped: tasks.filter((task) => !selected.includes(task)),
+    tools: unique.map((tool) => asWritten(options.tools, tool)),
+  };
+}
+
+/** One line describing how a selection was narrowed, for the run header. */
+function describeSelection(options, tools) {
+  if (tools.length > 0) return ` — --tools ${tools.join(', ')}`;
+  if (options.task !== undefined) return ` — --task ${options.task}`;
+  return ` — tier ${options.tier} (add --tools <name> or --tier full for more)`;
+}
+
 /** Parse the small flag set this CLI accepts, refusing anything else. */
 function parseArgs(argv) {
   const options = {
     mode: undefined,
     task: undefined,
+    tools: undefined,
     tier: 'core',
     keep: false,
     skipPreflight: false,
     timeoutMs: undefined,
+  };
+  // Flags whose value is optional and only present when the next token is not
+  // itself a flag. `--replay` is the reason: `--replay --task x` must read the
+  // report path as absent rather than swallowing `--task`.
+  const takeOptionalValue = (index) => {
+    const next = argv[index + 1];
+    return next === undefined || next.startsWith('--') ? undefined : next;
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -313,8 +421,13 @@ function parseArgs(argv) {
     else if (value === '--skip-preflight') options.skipPreflight = true;
     else if (value === '--replay') {
       options.mode = 'replay';
-      options.reportPath = argv[++index];
+      const path = takeOptionalValue(index);
+      if (path !== undefined) {
+        options.reportPath = path;
+        index += 1;
+      }
     } else if (value === '--task') options.task = argv[++index];
+    else if (value === '--tools') options.tools = argv[++index];
     else if (value === '--timeout') options.timeoutMs = Number(argv[++index]);
     else if (value === '--all' || value === '--tier') {
       // `--all` is the shorthand people reach for; `--tier full` is the explicit
@@ -342,14 +455,14 @@ async function main() {
   }
 
   if (options.mode === 'list') {
-    const selected = options.task === undefined ? tasksForTier(tasks, options.tier) : tasks.filter((task) => task.id === options.task);
-    for (const task of selected) {
-      console.log(`${task.id}  [${task.category}/${task.tier}]  ${task.expect_tools?.join(',') ?? 'no tools expected'}`);
+    const selection = selectTasks({ tasks, tools: options.tools, task: options.task, tier: options.tier });
+    for (const task of selection.selected) {
+      console.log(`${task.id}  [${task.category}/${task.tier}]  covers: ${task.covers.join(', ')}`);
       console.log(`    ${renderInstruction(task).split('\n')[0].slice(0, 110)}`);
     }
     const core = tasks.filter((task) => task.tier === 'core').length;
-    console.log(`\n${selected.length} of ${tasks.length} task(s) (tier=${options.tier}; ${core} core, ${tasks.length - core} full-only)`);
-    console.log(`tools covered: ${new Set(tasks.flatMap((task) => task.covers)).size}`);
+    console.log(`\n${selection.selected.length} of ${tasks.length} task(s) selected` + describeSelection(options, selection.tools));
+    console.log(`tiers: ${core} core, ${tasks.length - core} full-only · tools covered by the suite: ${new Set(tasks.flatMap((task) => task.covers)).size}`);
     return;
   }
 
@@ -385,9 +498,16 @@ async function main() {
       );
       process.exit(2);
     }
-    const replay = replayReport({ report, taskList: { tasks }, only: options.task });
-    console.log(`replaying ${reportPath}`);
-    console.log(`  recorded: ${replay.before.passed}/${replay.before.total} passed`);
+    // Same selector as a model run, so "replay what I just changed" is the same
+    // command shape as "run what I just changed".
+    const selection = selectTasks({ tasks, tools: options.tools, task: options.task, tier: options.tier });
+    const replay = replayReport({
+      report,
+      taskList: { tasks },
+      keep: selection.selected.length === tasks.length ? undefined : new Set(selection.selected.map((task) => task.id)),
+    });
+    console.log(`replaying ${reportPath}${describeSelection(options, selection.tools)}`);
+    console.log(`  recorded: ${replay.before.passed}/${replay.before.total} passed (whole run)`);
     let changed = 0;
     for (const result of replay.results) {
       const was = report.results.find((entry) => entry.id === result.id);
@@ -413,18 +533,28 @@ async function main() {
 
   // The suite's expected values must be true before a model run can mean
   // anything: otherwise a failure would be attributed to the model.
-  const offline = await scoreSuiteOffline({ only: options.task });
+  //
+  // This checks the WHOLE suite even when one tool was selected, and on purpose:
+  // it costs nothing, and a selection should never be the reason a stale
+  // expectation goes unnoticed.
+  const offline = await scoreSuiteOffline({});
   if (!offline.ok) {
     console.error('benchmark: the suite does not match the shipped tools — run `node benchmark/run.mjs --offline` and fix the expectations first');
     for (const entry of offline.tasks) for (const failure of entry.failures) console.error(`  ${entry.id}: ${failure.detail}`);
     process.exit(2);
   }
 
-  const selected = options.task === undefined ? tasksForTier(tasks, options.tier) : tasks.filter((task) => task.id === options.task);
+  const selection = selectTasks({ tasks, tools: options.tools, task: options.task, tier: options.tier });
+  const selected = selection.selected;
   if (selected.length === 0) {
-    console.error(`benchmark: no task with id "${String(options.task)}"`);
+    console.error('benchmark: the selection matched no tasks');
     process.exit(2);
   }
+  const core = tasks.filter((task) => task.tier === 'core').length;
+  console.error(
+    `selected ${selected.length} of ${tasks.length} task(s)${describeSelection(options, selection.tools)}` +
+      ` (skipping ${selection.skipped.length}; tiers: ${core} core, ${tasks.length - core} full-only)`,
+  );
 
   const startedAt = new Date().toISOString();
   const launcher = await launcherCommand(harnessRoot);
@@ -536,4 +666,14 @@ async function main() {
   process.exit(report.summary.failed === 0 ? 0 : 1);
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  // A usage mistake (a typo in `--tools`, a task id that does not exist, two
+  // mutually exclusive flags) is the operator's problem to read, not a stack
+  // trace to decode: print the message and exit 2.
+  try {
+    await main();
+  } catch (error) {
+    console.error(String(error instanceof Error ? error.message : error));
+    process.exit(2);
+  }
+}

@@ -82,10 +82,11 @@ export async function loadTasks(dir = join(REPO_ROOT, 'benchmark', 'tasks')) {
       if (task.tier !== 'core' && task.tier !== 'full') {
         throw new Error(`${file}: task "${task.id}" must declare tier "core" or "full"`);
       }
-      if (!Array.isArray(task.covers) || task.covers.length === 0) {
-        throw new Error(
-          `${file}: task "${task.id}" declares no \`covers\` — the tool it exercises would be invisible to the coverage guard`,
-        );
+      if (!Array.isArray(task.covers)) {
+        throw new Error(`${file}: task "${task.id}" must declare a \`covers\` array (empty when the task requires no tool)`);
+      }
+      if (task.covers.length === 0 && (task.expect_tools ?? []).length > 0) {
+        throw new Error(`${file}: task "${task.id}" requires tools but covers none`);
       }
       for (const tool of task.covers) {
         if (typeof tool !== 'string' || !tool.startsWith('molbio_')) {

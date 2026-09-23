@@ -52,29 +52,44 @@ stream. It costs tokens, so it is opt-in.
 would otherwise be reported as a model failure — the most misleading outcome a
 benchmark can produce.
 
-### Tiers: what to run after a change
+### Tiers and SELECTION: what to run after a change
 
-| tier | tasks | tools | when |
-|---|---|---|---|
-| `core` (default) | 14 | 14 | one representative per capability area |
-| `full` | 49 | **57/57** | a shared-code change, or before a release |
+```bash
+node benchmark/run.mjs --model --tools primer_tm      # just the tasks that touch molbio_primer_tm
+node benchmark/run.mjs --list  --tools "primer_*"     # see what that would select, no model call
+node benchmark/run.mjs --replay --tools primer_tm     # re-score recorded responses, free
+```
 
-The tiers exist because the whole-catalog run costs an order of magnitude more
-than the core one, and the right default depends on what changed. The rule that
-ties a change to a tier — **a feature change must add or update its task and
-re-run; an unchanged feature needs no re-run** — is in
-[docs/workflow.md](../docs/workflow.md) section 2, with the full change→tier
-table.
+`--tools` takes `molbio_primer_tm`, `primer_tm`, or `primer_*`; a name that
+matches nothing is a hard error (it is a typo, or a tool with no task — which
+`test/benchmark-coverage.mjs` reports as a gap). Selecting by tool is not a
+convenience wrapper: it is the intended default unit of work, because the rule
+below is "a changed tool re-runs ITS benchmark", and the previous selector made
+you work out which task that was by hand.
 
-Two guards make "someone forgot" fail loudly instead of quietly:
+That is why `--tools` bypasses the tier: a tool you name is a tool you changed,
+so its task runs even if it is full-only.
 
-- `test/benchmark-coverage.mjs` asserts **57/57 registered tools are covered by
-  at least one task**. Adding a tool without a task is a red build. It also
-  asserts the fixtures' premises (the Golden Gate backbone is BsaI-free, the
-  mutagenesis template still admits a primer pair) and that core is a broad
-  sample rather than a smoke test.
-- `test/benchmark-score.mjs` replays frozen real responses and proves the scorer
-  can still fail.
+| selection | tasks | when |
+|---|---|---|
+| `--tools <name>` | the tasks covering that tool | you changed one tool |
+| `--tools a,b,c` / `primer_*` | the union | you changed a few |
+| (default) | **core** — 14 tasks | a broad smoke of the catalog |
+| `--tier full` | all 49, 57/57 tools | a shared-code change, or before a release |
+
+### The part that still runs in full, on purpose
+
+A model run with `--tools` first executes the **whole** offline gate: all 49
+tasks' `where: "tool"` expectations are recomputed against the shipped tools
+(no model, a few hundred milliseconds). That is what makes partial runs safe —
+the expected values are re-proven for the tasks you skipped, so "skipped because
+unchanged" is a checked claim, not a remembered one.
+
+Its blind spot is the same as ever: the offline gate sees a tool's OUTPUT, never
+whether a model still reaches for it. So the rule is:
+
+- changed a tool's implementation or description → `--tools <that tool>`;
+- changed a shared module with unclear reach → `--tier full`.
 
 ### Layout
 
@@ -98,6 +113,17 @@ A task's expected text lives in `tasks/`; the input that produces it lives in
 `verifications.mjs`. Keeping them in separate files is what makes `--offline` a
 real check: if the two disagree, the assertion fails rather than quietly
 asserting whatever the tool happened to emit.
+
+Two guards make "someone forgot" fail loudly instead of quietly:
+
+- `test/benchmark-coverage.mjs` asserts **57/57 registered tools are covered by
+  at least one task**. Adding a tool without a task is a red build. It also
+  asserts the fixtures' premises (the Golden Gate backbone is BsaI-free, the
+  mutagenesis template still admits a primer pair), that a `covers` entry names a
+  real tool, and that core is a broad sample rather than a smoke test.
+- `test/benchmark-score.mjs` replays frozen real responses and proves the scorer
+  can still fail (tool attribution by `callId`, truncation reporting, a missing
+  tool call failing selection).
 
 ### Reports
 
