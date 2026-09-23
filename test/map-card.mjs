@@ -25,13 +25,22 @@ import { readFile, writeFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createSlotsStub } from './slots-stub.mjs';
+import { findHarnessRoot, importPackage } from '../benchmark/harness.mjs';
 
 const require = createRequire(import.meta.url);
 const panelCore = await import('../build/panel-core.mjs');
 
 // ── host side: a mock registry, as the smoke test uses ──────────────────────
 
-const dshTools = await import('file:///C:/Users/18771/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js');
+// Resolved through the shared helper: the hardcoded per-machine path this used
+// to import (`file:///C:/Users/<name>/AppData/...`) made the suite pass only on
+// the author's box.
+const harnessRoot = findHarnessRoot(process.env.DSH_HARNESS_ROOT);
+if (harnessRoot === undefined) {
+  console.error('map-card: could not locate an installed DSH harness (set DSH_HARNESS_ROOT)');
+  process.exit(2);
+}
+const dshTools = await importPackage('@deepseek-ai/dsh-tools', harnessRoot);
 const { assertSupportedJsonSchema } = dshTools;
 const plugin = await import('../index.mjs');
 

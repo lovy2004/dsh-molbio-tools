@@ -36,12 +36,17 @@
  */
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execFileSync } from 'node:child_process';
 // Re-exported for test/drift-probe.mjs, which drives the same reader against
 // deliberately mutated declarations.
 import { presetPlugins, asPresetPatch } from './preset-rows.mjs';
+// `benchmark/` needs the same two answers this suite does — which harness is
+// installed, and how the Loader's YAML dialect parses a patch layer — so those
+// helpers live in one place instead of being copied. The duplication that used
+// to sit here is why the comment above says "the same reader": two copies of
+// `findHarnessRoot` could disagree about which harness is under test.
+import { entryOf, findHarnessRoot, importPackage, packageInstalled, packagesDir, readComposition } from '../benchmark/harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -81,84 +86,6 @@ function presetDescription(text) {
   return line;
 }
 
-
-/** Strip the `@deepseek-ai/` scope for the npm/global-prefix probe. */
-function harnessCandidates() {
-  const candidates = [];
-  if (process.env.DSH_HARNESS_ROOT) candidates.push(process.env.DSH_HARNESS_ROOT);
-  try {
-    const prefix = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['prefix', '-g'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (prefix) candidates.push(join(prefix, 'node_modules', '@deepseek-ai', 'dsh'));
-  } catch {
-    /* npm absent: fall through to the remaining probes */
-  }
-  for (const probe of [
-    'C:\\Users\\18771\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh',
-    '/usr/local/lib/node_modules/@deepseek-ai/dsh',
-    '/usr/lib/node_modules/@deepseek-ai/dsh',
-  ]) {
-    candidates.push(probe);
-  }
-  return candidates;
-}
-
-/** The installed harness root that actually contains the DSH packages. */
-function findHarnessRoot(explicit) {
-  const candidates = explicit ? [explicit, ...harnessCandidates()] : harnessCandidates();
-  for (const candidate of candidates) {
-    if (candidate && existsSync(join(candidate, 'node_modules', '@deepseek-ai', 'dsh-persona', 'package.json'))) {
-      return resolve(candidate);
-    }
-  }
-  return undefined;
-}
-
-/** Where the harness keeps its own dependencies. */
-function packagesDir(harnessRoot) {
-  return join(harnessRoot, 'node_modules', '@deepseek-ai');
-}
-
-/** Node's upward `node_modules` walk, the same rule the preset roster uses. */
-function packageInstalled(name, from) {
-  const pkg = name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/');
-  let dir = from;
-  for (;;) {
-    if (existsSync(join(dir, 'node_modules', pkg, 'package.json'))) return join(dir, 'node_modules', pkg);
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-}
-
-/** The ESM entry a package exposes as its default export. */
-function entryOf(pkgDir, exportsField) {
-  const pick = (value) => {
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object') return pick(value.default ?? value.import ?? value.require);
-    return undefined;
-  };
-  const relative = pick(exportsField) ?? 'index.js';
-  return join(pkgDir, relative.replace(/^\.\//, ''));
-}
-
-/** Import an installed package by its own manifest, scope-independent. */
-async function importPackage(name, harnessRoot) {
-  const pkgDir = packageInstalled(name, harnessRoot);
-  if (pkgDir === undefined) throw new Error(`preset-health: ${name} is not installed beside the harness`);
-  const manifest = JSON.parse(await readFile(join(pkgDir, 'package.json'), 'utf8'));
-  return await import(pathToFileURL(entryOf(pkgDir, manifest.exports?.['.'] ?? manifest.exports ?? manifest.main)).href);
-}
-
-/** Read a composition with the Loader's own YAML dialect (carries `!!js`). */
-async function readComposition(path, harnessRoot) {
-  const { entryListSchema } = await importPackage('@deepseek-ai/cordis-plugin-include', harnessRoot);
-  const yaml = (await importPackage('js-yaml', harnessRoot)).default;
-  const text = await readFile(path, 'utf8');
-  return yaml.load(text, { schema: entryListSchema });
-}
 
 /** Flatten a composition into the rows that actually start. */
 function flattenRows(rows, at = '') {

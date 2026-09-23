@@ -10,6 +10,118 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.14.0] — 2026-09-23（项目规范化 + 首个可用性 benchmark）
+
+**工具数不变（57），插件行为零变化**——这一版不新增也不修改任何工具，改的是**这个项目怎么
+维护**，以及**它第一次能被测量**。因此它是 minor 而不是 patch：新增了包内公开面
+（`benchmark/` 目录、两个测试套件、若干 npm script）。
+
+### 1. 文档重构：按"你要回答的问题"拆开
+
+`docs/maintainer.md` 原来有 626 行，把"不能违反的规则""怎么操作""未来方向""历史教训"
+混在一起，后果是**发布纪律在同一份文件里出现了两遍**（「发布与更新流程」与末尾的
+「发版时唯一容易漏的一步」），两处内容已经不一致。现在拆成四份，每份一个职责，
+`maintainer.md` 变成导航页 + 60 秒速览 + 目录结构：
+
+| 文档 | 回答的问题 |
+|---|---|
+| `docs/rules.md` | 什么**不能**违反（每条都注明它是哪次事故换来的） |
+| `docs/workflow.md` | **怎么做**：测试金字塔、客户端半、发布预检、DSH 升级 |
+| `docs/roadmap.md` | 接下来**往哪走**，以及明确不做的清单 |
+| `docs/history.md` | **已经发生了什么**、每个 bug 换来哪条规则 |
+
+README 与 CHANGELOG 里原有的 `maintainer.md` 链接**全部保持有效**（该文件仍在）。
+
+### 2. benchmark：第一次能回答"模型会不会用这套工具"
+
+在这之前，仓库里**每一个检查都是离线的**：工具算得对不对（`smoke`）、图对不对
+（`svgpng`）、挂不挂得上（`preset-health`/`contract`）。**没有一个能回答"模型拿到一句
+自然语言的生物学请求，会不会找到正确的工具、把参数填对、把结论说出来"**——而这恰恰是
+这个工具集的价值所在。新增 `benchmark/`：
+
+- **15 条任务 / 12 个工具 / 11 个类别**（序列、引物、克隆、酶切、qPCR、比对、组成、
+  实验台分析、实验算术、可视化、克制性），判分拆成**三个独立维度**：
+  `tools_ok`（工具选择）/ `args_ok`（参数：读工具结果）/ `answer_ok`（结论：读最终回答）。
+  拆开是因为"它失败了"不可行动，而三者指向完全不同的地方。
+- **真实模型实测（dsh 0.1.7-alpha.2 + deepseek-flash，2026-09-23）**：
+  **15/15 任务通过；工具选择 15/15、参数 15/15、结论 15/15**；69 次工具调用、
+  2.47M tokens、355 s。报告在 `benchmark/reports/`（不进 git），跑法 `npm run bench`。
+  **这个数字是单次样本，不是保证**：`benchmark/README.md` 记了一次实测的run-to-run
+  差异（同一条任务两种都正确、措辞不同的回答），断言因此按**内容**而不是**措辞**写。
+- **但先看下面第 3 节**：要拿到这个 15/15，先得修掉五个"测量本身的错"——第一版跑出来的
+  0/15 测的是 benchmark，不是插件。
+- **两道零成本离线门**（进 `npm test`）：`bench --offline` 把每条 `where: "tool"` 断言
+  拿去和**工具真实渲染出来的文本**比对（不是 JSON——见下）；`test/benchmark-profile.mjs`
+  逐字段比对 headless profile 与 preset 行清单，**上游加一行就会红**。
+- **benchmark 的 profile 是推导出来的，不是手写的**：`benchmark/profile.mjs` 从
+  `preset/molbio-lab/agent.cordis.yml` 生成 `$DSH_HOME/profiles/molbio-bench`。
+  之所以要它：**`dsh-headless` 明确拒绝跑在 agent preset 下的会话**
+  （*the one-shot runner does not compose*），所以工具必须以**宿主行**挂载——
+  这正是本包唯一拒绝发布的形状（bundle 的 `cordis.patch.yml` 是空列表）。
+  推导 + 逐字段守卫，是让这份重建不会静默漂移的代价。
+
+### 3. 抓到并修掉的五个"测量本身的错"
+
+这一版最贵的一课是：**benchmark 的第一版测的是它自己**。修掉的是测量工具的缺陷，
+不是插件的缺陷——每一条都记进了代码注释与 `benchmark/README.md`：
+
+1. **指令根本没送到模型**。`spawn(..., { shell: true })` 在 Windows 上**拼接** argv 而不
+   转义，多行任务被截成**第一个词**（`"Save this text exactly…"` → `Save`）。第一次完整
+   运行 15 题全废，而唯一症状是模型说"序列不在对话里"。现在改为**不用 shell**、
+   直接以 `process.execPath` 调 `dsh` 的 JS 入口，并把任务走 **stdin**
+   （`dsh-headless` 支持），另加一次**送达 preflight**（探针 token 不回显就整体拒绝运行）。
+2. **离线门和运行时用的不是同一份文本**。`where: "tool"` 断言在离线侧比对**原始 JSON**，
+   而运行时的 trace **只带渲染文本**——于是离线全绿、实跑永远不可能命中。
+   `scoreSuiteOffline` 现在渲染，`--offline` 真正覆盖了这条通路。
+3. **`tool_result` 按到达顺序归因**。改为按 `callId` 关联；没有对应调用的结果报
+   `(unattributed)`，而不是赖给隔壁那次调用。
+4. **工具结果 8 KiB 截断把证据切掉了**。模型多跑 20 次网络检索后，早先的工具结果会掉出
+   捕获窗口，于是断言失败而模型其实读到了。`foldEvents` 现在上报
+   `resultBytes`/`resultsTruncated`，`scoreTrace` 把这种失败标成 `suspectTruncation`——
+   **截断造成的失败不算模型的证据**。
+5. **六条断言在给措辞打分，而不是给内容打分**。逐条修掉并写进注释：字面量 `GAATTC`
+   （模型写切点记法 `G^AATTC`）、要求"2 bands"（模型正确区分了"2 个片段"与"1 kb ladder
+   上实际可见的 1 条带"）、要求字面 `?`（headless 组合没有问答器，模型被要求在散文里提问）、
+   以及把 `seq1/seq2` 参数顺序钉死的错配断言（`molbio_align` 的同一性是**对称的**，
+   模型传 `sequence1 = read` 完全正确）。
+
+**守卫**：新增 `test/benchmark-score.mjs`，用**真实运行的响应**（冻结在
+`test/fixtures/benchmark-traces.json`，`benchmark/_freeze-trace.mjs` 可重新生成）回放
+判分器，并证明**判分器自己还能失败**（callId 归因、截断上报、无工具调用必须判选择失败、
+塞一条不可能满足的断言必须 FAIL）。合成 trace 抓不到上面第 5 类 bug——它们是"模型怎么
+措辞"的性质，所以证据必须活过产生它的那次运行。
+
+### 4. 仓库可移植性：清掉写死的用户路径
+
+`test/smoke.mjs` 与 `test/map-card.mjs` 曾以
+`file:///C:/Users/18771/AppData/...` 硬导入 harness 的 `dsh-tools`——**这套测试只可能在一台
+机器上通过**，而且在别的机器上它会**静默导入另一个 harness**（与 `preset-health`/`contract`
+校验的那个不是同一个）。`harness.mjs` 里那条 `C:\Users\18771\...` 探测路径同样只在一台机器
+上是对的。现在 `benchmark/harness.mjs` 是**唯一**的 harness 定位实现
+（`DSH_HARNESS_ROOT` → `npm prefix -g` → 平台惯例），`preset-health`、`drift-probe`、
+`contract`、`smoke`、`map-card` 全部复用它——顺带消掉了 `drift-probe` 里那份重复的
+`packageInstalled`/`importPackage`/`readComposition`（重复的 `findHarnessRoot` 能让
+"变异实验"针对一个**不同的 harness** 通过，从而什么也没守住）。
+
+### 5. 已知的插件数据疑点（记录，不判分）
+
+`molbio_methylation_check` 把 BamHI 判为 `impaired by dam`（`GGATCC` 内含 `GATC`）；
+实测中模型跑完工具后去查 NEB，报告 **BamHI 对 dam 不敏感**。任务因此**不断言模型是否同意
+工具**（它做了对的事：手抄参考表就该交叉核对），但这条分歧记在
+`benchmark/README.md` 的「Findings」里，作为下一版对着 REBASE 复核表的输入。
+
+### 发版清单
+
+| 项 | 内容 |
+|---|---|
+| 工具数 | 57（不变） |
+| 插件改动 | **无**（`index.mjs` 与所有领域模块未改） |
+| 客户端产物 | **无需重建**（`lib/`、`packages/molbio-panel/lib/` 未改） |
+| preset | `agent.cordis.yml` / `preset.patch.yml` 未改 |
+| 新增 | `benchmark/`（README、tasks.json、run/score/profile/harness/tools/sequences/_probe/_freeze-trace）、`test/benchmark-profile.mjs`、`test/benchmark-score.mjs`、`test/fixtures/benchmark-traces.json`、`docs/{rules,workflow,roadmap,history}.md` |
+| 改 | `docs/maintainer.md`（变导航页）、`README.md`、`.gitignore`、`package.json`（0.14.0 + scripts）、`test/{smoke,map-card,contract,drift-probe,preset-health}.mjs`（复用 harness 解析、去重） |
+| 预检 | `npm test`（12 项，含两道 benchmark 离线门）+ `git status --short` |
+
 ## [0.13.1] — 2026-09-22（适配 DSH 0.1.7-alpha.2；修 preset 排序碰撞）
 
 **alpha.2 对插件是兼容的**，逐项实测过（不是"看代码觉得对"）：

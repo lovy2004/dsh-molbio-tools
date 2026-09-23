@@ -546,19 +546,29 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 ## 开发者入口
 
-改代码、加工具、发版本、排查组合问题请看 **[docs/maintainer.md](docs/maintainer.md)**，其中包含
-与官方插件规范的逐项对照、开发与测试（`npm test`）、发布前预检、以及 preset 组合维护
-（DSH 升级后必做；含**preset 行必须按包名引用**这条硬规则与它的运行时验证方法）。
+改代码、加工具、发版本、排查组合问题请看 **[docs/maintainer.md](docs/maintainer.md)**（导航页）。
+维护者文档按"你要回答的问题"分成四份：
+
+| 文档 | 回答的问题 |
+| --- | --- |
+| [docs/rules.md](docs/rules.md) | 什么**不能**违反（preset 行必须按包名引用、座位必须 `slots.inject`、产物三条纪律…） |
+| [docs/workflow.md](docs/workflow.md) | **怎么做**：测试金字塔各层在防什么、客户端半、发布预检、DSH 升级后怎么做 |
+| [docs/roadmap.md](docs/roadmap.md) | 接下来**往哪走**，以及明确不做的清单 |
+| [docs/history.md](docs/history.md) | **已经发生了什么**、每个 bug 换来了哪条规则 |
+
+想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
+`npm run bench:offline` 零成本校验期望值，`npm run bench` 用真实模型跑整套任务。
 
 其它文档：
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/maintainer.md](docs/maintainer.md) | 维护者文档：合规对照、开发测试、发布流程、路线图 |
+| [docs/maintainer.md](docs/maintainer.md) | 维护者导航页 + 60 秒速览 + 包内目录结构 |
 | [docs/client-panel.md](docs/client-panel.md) | 浏览器内面板：产物格式、服务契约、上限、验证方式、已知限制 |
 | [docs/route-b.md](docs/route-b.md) | 安装渠道 B 的历史记录（0.1.7-alpha.1 起该渠道已废弃） |
 | [docs/client-pipeline-exploration.md](docs/client-pipeline-exploration.md) | 浏览器内面板的可行性与实现路径调研 |
 | [docs/capability-gap-survey.md](docs/capability-gap-survey.md) | 能力缺口调查：40 条排序候选、必做 top-5、以及"想做但不可行"的确切阻断原因 |
+| [benchmark/README.md](benchmark/README.md) | 可用性评估：题目集、判分口径、headless profile 的推导与守卫 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更日志（包版本 ↔ 历史 preset 版本目录对照） |
 
 包内目录结构：
@@ -587,14 +597,17 @@ dsh-molbio-tools/
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储
 ├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开
+├── svgio.mjs        # 共享绘图助手（几何 + 折行；进客户端产物）
+├── font-metrics.mjs # 字宽度量（宿主侧专用，不进客户端产物）
 ├── svgpng.mjs       # SVG→PNG 光栅化器（内置折线字体 + 自写 PNG 编码；仅宿主侧用）
 ├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
 │                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
-├── test/            # 冒烟测试 + 光栅化器 + 客户端/组合检查（含 preset 漂移守卫 drift-probe.mjs）
-├── docs/            # 维护者与实现文档
+├── benchmark/       # 可用性评估：tasks.json + 判分器 + headless profile 推导（见其 README）
+├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查（含 preset 漂移与 benchmark profile 守卫）
+├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
 └── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
 ```
 

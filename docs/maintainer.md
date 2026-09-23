@@ -1,626 +1,92 @@
 # 维护者文档（Maintainer Notes）
 
-面向插件维护者与贡献者的内容；终端用户请阅读 [README](../README.md)。
+面向插件维护者与贡献者的入口。终端用户请看 [README](../README.md)。
 
-## 与官方插件规范的对照
+> **本文在 v0.14.0 被拆开。** 原来这一份 626 行的文档把"不能违反的规则""怎么操作"
+> "未来方向""历史教训"混在一起，于是发布纪律在**同一份文件里出现了两遍**（一次在
+> 「发布与更新流程」，一次在末尾的「发版时唯一容易漏的一步」），两处内容已经**不一致**。
+> 现在按**读者要回答的问题**分成四份，每份一个职责，交叉引用而不是复制：
+
+| 文档 | 回答的问题 | 什么时候读 |
+| --- | --- | --- |
+| **[rules.md](rules.md)** | 什么**不能**违反？ | 写代码、改 preset、发版本之前 |
+| **[workflow.md](workflow.md)** | **怎么做**？跑什么、按什么顺序？ | 开发、测试、发布、DSH 升级之后 |
+| **[roadmap.md](roadmap.md)** | 接下来**往哪走**？ | 选题、评估候选、判断"要不要做" |
+| **[history.md](history.md)** | **已经发生了什么**？教训是什么？ | 想改一条规则之前（先看它是怎么换来的） |
+
+其余文档：
+
+| 文档 | 内容 |
+| --- | --- |
+| [benchmark/README.md](../benchmark/README.md) | 性能/可用性评估：模型能不能找到并用对工具 |
+| [client-panel.md](client-panel.md) | 浏览器内面板：产物格式、服务契约、上限、验证方式、已知限制 |
+| [capability-gap-survey.md](capability-gap-survey.md) | 能力缺口调查：40 条排序候选、必做 top-5、以及"想做但不可行"的确切阻断原因 |
+| [v20-plan.md](v20-plan.md) / [v19-plan.md](v19-plan.md) | 当时的施工设计文档，保留原样以便对照"计划 vs 落地" |
+| [route-b.md](route-b.md) | 安装渠道 B 的历史记录（0.1.7-alpha.1 起该渠道已废弃） |
+| [client-pipeline-exploration.md](client-pipeline-exploration.md) | 浏览器内面板的可行性与实现路径调研 |
+| [CHANGELOG.md](../CHANGELOG.md) | 变更日志（包版本 ↔ 历史 preset 版本目录对照） |
+
+---
+
+## 60 秒速览
+
+- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**57 个 `molbio_*` 工具**。
+- **基线**：DSH **0.1.7-alpha.2**；`package.json` 版本 0.13.1。
+- **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
+  **两个独立的 npm 条目**，必须分别发布。
+- **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 是**空列表**，
+  57 个工具由 preset 层承载，只会挂进 "Molecular Biology Lab" 模式。
+- **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`）+ 客户端四套件 +
+  DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
+  benchmark 的 profile 守卫与**离线期望值校验**。
+- **benchmark**：`npm run bench` 用真实模型跑 15 条任务，分
+  `tools_ok` / `args_ok` / `answer_ok` 三项判分；`npm run bench:offline` 零成本校验期望值。
+
+包内目录结构：
+
+```
+dsh-molbio-tools/
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 57 个工具
+├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
+├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
+├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
+├── multiplex.mjs    # 多重 PCR 互扰检查
+├── methylation.mjs  # 甲基化敏感位点检查 + 双酶切 buffer 兼容
+├── protein.mjs      # 蛋白性质 / 肽段酶切 / 密码子优化
+├── protein-structure.mjs # 螺旋轮与疏水性图
+├── genbank.mjs      # GenBank flatfile 解析器
+├── snapgene.mjs     # SnapGene .dna 二进制解析器
+├── plasmid.mjs      # SVG 质粒图谱渲染器
+├── align.mjs        # Smith-Waterman 局部比对
+├── msa.mjs          # 多序列渐进式比对与保守性分析
+├── logo.mjs         # 序列标识图（信息量 + SVG）
+├── crispr.mjs       # CRISPR gRNA 设计（PAM 扫描、评分、脱靶搜索）
+├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
+├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证
+├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶
+├── seqio.mjs        # FASTA/FASTQ 解析与统计
+├── records.mjs      # 协议库 / 实验日志存储
+├── papers.mjs       # 文献库存储
+├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开
+├── svgio.mjs        # 共享绘图助手（几何 + 折行，进客户端产物）
+├── font-metrics.mjs # 字宽度量（宿主侧专用，不进客户端产物）
+├── svgpng.mjs       # SVG→PNG 光栅化器（内置折线字体 + 自写 PNG 编码；仅宿主侧用）
+├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
+├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
+├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
+├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
+│                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
+├── benchmark/       # 可用性评估：tasks.json + 判分器 + headless profile 推导
+│                    #   （README.md 是入口；reports/ 与 scratch 工作区不进 git）
+├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查 + preset 漂移守卫 + benchmark profile 守卫
+├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
+└── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
+```
+
+---
+
+## 与官方插件规范的一致性
 
 本插件受"零依赖、随 preset 分发"约束，注册**裸工具定义**（无法 import `defineTool`），
-因此自行实现了官方约定中的等价行为，并逐项对照过
-[官方插件开发指南](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)：
-
-- **参数校验**（对应 `defineTool` 的 `ToolArgsError`）：`execute` 前按 `parameters`
-  schema 做通用校验（必填/类型/enum/嵌套结构），领域校验（IUPAC 合法性、坐标范围等）
-  由各工具补充；
-- **输出 schema**：全部通过 harness 自身的 enforced subset 校验；冒烟测试用
-  `assertSupportedJsonSchema` / `validateJsonSchemaValue` 逐工具验证输出值与 schema，
-  保证 lossless JSON；
-- **并发安全**：纯计算/只读工具才声明 `isConcurrencySafe`；写文件/网络副作用工具声明
-  false 或按参数条件声明——避免并发读改写 `papers.json` 等文件的竞态；
-- **服务访问**：`inject` 仅用于硬依赖（`tools`/`systemPrompt`）；`web`/`fs`/
-  `sandboxPolicy` 用 `ctx.get` + 存在性检查，缺失时明确报错而非崩溃；
-- **文件与沙箱**：所有写入经 `ctx.fs` 并携带会话 `sandboxPolicy`，与官方 `tool-fs`
-  模式一致；读取用 `readBytes` 带大小上限；
-- **组合规则**：插件不发布任何服务（无需 isolate realm）；随 preset 挂载且
-  `standingKeyFor` 校验通过；
-- **prompt 段**：`ctx.systemPrompt.section` 注册在 100–199 工具指导区段（order 110），
-  与官方 `tool-bash` 同模式。
-
-已知的合理偏差（均已标注）：未提供 schemastery `Config`（无配置项）；错误类型为
-`MolbioInputError extends Error`（零依赖无法 import `HarnessError`，语义上等价于参数/
-输入错误）；未实现可选的 `presentCall`/`presentResult`。
-
-### 自动查看（auto-view）
-
-图片工具写完 SVG 后通过 `view.mjs` 直接调用操作系统默认应用打开（Windows
-`Invoke-Item`、macOS `open`、桌面 Linux `xdg-open`/`$BROWSER`、WSL 经 `wslpath`
-转译），镜像网关 `host.openPath` 的语义与 `canOpenNativePath` 的桌面可达性判定
-（headless Linux 不 spawn；`MOLBIO_AUTO_VIEW=0` 全局关闭，冒烟测试依赖它避免
-真实弹窗）。选择 OS 打开而非浏览器内嵌面板的原因：preset 插件无客户端打包管线，
-无法挂客户端半（路线图中的浏览器内嵌面板仍保留）；opener 用可注入 `internals`
-seam 保持可测。工具层暴露 `auto_view`（默认 true，逐调用可关）并回显
-`auto_viewed`。
-
-## 开发与测试
-
-```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 57 个工具 + 输出 schema 校验
-node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
-node test/svgio.mjs         # 共享绘图助手：几何手算值 + 每种助手拼一张文档后光栅化必须干净
-node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
-node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
-node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
-node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
-node test/drift-probe.mjs   # 组合漂移守卫：用变异组合证明 preset-health 的比对会失败
-node test/preset-health.mjs preset/molbio-lab/agent.cordis.yml --dsh <harness 根目录>
-node test/client-mount.mjs --profile web --dsh <harness 根目录>
-```
-
-`npm test` 依次跑这三组（`test:unit` = smoke + svgpng + svgio + 四个客户端套件，再 `contract`、
-`drift-probe`、`preset-health`）。
-脚本用 `node --run` 串联而不是裸 `&&`——`&&` 是 npm 的 shell 语法、不是 node 的，在 Windows
-的 cmd/PowerShell 下 `npm test` 会失败。只想跑一半时：`node --run test:smoke` /
-`node --run test:svgpng` / `node --run test:svgio` / `node --run test:client`。
-
-三个检查回答的是**不同**的问题，发布前都要跑：
-
-- `smoke.mjs` 证明**插件**可用：mock 注册表运行全部 57 个工具，并用 harness 自身的
-`assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
-SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
-比对、蛋白 MW/pI/消光系数手算值、酶切规则（P 前不切）、100% 效率标准曲线、FASTA/FASTQ
-统计与转换、pUC118 特征提取、efetch XML 解析、BibTeX 转义、协议/实验记录往返、文献库
-增删改查往返、auto-view opener 平台门控与命令交接（internals seam，MOLBIO_AUTO_VIEW=0
-防真实 spawn）、v12 错配容差（精确优先不劣化、无解→有解救援、双链错配映射不变式、
-3' 关键区保护与放开、跨内含子 spliced/genomic 双坐标错配报告、参数校验错误路径）、
-v12 Primer3 对齐结构筛查（self-any/self-end 比对分阈值 8.0/3.0 的已知值、8 bp GC 茎
-发夹 >47 °C 与 4 bp 茎不触发的边界、G/C 二聚体 67 °C 在默认阈值被拒/放宽后恢复、
-末 5 碱基 ΔG 与 GC 数、GC clamp 0-3 分级、mispriming 双区块模板的非特异位点报告与
-max_sites 拒绝、primer_check 新增热力学字段）、v13 反应条件旋钮（conditions 回显、
-高盐 Tm 上升的引擎级已知值、四参数范围校验）、v13 3' 目标位置偏好（双目标位点排名
-收敛、target_distance 与两引物距离的最小值一致、跨内含子剪接坐标目标、越界报错）、
-v13 酶目录（90+ 全表、BsaI 几何 (1/5)/4 bp 突出端/非回文、双链向切点 [8,12] 与
-[21,7,4] 片段手算值、环状单切、未知酶报错）、v13 Golden Gate（裸载体加盒子 + 载体
-带盒子两种模式：突出端唯一/非回文/非互补规则、订购片段与连接点序列一致、最终质粒
-按环状旋转包含手算序列、恰好保留 2 个盒子位点、区域内特征丢弃/下游特征平移、
-cassette 模式三片段组装、片段内部位点/非 IIS 酶/缺少盒子/裸载体已有位点/回文盒子
-五条错误路径）、v13 虚拟凝胶（SVG 内容与 ladder 标注断言、100bp ladder、非整数与
-超范围片段、非法 ladder 报错）、v15 多序列比对与保守性（两两已知值：全同 100%/
-单替换 87.5%/仿射缺口单碱基插入选缺口不选错配、U 按 T 处理；三序列渐进比对——
-替换 + 末端自由缺口的列数与末端悬挂确定性、同一输入两次输出完全一致；保守性
-source=msa/alignment 双路径：共识/列 identity/熵打分手算值、全缺口列计保守、
-可变位点列表、两两同一性统计、简并碱基 union 共识（A/C/G → V）、FASTA 输入与
-比对后 FASTA 写出、五条错误路径与四条参数边界）、v16 序列标识图（手算列值：全保守列
-2 bits／50-50 列 1 bit／75-25 列 1.1887 bits 与总 bits、小样本校正开/关的差异、
-简并碱基按集合摊分（RR 对 RR = 2 bits，RR 对 RA = 2.19 bits 而非 3）、缺口列计数与
-「频率只按残基」、SVG 的 `<title>` 逐列提示与**逐字形断言 font-size/textLength 不超列宽**、
-四条错误路径）、v16 CRISPR gRNA（自建 53 bp 夹具上四个 PAM 位点的手算几何：正链
-6-25/31-50、反链 13-32/32-51 的坐标与链向、反向链 protospacer 必须是 20 nt 且等于顶链
-切片的反向互补、PAM 报在靶向链上、NN Tm 58.43 °C 与 self-any 5.5 已知值、
-**2 错配脱靶的互查**（正向两次调用互相指认，mismatch_positions [4, 7]）、脱靶扣分
-（92 vs 无搜索时的 100）、种子末端不错配约束、GC/poly-T/C-run 过滤与「放宽 gc_max 才能
-救回」的对照夹具、max_guides 截断标志、CSV 列头与行数、图谱标注、pUC118 文件输入与
-排序不变式、九条参数/输入错误路径）、v17 TaqMan（固定切片上 7 条测定：逐条断言探针 = 模板切片或反向互补、不与任一引物重叠、`distance_from_primer_3prime` 正是从开缺口引物 3' 端量起、5'/3' 端非 G、无 run、Tm/GC 在窗口内；钉住排名第一的测定与一条"缺口在反向引物一侧"的测定；探针 Tm 与 `lib.primerTm` 同源；四条选项错误路径含嵌套 `primer_options`）、v17 多重 PCR（4 对真实引物的固定面板：24 条交互、3 条跨 target 二聚体与阈值、164 vs 168 bp 不可分辨 / 103 vs 83 bp close；相同模板不交叉 vs 不同模板共享 3' 尾判交叉；无坐标不出大小冲突；四条错误路径）、v17 蛋白图（14 残基两亲性肽的 μH/窗口最大/类别计数/单位圆坐标手算值；69 残基蛋白 GRAVY、三条峰、首窗口截断语义、窗口 21 平滑；SVG 逐字形与逐顶点断言；错误路径）、v17 甲基化与双酶切（手工夹具的 blocked/impaired/cuts/no_site 四态与片段算术、pUC118 全质粒 dam/dcm 计数、环状双酶切切点与片段、共用/不共用 buffer、两条易错建议、错误路径）、v18 图片交接（未传 `attach_image` 时**一个字节都不提交**、结果仍是单个 text block；传了以后提交的确实是 PNG（签名 + IHDR 尺寸与凝胶画布手算值一致）、结果多出 `image` 字段与第二个 image block；10 个画图工具逐个断言"有参数、有输出字段"，总数恰好 11；四条降级路径——文本路由、无附件服务、路由解析不出、存储拒收——都**不改结果成功性**、只在 `image_note` 里点名原因；`render` 在附加图片时仍产出文本）、v19 实验台五件套（FASTQ：8 条读夹具的逐位置均值/**线性插值四分位**/Q20-Q30/精确重复率/接头命中位置/过度代表序列的"小样本合法为空"与"24/30 命中"两侧；密码子：CAI 全最优 = 1、**家族大小必须从完整频率表来**（9 选 3 会让 GCT 的 CAI 从 1.0 变成 0.4444，这是实现时抓到的真 bug）、RSCU 家族和为家族大小、Nc/GC3/GC123 已知值、CpG obs/exp、五条警告路径、未知宿主由 enum 拦下；系统发生：p-distance 逐格手算、JC 校正值、**饱和夹取与上报**、逐对跳过缺口、**四点条件**钉住无根拓扑、UPGMA 与 NJ 输出确实不同、Newick 往返与四种非法输入的报错、同种子逐字节复现、bootstrap 预算按 replicates×pairs×columns 拒绝；PCR：产物坐标与序列逐字符、中段错配默认拒绝/放宽接受、**3' 端错配在 anchor=3 被拒而在 anchor=0 被接受**、错引导双带、大小窗口过滤计数、环状跨 origin 的取模切片序列、FASTA 输入与 8 条错误路径；组成：岛边界与长度手算、Takai 口径下同序列不出岛、**高 GC 但无 CpG 不算岛**、G/C 富集等长段的 ±0.5 skew 与 ori/ter 窗口、熵/复杂度/N50 手算值、同聚物不除零、窗口与 step 计数、5 条参数错误路径）、**v20 比对残基守恒**（多组不等长输入逐条断言"输出行去缺口后逐字符等于输入序列"——11/10、12/10、不等长多序列、4/4 无重叠、前导悬垂、5/10 单侧全悬垂；所有行等长；以及**用一个故意截断的行驱动 `coverageShortfall`**，断言它仍报 `u2 (10 of 11 bases kept)`，否则"没有警告"什么也证明不了）。
-
-- `svgpng.mjs` 回答的是第三个正交问题：**工具算对了、但模型看到的图是不是对的**。纯文本正确
-  而 PNG 空白/错位/无法解码，是唯一一类"其它套件全绿"的真故障，所以这层必须自己站住：
-  测试用**与编码器不同实现**的 CRC（无表位运算）与裸 inflate 把字节解回像素，再做**手算几何**
-  断言（rect 的四个边界像素、圆心与半径外、描边居中与 dash 空档、`fill-opacity` 混合到中灰、
-  `fill="none"` 不填充、`text-anchor` start/middle/end 的墨迹框、cap height≈0.7 em、
-  `dominant-baseline` 居中、`textLength` 压缩到指定宽度、`rotate(-90)` 把基线转到旋转点左侧
-  并把运行变竖）；再对**四个真实渲染器的八份产物**断言 `unsupported` 与 `missing_glyphs`
-  都为空、且有实质墨迹——新增 SVG 构造会在这里失败，而不是从图里静默消失。另有两个回归守卫：
-  **线性质粒图谱**必须是 960×260 且 x≥880 有墨迹（v18 之前根 viewBox 固定 840×840，把 3' 端
-  裁掉了——正是"给模型看图"这件事把该 bug 暴露出来），以及**光栅化器不得进入客户端产物**
-  （它 import `node:zlib`，进 bundle 就会在浏览器里炸）。`--sheet <png>` 导出整张字形表、
-  `--preview <dir>` 导出每种图各一张，供人眼复核字体（改字形后**必须**这样看一遍）。
-- **v20 给这层加了 `<tspan>` 多行文本的像素断言**（18 → 22 项）：三行 `<tspan>` 必须各自落在
-  自己的基线上、**行间是空的**（塌到一条基线上会失败）；`dy` 相对堆叠逐级下移、**相邻基线之间
-  空着**（证明是移动而不是重印）；自闭合空 `<tspan dy/>` 推进一个空行；`<tspan>` 的 `transform`
-  与嵌套 `<tspan>` 被**报告**而不是猜着画。最后一条是本次修复的**图像回归守卫**：长叶名的树图，
-  在标签列里数"密集行"，断言每个名字至少两行、4 个标签块之间**至少 3 处空白间隔**——v19 的
-  单行长标签会把这个数字压到 0 或 1。扫描区间从文档里**读出**（第一个 `<tspan>` 的 `x`），
-  因为靠猜会把分支尖端、支持度和标题都算成"标签行"。
-
-- `client.mjs` / `panel-render.mjs` / `client-mount.mjs` 证明**浏览器半**可用（这是与上面
-  两者正交的第三个问题：工具对了、组合能挂，客户端产物仍可能加载不了）。`client.mjs` 在
-  `vm` 里按加载器的方式执行产物（注册形状、id、**注册期零全局写入**），用桩 `require`
-  物化它，对桩服务 `apply()`，再把面板数据通路跑在真实 pUC118 夹具上（记录字段与 Node
-  工具逐字段一致）。`panel-render.mjs` 更进一步：**真实组件**在一个最小钩子宿主里跑完整
-  状态机（无 React、无 DOM——harness 不带 React，浏览器里的 React 由 shell 播种），断言
-  列表/图谱/特征表/logo/搜索/标签/空库/坏库/卸载中止这些用户可见结果；它抓到过三个真 bug。
-  `client-mount.mjs` 读**真实 profile 的组合**（bundle 的 `insert:` 行，用 harness 自己的
-  YAML 方言），对每行复刻宿主扫描（最近 `package.json` + `dsh.client` + `exports["./client"]`
-  存在性），断言本包走的分支与线上客户端包相同、`dsh.client.inject` 声明的包都是 graph 行、
-  产物的 `require` 全部有答案。**没验证到的**：运行时才回答的三件事（插槽注入的
-  `sessionId`/`useSessions`、guide 胶囊、`workspaceFiles` 的 wire 形状），见
-  `docs/client-panel.md` 第 5 节。
-
-- **v18 图片交接"没验证到"的那一环**（诚实清单）：已证明的是——附件服务能收下我们自己编码的
-  PNG（`contract.mjs` 直接调 harness 的 `validateImageFile`/`prepareImageFile`，同一套生产
-  解码/归一化代码，并且**故意损坏的 PNG 会被拒**，证明这道检查有效）；harness 自己的
-  `read_image` 能把附件投影成模型可见的图片块（八份真实产物就是这么逐张人眼复核的，用的就是
-  本机这条链路）。**尚未在真实会话里验证的**只有一步：本插件的工具结果数组被 harness 的
-  工具层接收并落进会话事件（即"注册期之后就没人跑过"的那一步），它需要的条件是一次真实模型
-  调用 + 分子生物学模式会话 + 图像输入模型。验证方法很直接：在 "Molecular Biology Lab" 模式里
-  对 `molbio_virtual_gel(lanes=[...], attach_image=true)` 提一次，然后看会话事件里是否出现
-  `{ type: 'image' }` 块、`image.attachment_id` 与附件目录里的对象是否对得上。
-
-- `preset-health.mjs` 证明**组合**可挂载：它刻意与冒烟测试正交——preset 是 DSH
-  **自己那些包**的组合，DSH 升级后如果某个包的 `Config` 契约变了（0.1.5-alpha.2 就
-  把 `dsh-persona` 的 `text` 换成了 `prefix`/`suffix`），插件代码一行没错，preset 却会
-  在挂载时抛 `$.prefix missing required value`，整个模式从选择器里消失。该脚本把组合的
-  **每一行** config 交给那一行指向的包自己的 `Config` schema 校验（与 Loader 同一套
-  判定，但不启动 harness），另加两项检查：行指向的模块是否存在（相对说明符按组合所在
-  目录解析，与 Loader 改写 `baseUrl` 的行为一致）、行集合与官方 `standard` 预设的差异
-  （缺行 = 悄悄丢能力，多行 = 本插件的 tool-molbio）。`disabled:` 行与 `!!js` 条件行按
-  Loader 的规则跳过。退出码非 0 即发布阻断。
-- **工具数声明比对（v20 新增）**：`preset.yml` 的描述里写着"57 个 molbio_\* 工具"，
-  而 v19 从 52 加到 57 时**漏改了它**——用户在整个 v19 周期看到的是错的数字，且没有任何
-  检查会发现。`toolCountDrift(description, registered)` 现在把**预设真正加载的那个入口模块**
-  （组合指向的 `vN/index.mjs`，与包根逐字节一致由镜像检查保证）里注册的工具数与描述里的
-  数字对比。解析刻意窄（`<n> 个 molbio_*` 与英文 `<n> tools`），所以 `90+ 限制酶`、
-  `2–50 条序列`这类其它数字不会被误判；没有工具数描述的文案也不会被逼着加一个。
-  与 `compositionDrift` 一样导出给 `drift-probe.mjs` 用变异输入驱动。
-- **漂移检查是"逐行结构比对"，不是"比 id"**：`compositionDrift`（`preset-health.mjs` 导出）
-  按**行序**比对 `id`、`name`、`disabled`、`isolate`、`config`，任何差异都是**发布阻断**。
-  0.1.6-alpha.1 那次的教训是两件事同时发生而检查全瞎：组合里有一行指向
-  **没有 DSH 发布的 `@deepseek-ai/dsh-workflow-worker-thread`**（preset 直接挂不上），
-  以及 `tool-ralph` 被**悄悄启用**（上游 `standard` 是 `disabled: true`）。只比 id
-  的旧检查只打印 "drift note" 并退出 0。允许清单只有 `ALLOWED_EXTRA_ROWS = {tool-molbio}`
-  与（当前为空的）`ALLOWED_DISABLED_ROWS`，写在文件顶部。
-- `drift-probe.mjs` 证明**上面那个守卫会响**：用变异组合（幻影 provider 行、丢掉的
-  `disabled`、改名、改 config、改 isolate、丢行、多余行、行序错乱）驱动 `compositionDrift`，
-  断言每一种都被抓到，并且对当前组合**零噪音**。"没人见过失败的守卫不算守卫"——旧检查
-  之所以放过真故障，正是因为它从没被证明会失败。
-
-## 发布与更新流程
-
-### 发布前预检（0.7.1 事故之后加的硬步骤）
-
-**任何**要 push 或打 tag 的版本，先跑完这三步，缺一步都不算发布完成：
-
-```bash
-npm test                     # 10 个套件（= test:unit(smoke+svgpng+svgio+4 客户端) + contract + drift-probe + preset-health）；
-                             # 客户端半、光栅化器或 preset 组合的改动必须全绿
-node build/client-bundle.mjs # 产物与源同一批构建（`--check` 只报告陈旧、不落盘）
-git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
-```
-
-**preset 组合的改动**（`preset/molbio-lab/*`）额外两条：
-
-1. `node test/preset-health.mjs` 必须报 `OK`。它现在把本包的 preset **行**与**已安装 harness
-   自带的 `standard`** 逐行对比——0.1.7-alpha.1 起上游基线是
-   `<harness>/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`
-   （旧的 `@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml` 已随该包一并消失）。
-   只应剩 `skill-filesystem`、`tool-skill`、`tool-molbio` 这三行差异。
-2. 改的是 `preset/molbio-lab/agent.cordis.yml`（**行清单**），改完必须跑
-   `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`（bundle patch）；
-   `--check` 会因两者不一致而失败，`npm test` 里没有这一项，别忘。
-
-吸收 DSH 升级时照抄上游文本（含注释与 key 顺序），不要手写"看起来等价"的行——0.1.6-alpha.1 的
-`workflow-worker-thread` 就是这么进去的。组合文件本身**不吃模块缓存**（每次挂载重读），
-所以只改组合**不需要**新建 `vN` 目录。
-
-> **preset 机制在 0.1.7-alpha.1 变了。** 旧机制是"扫描目录里的 `agent.cordis.yml`"，靠
-> `agent-presets` 行的 `config.roots` 注册额外根目录；`preset/install.mjs` 就是往 profile 的
-> `cordis.patch.yml` 里追加那个 `roots:`。新机制没有目录扫描——preset 是 bundle patch 里的一个
-> `@deepseek-ai/dsh-agent-preset` **行**，`config.plugins` 装原来那套行清单。所以：
-> `dsh.bundle.patch` 现在是**两个文件**（宿主层 + preset 层），安装即注册，`install.mjs` 不再写
-> 任何东西、只做体检与遗留清理。老 profile 里那条 `- id: agent-presets` 会让每次组合打印
-> `patch: entry "agent-presets" not found`，应当删除。
-
-### preset 行的 specifier 必须是**包名**（0.1.7-alpha.1 硬规则）
-
-`preset/molbio-lab/agent.cordis.yml` 末尾那行必须写包名：
-
-```yaml
-- id: tool-molbio
-  name: 'dsh-molbio-tools'          # ✅ Node 从 profile 的 node_modules 解析
-```
-
-**不要**写相对路径（`./plugins/dsh-molbio-tools-v20/index.mjs`）。0.1.6 及更早可以，
-0.1.7-alpha.1 **不行**，而且失败方式极其隐蔽：
-
-| 你看到的 | 实际情况 |
-|---|---|
-| 预设选择器里显示"加载失败" | preset **挂载成功**；只有 `agentPresets/list` 的 `broken` 字段有内容 |
-| `--dump-config` 一切正常 | 组合树完全正确，问题在**运行时**，静态检查看不见 |
-| 报错 `tool-molbio (…): never started` | 该 entry 被创建但**从未被 import**，`fiberPhase` 为 `null` |
-
-**怎么验证**（必须真的起一次，静态检查不够）：建一个 scratch profile
-（`dsh scratch --from-default-profile web --dump-config`，把依赖与 bundle 指向本包，
-`pnpm install`），起 `dsh --profile scratch --no-open --port 3099` 并记下打印的 `?token=…`；
-用 token 换 cookie 后查两个接口：
-
-```powershell
-curl.exe -s -c jar -o NUL "http://127.0.0.1:3099/?token=<token>"
-curl.exe -s -b jar -X POST http://127.0.0.1:3099/api/agentPresets/list `
-  -H "Content-Type: application/json" -H "Origin: http://127.0.0.1:3099" `
-  -d '{"type":"client-request","rpcId":"p","method":"agentPresets/list","payload":{"args":{}}}'
-# 同样方式查 pluginInventory/list，看 molbio-lab 行的 tool-molbio
-```
-
-判据是**两个字段**：`agentPresets/list` 的 `broken` 必须为空，且 `pluginInventory/list` 里
-`molbio-lab` 的 `tool-molbio` 必须是 `fiberPhase: "active"`（不是 `null`）。
-`/api/...` 的请求体必须带外层 envelope（`type`/`rpcId`/`method`/`payload.args`），
-只发 `{}` 只会得到 `arguments-invalid`。验证完删掉 scratch profile。
-
-### preset 的 `order` 不得与上游撞号
-
-`build/preset-patch.mjs` 里写死的 `order: 5` 是有意的：DSH 自带的 preset 占用
-**standard=1、ptc=2、minimal=3、cordis=4**，而注册表按
-`(a.order ?? Infinity) - (b.order ?? Infinity) || a.id.localeCompare(b.id)` 排序。
-撞号的后果不是报错，而是**选择器里的顺序变成字母序的偶然**——0.13.0 曾写成 `order: 2`
-（与 `ptc` 相同），实测 `molbio-lab` 被排到了**最后**。
-
-`test/preset-health.mjs` 现在会把本包 preset 的 order 与 `<harness>/…/dsh-web-app/presets/*.patch.yml`
-里每个上游 preset 的 order 对比，**相同即 FAIL**（并已用突变实验验证会失败）。
-DSH 若新增 preset 占了 5，把这里的 order 改成下一个空号即可。
-
-> **版本目录已删除（0.13.0）。** `preset/molbio-lab/plugins/dsh-molbio-tools-vN/` 整体不复存在。
-> 那套机制是为规避**相对文件 URL** 的 ESM 模块缓存：preset 行写相对路径，于是每次发版都要把
-> 全部 `.mjs` 复制进一个**新目录**（删除前累计 195 个文件 / 5.2 MB）。preset 行改用**包名**后，
-> 缓存问题与拷贝都不存在了，`preset-health.mjs` 的**镜像检查**也一并删除。
-> 下文（以及 CHANGELOG 的历史条目）里提到 `vN` 目录的地方，是当时的记录，不再是纪律。
-
-客户端半的改动还有两条**专门针对"会弄坏 GUI"**的确认：
-
-1. **产物已构建且已提交**——profile 与 `dsh plugin add` 消费的是**产物**：源码改了而产物没
-   重建，用户加载的还是旧逻辑；产物没提交，别人装到的就是旧逻辑。
-2. **安装态与产物一致**（profile 用 junction 指向工作区时，这一步等于自查）：
-
-   ```powershell
-   (Get-FileHash packages\molbio-panel\lib\client.js).Hash -eq `
-   (Get-FileHash $env:USERPROFILE\.dsh\profiles\<profile>\node_modules\dsh-molbio-panel\lib\client.js).Hash
-   ```
-
-   哈希不一致 = 你验证的和用户加载的不是同一个东西。
-
-**回归防线的层次**（哪一层先响，决定排查方向）：`test/client.mjs` 在**运行时语义**上响
-（座位抢注、产物格式、数据通路）；`test/contract.mjs` 在**DSH 契约**上响（官方是否改了规则或
-API）；`test/slots-stub.mjs` 是前者的地基（复刻 shell 的 SlotCore 守卫与 `inject` 语义）。
-只有两层都绿才 push。
-
-### 客户端产物（browser half）
-
-浏览器半由 `build/client-bundle.mjs` 从**包根的同一份 `.mjs` 源文件**生成到
-`lib/client.js`，并同时为面板专用包产出
-`packages/molbio-panel/lib/client.js`。改完源码后：
-
-```bash
-node build/client-bundle.mjs     # 或 npm run build:client
-node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && node test/client-mount.mjs && node test/contract.mjs
-```
-
-### 工具调用卡（`tool.call.toolview`）
-
-卡片的数据只能走一条路：工具在 `output.presentationMeta(args, value)` 里声明投影，工具层
-**对 ROOT 调用**执行它并把结果记进会话事件，浏览器把它作为 tool-result 块的 `block.meta`。
-不要用 `presentResult`/`presentCall`——`dsh-tools` 的文档写明内置 Web 客户端不消费它们。
-两条实现纪律：投影**必须廉价且不抛**（它跑在调用成功之后，抛错会把这次调用标成失败；
-图谱标记因此走一份有界内存缓存而不是读文件），卡片**必须校验而非信任** meta（缺失/异种/
-异形/超限/失败一律降级为提示，绝不在对话里抛错）。新增卡片时：把工具名加进
-`build/client-entry.mjs` 的 `MAP_TOOL_KEYS`，并在 `test/map-card.mjs` 里补一条跨界断言。
-另注意 `define()` 包装器会转发 `presentationMeta`——若哪天再包一层，别忘了这条。
-
-三条纪律：**产物必须与源一起提交**（`dsh plugin add` 装的是产物，用户机器上没有构建
-步骤）；**发布白名单必须覆盖产物所在目录**（`lib/`、`packages/`——`npm publish` 只带
-`files` 列出的东西，漏了就会出现"装完却没有面板"的静默失败，`test/contract.mjs` 的
-打包检查专门盯着这一条）；**产物不得进 preset 目录**（客户端模块靠 `rev` 哈希失效；
-0.13.0 起 preset 目录里本来也不再放任何东西了）。
-
-**第四条纪律（0.7.2 用一次 GUI 起不来换来）**：客户端座位一律
-`ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位, …}, 组件)), 标签)`，
-**绝不裸 `slots.register`**。座位只有在**拥有它的 entry 在自己的 `children` 表里声明之后**才
-存在（`sidebar.right.pane.tab` ← 右栏 `rightbar.session`；`tool.call.toolview` ← ui-tool 的
-`conversation.chat.node` 的**子座位**），而本包与那些包的 entry 之间没有顺序保证；裸 `register`
-抛出的 `slot "…" is not declared (a parent entry's children table must declare it)` 从 `apply()`
-逃出就是**加载器 entry 失败**——HARNESS "Failed to load plugins"，整个 Web GUI 不启动。
-`test/slots-stub.mjs`（SlotCore 语义的桩）与 `test/client.mjs`（从"零座位已声明"启动）在运行时
-看守这条纪律，`test/contract.mjs` 第 10 项再看守"产物里每一处 `register` 都在 `inject` 里"。
-
-客户端通道的发布面：根包（工具 + 面板）与 `packages/molbio-panel`（只面板）是两个独立
-条目，后者从它自己的目录发布（`npm publish packages/molbio-panel`）。
-
-**安装与修复**：把面板装进某个 profile 只有一条正路——
-
-```bash
-dsh plugin --profile <profile> add <仓库路径>/packages/molbio-panel
-```
-
-profile 用的是 pnpm 的 **hoisted** linker，而 `link:` 依赖的软链**只由 `add` 物化**：
-如果 `node_modules/<包>` 丢了（被清理、被误删、或 profile 目录被其它操作动过），
-`dsh plugin --profile <profile> install` 与 `pnpm install --force` 都只会回答
-"Already up to date" 而**不会重建链接**。修复办法就是重新 `add` 一次同一个路径（无需网络，
-package.json 与 lockfile 里的声明不变）。装完核对三件事：链接存在、`package.json` 里
-`dsh.client.platform === "web"`、`lib/client.js` 存在且与仓库产物同哈希。
-
-**UI 起不来（`Failed to load plugins`）的排查顺序**：顶栏这条横幅 + 
-`failed to apply loader entry <id> (<name>): <message>` 说明某个**客户端 entry 的 `apply()` 抛了
-异常**，加载器拒绝 boot——不是"面板没挂上"。先止血：`dsh plugin --profile <profile> remove
-<包>`（或从 profile 的 `dsh.profile.bundles` 里去掉那一行）后重启。定位：
-
-1. `node test/client.mjs`——抢座位的顺序那一层会当场复现"未声明座位 `register()`"这类错误
-   （0.7.1 → 0.7.2 就是这么被测出来的：`slot "tool.call.toolview" is not declared (a parent
-   entry's children table must declare it)`）；
-2. `node test/contract.mjs`——判断是 DSH 动了契约（slots 服务没了 `inject`、座位不再由同一条
-   entry 声明）还是本包写错；
-3. 改 `build/client-entry.mjs` → `node build/client-bundle.mjs` → 重启：**产物不重新构建就
-   没有任何效果**（浏览器拿的是 `lib/client.js`，按 `rev` 哈希失效）。
-
-preset 渠道：
-
-1. 修改包根代码并跑 `node test/smoke.mjs`（插件）与 `node test/preset-health.mjs`（组合）；
-2. 如果改了 preset 的**行清单**（`preset/molbio-lab/agent.cordis.yml`，包括 `preset.yml` 的描述），
-   跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`；
-   **没有版本目录要新建、没有拷贝要同步**——preset 行按包名引用本包，`dsh plugin update` 直接生效；
-3. 更新 `CHANGELOG.md` 并把 `package.json` 的 `version` bump；
-4. commit + push，然后打**带日期的注释 tag**（仓库用 `v<包版本>`，如 `v0.13.0`）：
-
-   ```bash
-   git tag -a v0.13.0 -m "0.13.0: DSH 0.1.7-alpha.1 adaptation (panel read fix, preset as bundle patch)" && git push origin v0.13.0
-   ```
-
-### npm 发布（v20 实测的两个坑）
-
-root 包与面板包是**两个独立的 npm 条目**，**必须分开发布，且面板包要在它自己的目录里跑**
-（在仓库根跑两次 `npm publish` 会**两次都发布 root 包**）：
-
-```powershell
-cd <仓库根>            # 发布 dsh-molbio-tools
-npm publish --access public
-cd packages\molbio-panel   # 发布 dsh-molbio-panel（另一个条目）
-npm publish --access public
-```
-
-- **`npm pack --dry-run --json` 是发布前唯一能核对"包里到底有什么"的手段**（`files` 白名单是
-  allowlist，漏一个模块就是"装完却没有这个功能"）。v20 用它确认了 `font-metrics.mjs`、
-  重建后的 `lib/client.js`、`preset/.../dsh-molbio-tools-v20/index.mjs` 都在包里。
-- **`npm whoami` / `npm pack` / `npm publish` 都需要写 `%LOCALAPPDATA%\npm-cache`**。若在受限
-  沙箱里跑，会得到 `EPERM ... npm-cache\_cacache\tmp\...`（不是权限坏了，是沙箱拦了工作区外的写）；
-  `npm login` 还必须是**真 TTY**，所以登录与 OTP 只能由人来做。
-- **"要求写入 2FA"的账号即便 `npm profile get` 显示 `two-factor auth: disabled`，发布仍会被拒**：
-
-  ```
-  403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.
-  ```
-
-  `disabled` 指的是登录/其它操作的 2FA，写入策略是另一项。两条出路：交互式 `npm publish` 时输入
-  `--otp <6 位码>`，或用一个勾了 **bypass 2FA** 的 granular access token（环境变量 `NPM_TOKEN`，
-  不要写进仓库或 `.npmrc`）。
-
-### preset 组合的维护（DSH 升级后必做）
-
-`preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的**行清单**副本 + 末尾一行
-`tool-molbio`（当前基线：**dsh 0.1.7-alpha.1**；那一版把 preset 从"目录里的
-`agent.cordis.yml`"改成"bundle patch 里的 `@deepseek-ai/dsh-agent-preset` 行"，行本身没变）。
-它不会自动跟随 DSH 升级，因此每次升级 DSH 后：
-
-1. 取新版的 shipped `standard`：
-   `<harness>/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`；
-2. 与 `preset/molbio-lab/agent.cordis.yml` 对比（把上游的 `config.plugins:` 块与我们的行清单
-   对齐看），**逐行吸收上游改动**（新增/删除的行、注释、key 顺序、配置契约变化），只保留
-   `skill-filesystem` / `tool-skill` / `tool-molbio` 这几处有意差异与头部注释。**照抄上游文本，
-   不要手写"看起来等价"的行**——上游在 0.1.6-alpha.1 用 `workflow-worker-thread` 教过一次；
-3. 跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`；
-4. 跑 `node test/preset-health.mjs` 直到 `OK`（它把任何结构差异当**发布阻断**，不只是打印
-   note），再跑 `node test/drift-probe.mjs` 确认守卫仍能抓到漂移；
-5. 更新 `agent.cordis.yml` 头部"Baseline: …"那行里的 DSH 版本号；
-6. **用户不需要做任何事**：preset 随 bundle 走，`dsh plugin update` 之后重启 profile 即可。
-   （0.1.7-alpha.1 之前用"复制到 `~/.dsh/.agent-presets`"的用户，其副本已不再被读取，应删除——
-   这正是 0.1.7 升级时最容易留下的一具"看起来装着、其实没生效"的僵尸。）
-
-偏差的历史教训：
-
-- 0.1.2 → 0.1.5 期间遗漏了 `persona` 的 `text → prefix/suffix` 契约变更，组合在
-  0.1.5-alpha.2 上直接挂载失败；`present` 行也在同一时期丢失。
-- 0.1.6-alpha.1：组合里的 `workflow-worker-thread` 指向**没有 DSH 发布过的包**，preset
-  完全挂不上；同时 `tool-ralph` 被悄悄启用。两者都被旧版"只比 id"的 drift 检查放过
-  （只打印 note、退出 0）。现已由**逐行结构比对（失败即阻断）** + `drift-probe.mjs` 看守。
-
-## 路线图
-
-- **v20 已完成（2026-09-18，包 0.12.0 / preset 目录 v20）**：两条"沉默的错"——(A) `msa.mjs` 渐进比对
-  静默丢掉**尾部**悬垂残基（11 bp 对 10 bp 只留 10 列），现在把端点之后的残基作为纯悬垂列补进结果，
-  不变式是"每条输出行去缺口后逐字符等于输入"；(D) `svgpng.mjs` 支持 `<tspan>` 多行文本，树图矩形
-  布局的长叶名折行而不是压在一起。新增 `font-metrics.mjs`（让"预留宽度"与"绘制宽度"共用同一份
-  字宽度量），`svgio.mjs` 新增 `wrapTextLines`/`textSpanLines`。工具仍 57；顺带修掉 `preset.yml`
-  里停了一版的工具数（52 → 57）并补上守卫 `toolCountDrift`。逐项口径见
-  [docs/v20-plan.md](v20-plan.md) 与 CHANGELOG 0.12.0。
-- **v21 候选（按需挑选）**：
-  - **Cas12a/Cas13 等 PAM 家族**（`pam` 参数已能传 `NNRT`，缺家族特定的评分曲线与几何校验）、
-    **gRNA 基因组级脱靶**（当前把传入序列当参考，基因组规模需要先建一次索引再复用）、
-    **多重 PCR 温度梯度/浓度配平建议**、**TaqMan 的 MGB/双标记探针与订购 CSV**。
-  - **批量分析 + 表格导出**（survey 第 7 条：对工作区里所有匹配文件跑同一项分析并出 CSV）。
-  - **比对后处理套件**（survey 第 6 名）：IUPAC 共识、缺口比例修剪、同一性矩阵、逐列覆盖度
-    ——`conservationAnalysis` 已给出共识/逐列 identity/熵，缺的是修剪与覆盖度视图。
-  - **`svgpng.mjs` 的旋转多行文本**：v20 给矩形布局折了行，但环形/扇形布局的旋转标签仍按整行
-    绘制（旋转文本没有按真实字宽测过，硬折会算错行数）。真修法是让折行也知道旋转，或给径向标签
-    改用别的排布（沿切线/半径分层），并补像素断言。
-  - 更宽的候选池与"为什么不做"的否定清单见 **[docs/capability-gap-survey.md](capability-gap-survey.md)**
-    （40 条排序候选 + 必做 top-5，逐条标注是否需要外部二进制/参考库/网络与实现规模）。
-  - 另一个被 v18 留下的技术债候选：**若上游给 fs 缝加上二进制写入**（`contract.mjs` 里有一条
-    断言专门盯着这件事），就补齐当年的 `png_path`（工作区 PNG 文件），见 README 的 `attach_image` 一节。
-- **浏览器面板的候选（客户端半，不动 preset 目录）**：给 `molbio_sequence_logo` /
-  `molbio_grna_design` 等工具加调用卡（同一套 `presentationMeta` + 卡片模式，上线前先跑
-  `test/client.mjs` 的抢座位顺序那一层）；文献库写回需先定并发契约。
-
-### DSH 0.1.6-alpha.2 漂移（v19 修掉的两项）
-
-本仓库在 `0.1.6-alpha.1` 上发布 v18，机器随后升到 **alpha.2**；`npm test` 报出两处，**性质完全不同**：
-
-1. **preset 少了上游新增的 `tool-plugin-manager` 行 → 组合与 `standard` 不再逐行一致**。
-   这是**组合层**的漂移，被逐行结构比对正确拦下（`preset-health` 失败即阻断）。
-   alpha.2 的 shipped `standard` 在 `present` 之后新增：
-
-   ```yaml
-   - id: tool-plugin-manager
-     name: '@deepseek-ai/dsh-plugin-manager/tools'
-     disabled: true
-   ```
-
-   已按上游逐行补齐（含位置与 `disabled`）。**教训延续**：上游加行时本组合必须跟着加，
-   否则"standard + 一行 molbio"的章程就悄悄不成立了——这也正是当初把"只比 id"升级为
-   逐行结构比对的原因。
-2. **`test/contract.mjs` 绑定了 minifier 的空格**（`ctx.slots.provideRoot({ hooks: {` 这一**单空格**
-   拼写），alpha.2 把同一调用排成四行缩进。**契约没变**（同一 check 里紧跟的空白容忍正则一直是过的，
-   `installScope("session")` 也过），所以这是断言绑格式、不是产品故障。已改为空白容忍，并**加了
-   一条不空转自检**：四种拼写都必须通过，把 `hooks` 改名成 `hookz` 必须失败。**这条自检是关键**——
-   否则"放宽成不绑格式"的下一次修改就会退化成"什么都不检查"。
-
-### 发版时唯一容易漏的一步：preset 行必须按包名引用
-
-（0.13.0 起替换了原来的"版本目录必须镜像包根"一节——目录已删除，见上文。）
-
-`preset/molbio-lab/agent.cordis.yml` 的 `tool-molbio` 行必须写**包名**。写成相对路径
-（`./plugins/dsh-molbio-tools-vN/index.mjs`）在 dsh 0.1.7-alpha.1 上会让 preset **挂载成功却
-零工具**，而 `--dump-config` 完全正常、任何挂载检查都看不见——只有运行时的
-`agentPresets/list` 的 `broken` 字段与 `pluginInventory/list` 的 `fiberPhase` 能揭穿它
-（验证方法见上文"preset 行的 specifier 必须是包名"）。
-
-`test/preset-health.mjs` 现在直接盯着这条规则：组合里出现任何 `./plugins/…` 形式的
-specifier 就 FAIL，并已用突变实验证明它会失败。发版前：
-
-```powershell
-node build/preset-patch.mjs    # 改了行清单就重新生成 patch
-node test/preset-health.mjs    # 末尾应打印 "specifier OK: the preset names the package …"
-```
-
-**改了 `lib.mjs`/`msa.mjs`/`protein.mjs` 这类同时属于浏览器半的模块，还必须 `npm run build:client`
-并提交产物**——`contract.mjs` 的"产物新鲜度"检查会失败（v19 因 `lib.mjs`、v20 因 `msa.mjs` 都因此
-重建了 `lib/client.js` 与 `packages/molbio-panel/lib/client.js`）。`font-metrics.mjs`/`svgio.mjs`/
-`svgpng.mjs` **不进**客户端产物，`contract.mjs` 与 `test/svgpng.mjs` 各有一条断言盯着这件事。
-
-### DSH 0.1.6 新能力的可用性勘察（2026-09-16，只读；基线 dsh 0.1.6-alpha.1）
-
-用户侧报告 0.1.6 带来"面板内终端"与"computer use"。逐包核对（README + `lib/types/*.d.ts` +
-shipped bundle 的 `cordis.patch.yml` + 活动 profile 的 patch）后的结论，作为 v18 的输入：
-
-| 能力 | 本版实际状态 | 对 molbio 的可复用性 |
-| --- | --- | --- |
-| 面板内终端（浏览器半：`dsh-api-terminal-controller` 的 `ctx.terminalController` + `dsh-client-ui-sidebar-terminal`） | **随 `dsh-web-app` 出厂即启用** | ✅ **已经在用，零改动**（见下） |
-| 持久 shell（agent 半：`ctx.terminals` + `dsh-terminal-bash` + `dsh-tool-bash-persistent` / `dsh-tool-pwsh-persistent`） | 包已安装，**未被任何 web/standard 组合挂载** | ⚠️ 需要组合改动（见下） |
-| Computer Use / Browser Use | **本版没有实现**：只有 `dsh-tool-cordis` 生成目录里的 `ctx.computerUse`/`ctx.browserUse` 接口描述、`dsh-system-prompt` 里无人消费的 `TOOL_COMPUTER_USE: 3000`、以及 `dsh-mcp-client` README 提到的未安装 "Cua Driver provider" | ❌ 不进预设（见下） |
-
-**面板内终端与 molbio 面板已经共存，无需任何改动。** 两套东西同名不同源：浏览器终端是
-**会话级、用户专用**的 Typert remote（`remote.terminal`：`environment/shells/list/create/
-follow/write/resize/rename/close`，上限 8 个终端、scrollback 1000 行，**终端输出永不进入
-agent 上下文**）；`ctx.terminals` 是**按 agent 做 owner 隔离**的持久 PTY。共存靠公开的
-tab 注册 API：终端 `id = '@deepseek-ai/dsh-client-ui-sidebar-terminal'`、`kind: 'terminal'`、
-guide order 20；本包 `id = 'dsh-molbio-tools'` / `'dsh-molbio-tools/papers'`、guide order 40/41。
-**tab `id` 重复会抛异常**（本包那两个 id 的唯一性由 `test/client.mjs` 看守），因此不要改自己的 id。
-用户因此今天就能在工作区里手跑 BLAST+/samtools/mafft/primer3/conda/`Rscript -e`，而 molbio 的产物
-就在同一目录。
-
-**v18 候选 1——让模型"看见"自己产出的图（已落地，但**换了机制**：附件而非 `png_path`）。**
-`dsh-tool-fs` 自带模型可见的 **`read_image`** 工具（PNG/JPEG/WebP/GIF，按文件签名识别、可降采样）；
-注册条件是挂了持久 `ctx.attachments` **且**当前路由模型的精确 id 声明了图像输入，否则该工具不注册。
-本包所有绘图工具只写 SVG，而 `read_image` 不接受 SVG——这一步确实缺。
-
-**但"新增 `png_path` 参数写一个 PNG 文件"这条路在本版 harness 上不可实现**，三层证据：
-`dsh-fs/README.md` 写明 "*Text-only mutations by contract* — … **binary-safe mutations remain
-deferred**"；`dsh-fs-local` 的 `writeText → writeFileAtomic` 把调用方的**字符串按 UTF-8 落盘**
-（用 latin-1 夹带字节会被 UTF-8 编码器替换而损坏），文本读取还会以 `subarray(0, 8192).includes(0)`
-拒收 NUL，**连读回都做不到**；全树检索**没有任何 `writeBytes`**，`FsErrorCode` 里只有 `FS_NOT_TEXT`。
-绕开它有两条路，都**明确拒绝**：直接 `node:fs` 写、或用 `ctx.get('subprocess')` 起进程写盘——两者
-都逃出"所有写入经 `ctx.fs` 并携带会话 sandboxPolicy"这条本包全程遵守的纪律（与文档里已记录的
-MCP stdio server 不受沙箱约束是同一类问题）。
-
-**落地的机制**：`ctx.attachments.saveImage({ data, mediaType })` 是 harness 提供的**二进制安全**
-通路，而工具结果的 `output.render` 可以返回 **image content block**（`dsh-llm` 的 `ImageBlock =
-{ type: 'image', attachment: ImageAttachmentRef }`）——这正是 `read_image` 自己用的那条路。于是
-v18 给 11 个画图工具加了**可选** `attach_image: true`：工具把同一张图当场光栅化成 PNG（新模块
-`svgpng.mjs`，零 npm 依赖、`node:zlib` 是内置模块）并提交为附件，结果里回一个 `image` 对象，模型
-**直接看见图**，连一次 `read_image` 往返都不用。默认关（不传就没有任何行为变化）。
-
-三条实现纪律：**能力门照抄 harness 的规则**（`exec.agent.session.requestHeader().config` →
-provider/model → `ctx.get('llm').resolveModelInfo()` → `inputModalities.includes('image')`，与
-`read_image` 的 `assertImageCapableRoute` 同源，`contract.mjs` 盯着它）；**永不失败**（图片是额外
-好处：无附件服务/文本路由/渲染不了/存储拒收都降级为纯文本 + `image_note` 说明原因，SVG 照写、
-调用照成功）；**渲染不了的要上报**（`unsupported`/`missing_glyphs` 计数，测试断言真实渲染器的
-产物必须落在支持子集内）。
-
-### v18 已完成（2026-09-17，包 0.10.0 / preset 目录 v18）
-
-图片交接：`svgpng.mjs`（SVG 子集 → 光栅化 → 自写 PNG 编码：IHDR/IDAT/IEND + 自算 CRC32，
-deflate 用内置 `node:zlib`；内置**折线字体**覆盖 ASCII 与 `· ° ± — – … ≈ μ α ─`；不支持的元素/
-命令/画法一律**计数上报**）+ 11 个画图工具的 `attach_image`。顺带修掉一个真 bug：**线性质粒图谱
-的根 viewBox 固定 `0 0 840 840`**，而 `renderLinear` 画到 x≈900——3' 端一直被裁掉（浏览器里同样
-裁）；现在按拓扑选画布（960×260 / 840×840），`test/svgpng.mjs` 盯着 x≥880 必须有墨迹。工具仍
-52 个。验证方式：像素用**独立实现**的 CRC + 裸 inflate 解回后手算断言；八份真实产物再经 harness
-自己的图像解码器（`read_image`）**逐张人眼复核**（这是本项目第一次能"看着自己的产物"验证）。
-
-**v18 候选 2——结构文件的浏览器内预览（客户端半）。**
-`ctx.documentPreviews.register({ id, extensions, binaryExtensions?, priority, title, loading, wrap? })`
-+ keyed `sidebar.right.tab.document` 座位，允许本包按**扩展名**注册自己的渲染器（`loading:
-'bytes-complete'` 拿完整字节）。现有 Molbio 面板只处理 `.dna/.gb/.gbk/.fa/.fasta`；可以让
-`.pdb/.cif/.sdf/.mol` 在工作区里点开就进本包自己的标签页。**必须诚实界定范围**：这里提供的是
-**容器（座位 + 注册表 + 字节加载 + 渲染器选择）**，不是现成的 3D 查看器——v18 要么只做 2D 投影
-（如 Cα 轨迹/二级结构条带），要么把"真正的 3D"单独估工并决定是否值得。座位与 `documentPreviews`
-都走 `ctx.slots.inject`（0.7.1 的抢座位事故就是教训）。
-
-**v18 候选 3——持久 shell 进 preset（收益有限、风险明确，需先验证）。**
-要加的行：`@deepseek-ai/dsh-terminal` + `@deepseek-ai/dsh-terminal-bash` +
-`@deepseek-ai/dsh-tool-pwsh-persistent`（Linux 用 `@deepseek-ai/dsh-tool-bash-persistent`）。
-`sandbox` / `sandbox-policy` / `subprocess` **已在 `dsh-base`**，无需新增。两个硬约束：
-
-1. **工具名冲突**：`dsh-tool-pwsh` 与 `dsh-tool-pwsh-persistent` 都注册 `pwsh`（`bash` 同理），
-   必须把一次性那行 `disabled`，否则注册抛 "already registered"；这会让我们偏离上游 `standard`
-   的逐行对齐，需要同步加进 `test/preset-health.mjs` 顶部的 `ALLOWED_DISABLED_ROWS` 并写进组合头部。
-2. **唯一待验证点**：从 **preset**（不是 profile）发布服务需要一个 `isolate: { terminals: true }` 分组。
-   机制在 shipped preset 里有先例（`planning`/`compaction`/`delegation` 都这么写），但**没有任何
-   shipped preset 这样挂过 terminal**。验证方式：复制安装的 `standard`，加该分组与持久工具行、
-   禁用一次性行，跑 `node test/preset-health.mjs`（逐行按安装包的 schema 校验）。
-
-**对实验台的实际收益与边界**：cwd、环境变量、conda 环境、`samtools faidx` 索引跨调用存活，适合多步
-CLI 流程；但 **Windows 上交互式 REPL 不可靠**（stdin 等待判定是启发式，会跑到 300 s 工具超时并
-**重置 shell**），可靠写法是 `python -c` / `Rscript -e` 单行。另外 `ctx.terminals` 只能被**创建它的
-那个 agent** 操作（`FOREIGN_SESSION`），本包的插件工具没有"替用户开终端标签页"的通路。
-
-**明确不在本版、不要再重复勘察的能力（避免 v18 走错方向）**：
-
-- **computer use 的任何 agent 侧能力**：无截图/鼠标/键盘工具，无 OS 辅助功能树读取，无 OCR，
-  未安装 `dsh-computer-use`/`dsh-browser-use`/`cua-*`/`dsh-inspector`；全树 `screenshot` 只出现一次
-  且是**否定句**（web 面提示词声明浏览器不提供 DOM/route/screenshot 上下文）。生态里确实存在
-  官方实验包与社区插件（`ctx.computerUse` seam + `computer_*` 工具，需 `llm-pi-ai` 视觉路由、
-  `attachment`、`credentials`、`user-approval`），但那是**装插件 + 改 profile patch**的用户选择，
-  不进 Molecular Biology Lab 预设：它换不来计算能力，只换来操控网页/桌面（如网页版 Primer-BLAST、
-  IDT 下单界面），却让"浏览器控制"与"实验记录"同处一个会话。
-- **agent 驱动浏览器终端**：无 `dsh-tool-terminal`（该包未安装，故六个 `terminal_*` 工具不存在），
-  且面板明确不把输出转给模型。`ctx.computerUse`/`ctx.browserUse` 这类 seam 只允许**一个** provider
-  注册（重复注册即失败），所以第三方插件即便在未来版本也**不能**自带一个并行实现去抢。
-- **MCP 与 hooks**（同批勘察）：`dsh-mcp-client` **未被任何 shipped bundle 挂载**（只有
-  `dsh-mcp-resources` 在 `dsh-base`），用户要加需在 profile 的 `cordis.patch.yml` 写一行
-  `name: '@deepseek-ai/dsh-mcp-client'`（MCP 工具名形如 `mcp__<server>__<tool>`，图像结果会经附件
-  投影给模型）；宿主插件也可以在自己的 `apply` 里 `ctx.plugin(McpClient, config)` 程序化挂载
-  （对象插件契约，**运行时未实测**）。**安全要点**：stdio MCP server 由 MCP SDK 自己 spawn，
-  **不受 DSH 文件沙箱约束**，只做环境变量清理（`/KEY|PASSWORD|SECRET|TOKEN/i` 与 `DSH_*` 被丢弃）。
-  `dsh-hooks-*` 是给已有 Claude Code / Codex `hooks.json` 的**兼容适配器**，不是插件扩展点——
-  插件应直接监听 `tools/pre-execute` / `tools/post-execute` / `agent/pre-step` / `agent/turn-stopping`
-  这些同名拦截点。这两项都不是 v18 必需，仅作为"若实验台要接外部计算服务"的备选记录在案。
-
-- **v17 已完成（2026-09-13，包 0.9.0 / preset 目录 v17）**：TaqMan 水解探针设计（`taqman.mjs` + `molbio_design_taqman`）、多重 PCR 互扰检查（`multiplex.mjs` + `molbio_multiplex_check`）、甲基化敏感位点检查与双酶切 buffer 兼容（`methylation.mjs` + `molbio_methylation_check` / `molbio_double_digest`，参考表进 `lib.mjs`）、螺旋轮与疏水性图（`protein-structure.mjs` + `molbio_helical_wheel` / `molbio_hydropathy_plot`）。工具 46 → 52。实现过程中三次纠正探针几何、抓到 `primer_options` 全表静默失效与两处非 lossless-JSON 字段，详见 CHANGELOG 0.9.0。
-- 质粒图谱的浏览器内实时面板（**已落地**：bundle 渠道——手写 lazy-CJS 打包器 + 右栏 Molbio 面板 + 图谱调用卡，见 `docs/client-panel.md`；v17 起 `browser-api.mjs` 也再导出 v17 的纯计算面，但面板未改动）
-- 文献库的浏览器端面板（**已落地**：右栏 "Papers" 页）
-- 向上游提议"preset 渠道挂 client"（探索文档路径 B）
-
-## 已完成的方向（历史）
-
-- **v20（2026-09-18，包 0.12.0 / preset 目录 v20）**：两条"沉默的错"——`msa.mjs` 渐进比对丢尾部
-  悬垂残基（现在每条输出行去缺口后逐字符等于输入），`svgpng.mjs` 的 `<tspan>` 多行文本（树图长叶名
-  折行而非互压）。新增 `font-metrics.mjs` 与 `svgio.wrapTextLines`/`textSpanLines`；工具仍 57。
-  顺带修掉 `preset.yml` 里停了一版的工具数并补上 `toolCountDrift` 守卫。发版流程新增
-  "`svgpng` 像素级标签不重叠守卫"与"工具数声明比对"。
-- **v19（2026-09-18，包 0.11.0 / preset 目录 v19）**：实验台分析五件套（`molbio_fastq_qc`、
-  `molbio_codon_usage`、`molbio_phylogenetic_tree`、`molbio_pcr_simulate`、`molbio_gc_composition`）
-  + 共享绘图助手 `svgio.mjs` + 套件 `test/svgio.mjs`。工具 52 → 57，`attach_image` 11 → 15。
-  修 DSH 0.1.6-alpha.2 的两处漂移（preset 缺 `tool-plugin-manager` 行、`contract.mjs` 绑
-  minifier 空格），并把"比对器可能丢残基"从静默风险改为显式 WARNING。发版流程新增
-  **preset 版本目录镜像检查**（`preset-health`）与人眼复核入口（`svgpng --preview`）。
-- **v18（2026-09-17，包 0.10.0 / preset 目录 v18）**：把画出来的图**交给模型看**——`svgpng.mjs`
-  （零依赖 SVG 子集光栅化 + 自写 PNG 编码 + 内置折线字体）+ 11 个画图工具的可选 `attach_image`
-  （附件而非文件：`ctx.attachments.saveImage` + 结果里的 image block，理由见上文三层证据）。
-  工具仍 52。顺带修掉线性质粒图谱被根 viewBox 裁掉 3' 端的真 bug。
-- **v17（2026-09-13，包 0.9.0 / preset 目录 v17）**：TaqMan 水解探针设计、多重 PCR 互扰检查、甲基化敏感位点与双酶切 buffer 兼容、螺旋轮与疏水性图。工具 46 → 52。
-- **v16（2026-09-10，包 0.6.0 / preset 目录 v16）**：Sequence logo SVG（`logo.mjs` + `molbio_sequence_logo`，信息量 scaling 含小样本校正）+ CRISPR gRNA 设计（`crispr.mjs` + `molbio_grna_design`，双链 PAM 扫描、逐项公开的排序启发式、复用 v12 mispriming 的 k-mer 索引做错配容差脱靶搜索）。工具 44 → 46。
-- **v15（2026-08-22，包 0.5.0 / preset 目录 v15）**：多序列比对（渐进仿射缺口 NW + UPGMA）与保守性分析。
-- **v12–v14**：引物设计的 Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view。
+因此自行实现了官方约定中的等价行为的逐项对照，以及三处**已标注的合理偏差**——
+见 [rules.md](rules.md) 第 6 节。

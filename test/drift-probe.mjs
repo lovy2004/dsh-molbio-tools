@@ -24,55 +24,24 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch } from './preset-health.mjs';
+// The three helpers this probe used to carry its own copies of. Duplicating
+// `findHarnessRoot` was the worst of them: the probe could resolve a DIFFERENT
+// harness than `preset-health` validated against, so a mutation experiment could
+// "pass" while guarding nothing.
+import { findHarnessRoot, importPackage, readComposition } from '../benchmark/harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 
 const argv = process.argv.slice(2);
 const dshFlag = argv.indexOf('--dsh');
-const harnessRoot = resolve(
-  dshFlag === -1
-    ? join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@deepseek-ai', 'dsh')
-    : argv[dshFlag + 1],
-);
-
-/** Node's upward `node_modules` walk, as the preset roster resolves packages. */
-function packageInstalled(name, from) {
-  const pkg = name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/');
-  let dir = from;
-  for (;;) {
-    if (existsSync(join(dir, 'node_modules', pkg, 'package.json'))) return join(dir, 'node_modules', pkg);
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-}
-
-/** Import an installed package by its own manifest, scope-independent. */
-async function importPackage(name) {
-  const pkgDir = packageInstalled(name, harnessRoot);
-  assert.ok(pkgDir !== undefined, `${name} is installed beside the harness`);
-  const manifest = JSON.parse(await readFile(join(pkgDir, 'package.json'), 'utf8'));
-  const pick = (value) => {
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object') return pick(value.default ?? value.import ?? value.require);
-    return undefined;
-  };
-  const entry = pick(manifest.exports?.['.'] ?? manifest.exports ?? manifest.main) ?? 'index.js';
-  return await import(pathToFileURL(join(pkgDir, entry.replace(/^\.\//, ''))).href);
-}
-
-/** Read a composition with the Loader's own YAML dialect (carries `!!js`). */
-async function readComposition(path) {
-  const { entryListSchema } = await importPackage('@deepseek-ai/cordis-plugin-include');
-  const yaml = (await importPackage('js-yaml')).default;
-  return yaml.load(await readFile(path, 'utf8'), { schema: entryListSchema });
-}
+const explicitHarness = dshFlag === -1 ? undefined : argv[dshFlag + 1];
+const harnessRoot = explicitHarness ?? findHarnessRoot(undefined);
+assert.ok(harnessRoot !== undefined, 'could not locate an installed DSH harness (pass --dsh <root> or set DSH_HARNESS_ROOT)');
 
 /** Rows with nested group children flattened inline, in composition order. */
 function orderedRows(rows) {
@@ -102,8 +71,8 @@ const standardCandidates = [
 const standardPath = standardCandidates.find((path) => existsSync(path));
 assert.ok(standardPath !== undefined, `the shipped standard preset is installed at one of ${standardCandidates.join(', ')}`);
 
-const standardRows = orderedRows(presetPlugins(await readComposition(standardPath)));
-const mineRows = orderedRows(presetPlugins(await readComposition(join(repoRoot, 'preset', 'molbio-lab', 'preset.patch.yml'))));
+const standardRows = orderedRows(presetPlugins(await readComposition(standardPath, harnessRoot)));
+const mineRows = orderedRows(presetPlugins(await readComposition(join(repoRoot, 'preset', 'molbio-lab', 'preset.patch.yml'), harnessRoot)));
 console.log(`harness : ${harnessRoot}`);
 console.log(`standard: ${standardPath}`);
 console.log(`rows    : standard ${standardRows.length}, molbio-lab ${mineRows.length}\n`);

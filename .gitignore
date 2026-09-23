@@ -2,3 +2,23 @@ node_modules/
 *.tgz
 test/*.svg
 .DS_Store
+
+# ── benchmark scratch and measurements ────────────────────────────────────────
+# A report measures one model on one day; it is not a source artifact. The
+# offline grader also writes into a scratch workspace. Neither belongs in git —
+# a run is reproducible from benchmark/tasks.json plus the commit it ran against.
+benchmark/reports/
+benchmark/.offline-workspace/
+benchmark/_probe-workspace/
+
+# Each benchmark task runs with the PACKAGE ROOT as its working directory (the
+# tools resolve their outputs against the session workspace), so the file-writing
+# tasks drop their SVG/FASTA here. They are run artifacts, not sources: the tools
+# that produce them are covered by test/smoke.mjs and test/svgpng.mjs, which keep
+# their outputs out of the tree on purpose.
+/*.svg
+/*.fasta
+/*.fa
+/*.gb
+/*.gbk
+/*.ab1

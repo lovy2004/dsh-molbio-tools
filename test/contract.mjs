@@ -38,13 +38,18 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { findHarnessRoot } from '../benchmark/harness.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, '..');
 const argv = process.argv.slice(2);
 const dshFlag = argv.indexOf('--dsh');
-const harnessRoot = dshFlag === -1
-  ? join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@deepseek-ai', 'dsh')
-  : argv[dshFlag + 1];
+const explicitHarness = dshFlag === -1 ? undefined : argv[dshFlag + 1];
+// `--dsh` still wins, but the fallback is the shared resolver (`DSH_HARNESS_ROOT`,
+// the global npm prefix, then the known system locations) rather than one
+// hardcoded `%APPDATA%` layout, which only exists on Windows.
+const harnessRoot = explicitHarness ?? findHarnessRoot(undefined);
+assert.ok(harnessRoot !== undefined, 'could not locate an installed DSH harness (pass --dsh <root> or set DSH_HARNESS_ROOT)');
 const packagesDir = join(harnessRoot, 'node_modules', '@deepseek-ai');
 
 assert.ok(existsSync(packagesDir), `the harness packages must be installed at ${packagesDir}`);

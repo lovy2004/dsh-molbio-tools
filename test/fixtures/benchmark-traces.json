@@ -1,0 +1,174 @@
+{
+  "$comment": "Real responses from one benchmark run, frozen so the scorer can be regression-tested without spending API budget. See test/benchmark-score.mjs for why each defect these cover was invisible to synthetic traces.",
+  "run": {
+    "recorded_at": "2026-09-23T06:23:36.170Z",
+    "harness_version": "0.1.7-alpha.2",
+    "profile": "molbio-bench",
+    "model": "the profile default (deepseek-flash unless the profile or session overrides it)",
+    "summary": {
+      "total": 15,
+      "passed": 15
+    },
+    "responses": [
+      {
+        "id": "orientation",
+        "tool_calls": [
+          "molbio_reverse_complement",
+          "molbio_gc_content"
+        ],
+        "answer": "**Reverse-complement strand:** `ATGCCTAGGCTAACGTACGCAT`\n\n**GC content of the original:** 50% (11 G/C out of 22 bases; 11 A/T).\n\nQuick check of the math:\n- Original: `ATGCGTACGTTAGCCTAGGCAT` (22 nt)\n- Complement: `TACGCATGCAATCGGATCCGTA`\n- Reverse: `ATGCCTAGGCTAACGTACGCAT`\n\nSince both strands of a duplex pair identically, this is the sequence you'd order as the bottom-strand oligo — order it 5'→3' exactly as written, with no 5' phosphate unless you need one for ligation. Note the original starts with ATG and the reverse complement also contains an ATG near its 5' end; if you're using these as primers rather than as a duplex pair, worth checking that the ATG isn't an unintended start codon in-frame with your construct."
+      },
+      {
+        "id": "qpcr-primers",
+        "tool_calls": [
+          "molbio_design_primers"
+        ],
+        "answer": "**Best qPCR pair** (designed on your 400 bp template; Tm values are SantaLucia-1998 nearest-neighbour estimates at 50 mM Na⁺ / 1.5 mM Mg²⁺ / 200 nM primer)\n\n| | Sequence (5′→3′) | Position | Length | Tm | GC% |\n|---|---|---|---|---|---|\n| Forward | `ATTACTCCTGCTCTTCCCATAC` | 201–222 | 22 nt | 58.4 °C | 45.5% |\n| Reverse | `CACTACTCCTCTGTACGCAC` | 105–124 | 20 nt | 58.9 °C | 55.0% |\n\n- **Amplicon:** 118 bp (template positions 105–222) — inside your 80–150 bp window\n- **Tm match:** ΔTm = 0.5 °C; both primers sit in 58–62 °C (anneal around 58–60 °C)\n- **Structure:** no hairpins (0 °C); self-complementarity scores 3/1 (F) and 7/2 (R) — acceptable, no 3′ dimers flagged; both primers have a G/C at the 3′ end\n\nThis was the top-ranked candidate; the designer's penalty (5.5) reflects the small Tm/GC asymmetry between the two primers, which is still well within normal qPCR tolerances. As always, the Tm is a predicted value — confirm with an annealing gradient or your instrument's calibration before locking the cycling conditions."
+      },
+      {
+        "id": "plasmid-single-cutter",
+        "tool_calls": [
+          "glob",
+          "glob",
+          "molbio_parse_snapgene",
+          "molbio_unique_cutters",
+          "molbio_extract_region",
+          "molbio_enzyme_lookup",
+          "molbio_extract_region",
+          "molbio_extract_region"
+        ],
+        "answer": "**pUC118.dna** parsed: 3162 bp, circular, 10 annotated features (AmpR, ori, M13 ori, lacZα, lac promoter/operator, MCS 875–931, M13 fwd/rev).\n\n## Enzymes that linearise it with exactly one cut\n\n33 enzymes in the built-in table cut this plasmid once and only once (no insert to worry about), so any one of them gives a single 3162 bp linear product:\n\n| Region | Enzymes (cut position on the top strand, 1-based) |\n|---|---|\n| **MCS (875–931)** | HindIII 876 · SphI 886 · PstI 892 · SbfI 892 · SalI 894 · HincII 896 · XbaI 900 · BamHI 906 · XmaI 911 · TspMI 911 · SmaI 913 · Acc65I 915 · KpnI 919 · SacI 925 · **EcoRI 927** |\n| Backbone | PsiI 284 · BsaAI 412 · DraIII 412 · BtgZI 413 · NgoMIV 513 · NaeI 515 · KasI 712 · NarI 713 · SfoI 714 · PluTI 716 · BspQI 1167 · LguI 1167 · SapI 1167 · PciI 1283 · ScaI 2656 · XmnI 2775 · ZraI 3096 · AatII 3098 |\n\nNotes on that list:\n- Some entries are **isoschizomers / same site**: PstI–SbfI (892), XmaI–TspMI (911), BspQI–LguI–SapI (1167), ZraI–AatII (3096/3098); KasI/NarI/SfoI/PluTI and NgoMIV/NaeI are neighbouring compatible GC-cutters.\n- A few cut **inside annotated features**, so avoid them if you need that function intact: ScaI 2656 and XmnI 2775 sit in the AmpR CDS (2102–2962), AatII/ZraI 3096–3098 sit just downstream of the AmpR promoter.\n- The MCS enzymes are the convenient choices, since they linearise without disturbing the backbone features.\n\n## Confirmed example: EcoRI\n\nSite context (positions 910–940 coordinates from pUC118.dna):\n\n```\n915       919  925   927       932\nGGTACC GAGCTC G AATTC GTAATCATG\n              Acc65I/KpnI SacI  EcoRI\n```\n\n- **Recognition site:** `G^AATTC`, positions **927–932** (the only EcoRI site in the plasmid)\n- **Cut:** after **bp 927** on the top strand (between G927 and A928), i.e. inside the MCS (875–931)\n- **Product:** one linear fragment of **3162 bp** (circular fragment math confirms no second cut)\n- **Ends:** 5′ `AATT` overhang, compatible only with itself (or MfeI)\n\nThat is an in-silico result from the built-in enzyme table against the file's sequence — worth a quick check against the supplier's/REBASE entry (and, for EcoRI, note it is blocked by neither Dam nor Dcm methylation) before it becomes a bench decision. Alternatives I verified the same way: **HindIII** (A^AGCTT, cut after bp 876) and **ScaI** (AGT^ACT, cut after bp 2656, which would also disrupt AmpR)."
+      },
+      {
+        "id": "double-digest-buffer",
+        "tool_calls": [
+          "glob",
+          "glob",
+          "molbio_parse_snapgene",
+          "molbio_double_digest",
+          "pwsh",
+          "glob",
+          "glob",
+          "read",
+          "pwsh",
+          "molbio_extract_region",
+          "molbio_extract_region",
+          "molbio_restriction_sites",
+          "molbio_double_digest",
+          "molbio_virtual_gel"
+        ],
+        "answer": "Done. One process note first: my initial digest call used a made-up placeholder sequence, which gave nonsense (no sites at all). I caught it, pulled the real sequence out of the `.dna` file, and re-ran everything — the numbers below are from the actual pUC118 sequence.\n\n## Do EcoRI and HindIII share a buffer?\n\n**Yes.** Both enzymes are compatible with NEBuffer r1.1, r2.1, r3.1, and **CutSmart** — so a single-tube double digest is fine. CutSmart (or r1.1/r2.1/r3.1) at 37 °C works for both. Salt/dilution-wise this is one of the most forgiving double digests there is; just keep glycerol ≤5% and use a single-vendor buffer as your baseline. (Buffer compatibility here is from a hand-transcribed reference table — if you're on a non-NEB supplier, confirm against their current chart.)\n\n## Fragment sizes\n\npUC118 is **3162 bp** (circular). Both enzymes cut **exactly once**:\n\n| Enzyme | Site | Cut position |\n|---|---|---|\n| HindIII | A^AGCTT | 876 |\n| EcoRI | G^AATTC | 927 |\n\nBoth sites sit in the MCS — MCS is 875–931 (`AAGCTT…GAATTC`), i.e. **HindIII … EcoRI**, 51 bp apart.\n\n**Double digest → 2 fragments: 3111 bp + 51 bp** (3111 + 51 = 3162 ✓)\n\n## What you'll actually see on the gel\n\nThis is really just a **linearization**, and it's the classic pUC MCS pattern:\n\n- **~3.1 kb band — bright, this is the one you see.** Uncut supercoiled plasmid will run as a tighter, usually slightly faster band (and often a faint nicked/open-circle band above it), so the shift from supercoiled → clean 3.1 kb linear is your evidence the digest worked.\n- **51 bp — you will NOT see it on a normal gel.** At ~1.5% agarose it runs off the gel or sits in the primer-dimer haze at the dye front, and at only 1.6% of the mass (51/3162) it's roughly 1/60th the ethidium signal of the 3.1 kb band anyway. If you genuinely need to see it, use a high-percentage (3–4%) gel or a small-fragment ladder and expect it to be faint.\n\nPractical upshot: **a single ~3.1 kb band is the correct, expected result here** — don't read the missing small fragment as a failed digest. If you want a double digest that gives two visible bands for clone screening, pick a second enzyme outside the MCS (e.g. a single cutter in the backbone) rather than this pair.\n\nExpected gel: `pUC118_EcoRI_HindIII_double_digest_gel.svg` (opened in your viewer)."
+      },
+      {
+        "id": "methylation-block",
+        "tool_calls": [
+          "glob",
+          "molbio_parse_snapgene",
+          "molbio_parse_snapgene",
+          "molbio_extract_region",
+          "molbio_methylation_check",
+          "molbio_restriction_sites",
+          "molbio_methylation_check",
+          "web_search",
+          "web_fetch",
+          "web_search",
+          "web_fetch",
+          "web_fetch",
+          "web_fetch",
+          "web_search",
+          "web_fetch",
+          "web_fetch",
+          "web_fetch",
+          "web_fetch",
+          "web_fetch",
+          "web_search",
+          "web_fetch",
+          "web_fetch"
+        ],
+        "answer": "## What I did\n\nThe plasmid is at `test\\fixtures\\pUC118.dna` (not the working-directory root). I parsed it, pulled the 3162 bp sequence, and ran `molbio_methylation_check` on it (circular, Dam + Dcm marks) plus a focused run on the MCS enzymes.\n\n## The plasmid\n\n**pUC118 (U07649), 3162 bp, circular.** It has exactly **one BamHI site**, `GGATCC` at **905–910**, cutting at **906** — so a complete BamHI digest should give a single **3162 bp linear** band (and, uncut, the usual supercoiled/nicked plasmid).\n\n## Dam / Dcm landscape\n\n| Mark | Motif | Sites in pUC118 |\n|---|---|---|\n| Dam | GATC | **15** |\n| Dcm | CCWGG | **5** |\n\n103 enzymes were screened: **45 usable, 0 blocked, 2 impaired**.\n\n## What the analysis says about BamHI\n\nThe tool flags BamHI as **impaired (dam)** — *not* blocked. The reason is structural: the BamHI site `G^GATCC` **contains a Dam GATC** internally (positions 906–909 = G-A-T-C). On DNA from a standard `dam+` cloning host that adenine is N6-methylated, and the tool's table treats that overlap as reducing BamHI cleavage.\n\n**BstYI is the only other impaired enzyme** — and for the same reason: its site `R^GATCY` literally contains `GATC`.\n\nSo under this tool's model, Dam methylation is a plausible explanation for a BamHI digest that is \"barely working\" (partial digestion → mostly uncut plasmid plus a trace of linear), and the fix is to prepare the DNA from a **dam− host** (e.g. JM110, SCS110, GM2163) or use a Dam-insensitive alternative.\n\n### One caution worth knowing\n\nThe tool's own note says its methylation table is a hand-transcribed quick reference and to verify it against the supplier's current table. That matters here: `GGATCC` *always* contains `GATC`, so if that methylation blocked BamHI, BamHI would never work on plasmid DNA from any `dam+` host — yet BamHI is a routine workhorse enzyme on exactly that DNA. REBASE's BamHI record ([enzyme page](http://rebase.neb.com/rebase/enz/BamHI.html), [methylation-sensitivity page](http://rebase.neb.com/cgi-bin/msget?BamHI)) does carry a Dam entry tested on Dam-methylated plasmid DNA, so the tool's \"impaired\" flag is best read as a conservative caution rather than a hard block. Practical reading: **treat Dam as the tool's stated suspect, but if the digest still fails in a dam− prep, look at the bench side too** (enzyme lot/activity, buffer, DNA amount and quality).\n\n## Enzymes the tool considers usable on pUC118 (45)\n\nAatII, Acc65I, AseI, BfuAI, BglI, BsaAI, BsaI, BsmBI, BspQI, BtgZI, BveI, DraI, DraIII, EcoRI, Esp3I, FokI, FspI, HincII, HindIII, KasI, KpnI, LguI, NaeI, NarI, NgoMIV, PciI, PluTI, PsiI, PstI, PvuI, PvuII, SacI, SalI, SapI, SbfI, ScaI, SfoI, SmaI, SphI, SspI, TspMI, XbaI, XmaI, XmnI, ZraI.\n\nNotably, **every other enzyme in the MCS is considered usable**, which gives you clean alternatives to BamHI in the same polylinker:\n\n| Enzyme | Cut at | Complete digest |\n|---|---|---|\n| HindIII | 876 | 3162 bp linear |\n| PstI | 892 | 3162 bp linear |\n| SalI | 894 | 3162 bp linear |\n| XbaI | 900 | 3162 bp linear |\n| **BamHI** | **906** | **3162 bp linear (tool: impaired)** |\n| SmaI | 913 | 3162 bp linear |\n| KpnI | 919 | 3162 bp linear |\n| SacI | 925 | 3162 bp linear |\n| EcoRI | 927 | 3162 bp linear |\n\nTwo clarifications on that list: \"usable\" here means *usable with respect to Dam/Dcm methylation* — it is not a statement about cutting once, buffer compatibility, or star activity. And **0 enzymes were classified \"blocked\"**, so BamHI and BstYI are the strongest warnings this tool issues on this plasmid."
+      },
+      {
+        "id": "qpcr-ddct",
+        "tool_calls": [
+          "molbio_qpcr_analysis"
+        ],
+        "answer": "## ΔΔCt result\n\n| Step | Treated | Control |\n|---|---|---|\n| Target Ct (mean ± SD) | 22.13 ± 0.15 | 25.03 ± 0.15 |\n| Reference Ct (mean ± SD) | 18.03 ± 0.06 | 18.20 ± 0.10 |\n| **ΔCt** (target − reference) | **4.10** | **6.83** |\n\n**ΔΔCt = 4.10 − 6.83 = −2.73**\n\n**Fold change = 2^(−ΔΔCt) = 2^2.73 ≈ 6.6×**\n\nSo the target gene is **~6.6-fold higher in the treated samples than in the control** (assuming 100% efficiency, E = 2; the tool's default).\n\nPropagating the replicate SDs through ΔΔCt (SD ≈ 0.25) puts the estimate at roughly **5.6–7.9×** — indicative, not a formal confidence interval from n = 3.\n\n## One thing worth checking\n\nThe direction is the opposite of a knockdown. A genuine knockdown should raise the target Ct in the treated arm (ΔΔCt positive → fold change < 1). Here the treated target Ct is ~3 cycles **lower**, so the assay reports **up-regulation, not silencing**.\n\nBefore reporting, I'd verify:\n- **Group labels swapped** in the Ct sheet (most common cause).\n- Whether \"treated\" is actually the control condition (e.g., mock vs. siRNA inverted).\n- Target/reference gene assignments weren't switched.\n- The reference gene is stable — here reference Ct is nearly identical in both arms (18.03 vs 18.20), so it is behaving as a good housekeeper and isn't masking the effect.\n\nIf the label swap is confirmed and treated/control are reversed, the same numbers give a **~6.6-fold reduction** (fold change ≈ 0.15), which is a strong knockdown."
+      },
+      {
+        "id": "align-mismatch",
+        "tool_calls": [
+          "molbio_align"
+        ],
+        "answer": "## Alignment result\n\n**Yes — the read matches the reference, apart from the single engineered change.**\n\n| Metric | Value |\n|---|---|\n| Identity | **98.33%** (59/60 columns) |\n| Differences | **1** (a single substitution) |\n| First mismatch | **read position 31 / reference position 81** (read `A` vs reference `C`) |\n| Alignment span | read 1–60 ↔ reference **51–110** (exactly as expected) |\n\n```\nread  ACACGAGACGCACTGAGAAACTATATTGGCAAATTGGCTTGAACCAAGGTAATAGCGGTC\n      |||||||||||||||||||||||||||||| |||||||||||||||||||||||||||||\nref   ACACGAGACGCACTGAGAAACTATATTGGCCAATTGGCTTGAACCAAGGTAATAGCGGTC\n                                   ^\n                        read pos 31 / ref pos 81:  A vs C\n```\n\n**Interpretation:** the 60 bp read maps cleanly to reference positions 51–110 with no gaps or indels — only the one `C→A` substitution at reference position 81. Since that is the only difference and it sits at the expected position, this is consistent with the intended edit; everything else is a perfect match.\n\nOne note: 98.3% identity is the *alignment* identity — the read is not a perfect match to your stated reference, so if you were expecting a silent change you may want to confirm whether the `A` at position 81 was the base you meant to introduce."
+      },
+      {
+        "id": "gc-cpg-islands",
+        "tool_calls": [
+          "molbio_gc_composition"
+        ],
+        "answer": "**Overall composition (402 bp)**\n- GC: **47.51%** (191 G+C of 402 bases); AT 52.49%; no Ns\n- CpG observed/expected: **1.21**\n- Shannon entropy 1.99 bits/base; linguistic complexity 0.69; N50 402 (single sequence)\n\n**CpG island (Gardiner-Garden & Frommer 1987 criteria: ≥200 bp, GC > 50%, CpG o/e > 0.6)**\n- Yes — **one island**\n- Coordinates: **1–200**\n- Length: **200 bp**\n- Its own GC: **57%**\n- CpG o/e within the island: **1.08**\n\nSo the island sits right at the very 5′ end of the sequence and occupies roughly the first half of it; the remaining 202 bp are GC-poor enough (and low enough in CpG) that no second island is called. The tool also noted the cumulative GC-skew minimum at position 1 and maximum at ~301 — for a closed replicon that pattern is a conventional origin/terminus *indicator*, not a determination, and it's not meaningful for a linear fragment in isolation.\n\nThe figure was written to `D:\\deepseek-harness\\dsh-molbio-tools\\gc-composition.svg` (not auto-opened; say the word if you'd like it launched)."
+      },
+      {
+        "id": "fastq-qc",
+        "tool_calls": [
+          "molbio_fastq_qc"
+        ],
+        "answer": "## Read-level QC results\n\n**Run-level numbers (3 reads, 60 bases, all 20 nt):**\n\n| Metric | Value |\n|---|---|\n| Mean per-base quality | **Phred 23.42** |\n| Q30 percentage | **58.33%** (35/60 bases) |\n| Q20 percentage | 58.33% (same 35 bases) |\n| GC | 36.67% |\n| Duplication | 0% (100% unique) |\n| Adapter screen | PolyA flagged at 33.33% |\n\n### 3' quality collapse — answer: no\n\nNo read collapses at its 3' end. Walking the three reads base by base:\n\n- **r1** (`IIII…`, all 20 bases): flat **Q40**, no decline.\n- **r3** (`IIIII HHHHH ##### IIIII`): Q40 → Q39 → **Q2 (positions 11–15)** → back to **Q40 (positions 16–20)**. This is the only real quality defect, and it is a **mid-read (internal) drop that recovers by the 3' end**, not a 3' degradation. The 3' terminus is the *strongest* part of this read, so it is not the classic 3'-end collapse seen with long-read or cycle-degradation chemistry.\n- **r2** (all `!`): uniformly **Q0 across every base**, i.e., a failed read rather than a positional collapse. It has no Q30 or Q20 bases at all, and it alone drags the whole run's mean down.\n\nThe aggregate curve explains the two thresholds quoted: the mean drops below Q30 from **position 1** (r2 contributes Q0 everywhere) and below Q20 from **position 11** (the `#####` block in r3), then recovers at positions 16–20 as r3 returns to Q40.\n\n### Practical read-out\n- Q30 of 58.33% is **well below** the usual ~85–90% Illumina threshold, but with only 3 reads this number is dominated by the single dead read r2.\n- **r1**: keep — clean Q40 throughout.\n- **r2**: discard — Q0 across the full length, no usable sequence.\n- **r3**: usable if the internal 5-base Q2 stretch is acceptable; it is not a 3' problem, so no 3' trimming would help. If the region under those bases matters, the base calls there are unreliable.\n- The **PolyA 33.33%** adapter hit is an artifact of these very short, monotonous reads (r2 is a 20-nt poly-T), not evidence of real adapter contamination at this scale.\n\nThe multi-panel QC report (per-base quality with quartiles, per-sequence quality, base content, GC, duplication, adapter screen) was written to:\n`D:\\deepseek-harness\\dsh-molbio-tools\\reads.qc.svg`\n\nOne caveat: every figure above is computed over just 3 reads / 60 bases, so treat all percentages as illustrative — the adapter, duplication, and over-representation panels need hundreds of reads to mean anything."
+      },
+      {
+        "id": "translate-orf",
+        "tool_calls": [
+          "molbio_translate"
+        ],
+        "answer": "## Frame 1 translation\n\nTemplate (42 bp), frame 1 codons:\n\n```\nGGG ATG GCT GCT GCT GCT GCT GCT GCT GCT TAA CCC\n G   M   A   A   A   A   A   A   A   A   *   P\n```\n\n**Translation (13 aa):** `GMAAAAAAAAA*P`\n- First stop codon at template position 34 (TAA)\n\n## Open reading frames ≥ 5 aa\n\n| # | Frame | Template bases | Length | Protein |\n|---|-------|----------------|--------|---------|\n| 1 | +1 | 4–36 | **10 aa** | `MAAAAAAAAA` |\n\n## Answer\n\n- **Protein sequence:** `MAAAAAAAAA` (Met followed by nine alanines)\n- **Longest ORF:** **10 amino acids** (bases 4–36, start ATG → stop TAA)\n\nThe sequence is essentially a poly-alanine stretch: a single ATG at position 4 leads into nine consecutive GCT (Ala) codons before the TAA stop, then a CCC proline codon sits outside the ORF. Because the stop (TAA) is in the same frame, no longer ORF exists in frame 1 — the read is only 10 aa of real coding capacity."
+      },
+      {
+        "id": "enzyme-catalog",
+        "tool_calls": [
+          "molbio_enzyme_lookup",
+          "molbio_enzyme_lookup"
+        ],
+        "answer": "## BsaI vs EcoRI — two fundamentally different cutting strategies\n\n| | **EcoRI** | **BsaI** |\n|---|---|---|\n| Enzyme class | Type IIP (palindromic) | Type IIS (shifted) |\n| Recognition site | `G^AATTC` (6 bp, palindromic) | `GGTCTC` (6 bp, **asymmetric**) |\n| Where it cuts | **inside** the site, between G and A on both strands | **outside** the site, 1 nt downstream on the top strand, 5 nt on the bottom |\n| Cut geometry | G^AATTC (top), CTTAA^G (bottom) | GGTCTC(1/5) → cut at 7/5 |\n| Overhang | 4-nt 5' overhang (`AATT`) | 4-nt 5' overhang (arbitrary sequence) |\n| Overhang sequence | **fixed** — always `AATT` | **user-defined** — whatever the 4 bases after the site are |\n\n### EcoRI — cuts inside its own site\n\n```\n5'- ...G A A T T C... -3'\n3'- ...C T T A A G... -5'\n       ^       ^\n```\n\nEcoRI is a dimer that reads the palindromic `GAATTC` on both strands and cuts symmetrically within it, leaving the classic `AATT` 5' overhang. Because the site is palindromic, every EcoRI end is identical and self-complementary — two EcoRI fragments can ligate to each other in either orientation, and the site is **regenerated** on religation (which is why you can re-cut a self-ligated vector).\n\n### BsaI — cuts a fixed distance away from its site\n\n```\n5'- ...G G T C T C N N N N N ↓ ... -3'\n3'- ...C C A G A G N N N N N N N N N ↑ ... -5'\n       └─ recognition ─┘  spacer  └─ 4-nt overhang (any sequence)\n```\n\nBsaI binds `GGTCTC` and, as a monomer, reaches a fixed number of bases downstream to cut at **7/5** — 1 nt past the site on the top strand and 5 nt past on the bottom. The 4-nt 5' overhang is therefore **not defined by the enzyme at all**: it is simply the four bases that happen to sit in the spacer.\n\n### Why this matters practically\n\n- **EcoRI** is used for classic cloning: digest vector and insert, ligate compatible `AATT` ends. Because the overhang is fixed and palindromic, you cannot force orientation with a single EcoRI site, and the site comes back after ligation.\n- **BsaI** is the workhorse of **Golden Gate / type IIS assembly**. It cuts *outside* its recognition site, so the site is **excised from the product** on ligation — the assembled junction contains no BsaI site and cannot be re-cut, driving the reaction to completion. And because the overhang is the spacer sequence, you can design **four-base junctions of your choice**: distinct, non-palindromic, non-complementary overhangs let you assemble many fragments in one tube, in a defined order and orientation.\n- Practical consequence: a BsaI site must never appear **inside** a fragment you intend to keep, or it will be cleaved; the same is not true of the bases between the site and the cut.\n\nNote the recognition sequence is written on one strand only for BsaI — the enzyme also cuts at the reverse-complemented site (`GAGACC` read on the top strand), which is why standard site-scanning tools can miss half of its cut events."
+      },
+      {
+        "id": "dilution-math",
+        "tool_calls": [
+          "molbio_lab_math"
+        ],
+        "answer": "**Take 50 µL of the 10x stock and add 950 µL of diluent** (C1V1 = C2V2: 10 × 50 = 0.5 × 1000).\n\nA practical touch: pipette the 950 µL diluent in first, then add the 50 µL stock and mix — that gives better mixing than adding diluent to a small volume of stock. Use a 1000 µL (or 1 mL) total volume, so a 1.5 mL tube works fine."
+      },
+      {
+        "id": "gel-preview",
+        "tool_calls": [
+          "glob",
+          "pwsh",
+          "molbio_parse_snapgene",
+          "molbio_extract_region",
+          "molbio_double_digest",
+          "molbio_virtual_gel",
+          "present"
+        ],
+        "answer": "## pUC118 (3162 bp, circular) — EcoRI + HindIII double digest\n\n**Cut sites (from the actual sequence):**\n| Enzyme | Sites | Cut position |\n|---|---|---|\n| EcoRI (G^AATTC) | 1 | **927** |\n| HindIII (A^AGCTT) | 1 | **876** |\n\nBoth cut once only, and both sit inside the MCS (875–931), so this is the classic clean excise-the-polylinker digest.\n\n**Fragments:** `3162 − 51 = **3111 bp**` and `**51 bp**`\n\n### How many bands?\n- **2 distinct fragments** are produced — but on a 1 kb ladder gel you will only **see 1 band**.\n- The **~3.1 kb** band is the one you score; size it against the 3 kb ladder band.\n- The **51 bp** fragment is **not visible**: the 1 kb ladder's smallest band is 250 bp, and 51 bp runs at/below the dye front on a normal 1–1.5% agarose gel. It will only show up on a high-percentage (3–4%) or PAGE gel, or if you stain/run long enough to catch the front.\n- Practical consequence: seeing a single ~3.1 kb band is the **correct** result here — don't read it as a failed/uncut digest. Run an **undigested plasmid control alongside**: supercoiled pUC118 migrates faster than 3.1 kb linear, and nicked/linear forms give you the comparison you need.\n\n### Buffer note\nEcoRI and HindIII are compatible in NEBuffer r1.1 / r2.1 / r3.1 or CutSmart, so a single-tube double digest is fine (cutting is unaffected by Dam/Dcm methylation at these sites). As always, confirm against your supplier's current buffer table.\n\nThe gel image (`pUC118_EcoRI_HindIII_gel.svg`) shows the double digest lane with the 3111 bp band plus a 51 bp band drawn at the bottom, and the two single-digest lanes (each linear 3162 bp) for reference. Note the renderer draws the 51 bp band so you can see *where it would run* — it is off-scale below the ladder, not a band you'll detect."
+      },
+      {
+        "id": "restraint-simple-math",
+        "tool_calls": [
+          "molbio_lab_math"
+        ],
+        "answer": "**Final concentration = 1 mM**\n\nThe arithmetic: C₁V₁ = C₂V₂\n\n- (50 mM)(10 µL) = 500 µmol·... in mass terms = C₂ × 500 µL\n- C₂ = (50 × 10) / 500 = **1 mM**\n\nThat's a 1:50 dilution (50-fold), so 50 mM ÷ 50 = 1 mM. You're adding 10 µL of stock to 490 µL of diluent to reach 500 µL total (not 500 µL of diluent, which would give 0.98 mM — close, but not exactly 1)."
+      },
+      {
+        "id": "restraint-clarify",
+        "tool_calls": [
+          "glob",
+          "glob",
+          "read",
+          "pwsh",
+          "pwsh",
+          "ask_user_question"
+        ],
+        "answer": "I've hit a wall on both fronts, so here's exactly where things stand:\n\n**What I found**\n- No sequencing trace anywhere in the workspace (`D:\\deepseek-harness\\dsh-molbio-tools`). A glob for `*.ab1|*.seq|*.abi|*.scf|*.fasta` returns only `test\\fixtures\\pUC118.dna` and other tool-source files — nothing that looks like a read.\n- `pwsh` can't run in this session at all: every call dies during sandbox setup with `SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\\deepseek-harness\\dsh-molbio-tools)`. That's an environment/permissions problem on the shell, not a failed command, so I can't search your Downloads/Desktop for you.\n- I tried to ask you interactively, but there's no answerer configured, so the question came back unaccepted — hence this message.\n\n**What I need to actually check it**\n\n1. **The read** — drop the `.ab1` (with quality values, so I can flag low-quality positions) into the workspace and tell me the filename. Plain `.seq`/`.txt`/`.fasta` also works but loses the quality data.\n2. **The reference** — a Sanger verification is always against an expectation, so I need one of:\n   - a plasmid file (`.dna` SnapGene or `.gb` GenBank) in the workspace, or\n   - the raw reference sequence, or\n   - the region/CDS coordinates you expect the read to cover.\n\nOnce I have those, `molbio_verify_sanger` aligns the read to the reference circular-aware and reports coverage, identity, mismatches, insertions/deletions, and any amino-acid changes inside a CDS window — with low-quality (<20) positions flagged and excluded from a \"differences found\" verdict.\n\n**If you can't get files in:** paste the read sequence and the reference sequence straight into the chat. I can still run `molbio_align` and report mismatches, indels, and identity — just without the per-base quality flagging, so a low-quality miscall could look like a real variant.\n\nWhich route do you want to take — and do you have the reference plasmid handy, or should I help you identify what the read corresponds to first?"
+      }
+    ]
+  }
+}

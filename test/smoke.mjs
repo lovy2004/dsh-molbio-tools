@@ -11,11 +11,23 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 
+import { findHarnessRoot, importPackage } from '../benchmark/harness.mjs';
+
 const require = createRequire(import.meta.url);
 
 // Import the REAL harness validators from the installed DSH (its own deps
 // resolve beside it). Test-only import — the shipped plugin never does this.
-const dshTools = await import('file:///C:/Users/18771/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js');
+//
+// Located through the shared resolver rather than a hardcoded path: the literal
+// `C:/Users/18771/...` this file used to carry meant the suite could only ever
+// pass on one machine, and on any other one it would silently import a DIFFERENT
+// harness than `preset-health`/`contract` were checking.
+const harnessRoot = findHarnessRoot(process.env.DSH_HARNESS_ROOT);
+if (harnessRoot === undefined) {
+  console.error('smoke: could not locate an installed DSH harness (set DSH_HARNESS_ROOT)');
+  process.exit(2);
+}
+const dshTools = await importPackage('@deepseek-ai/dsh-tools', harnessRoot);
 const { assertSupportedJsonSchema, validateJsonSchemaValue } = dshTools;
 
 const plugin = await import('../index.mjs');
