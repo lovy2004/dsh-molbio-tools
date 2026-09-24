@@ -25,7 +25,7 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -111,7 +111,7 @@ function patchOf(bundle) {
     join(profileDir, 'plugins'),
   ]) {
     const candidate = join(base, ...bundle.split('/'), 'cordis.patch.yml');
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) return { patch: candidate, root: join(base, ...bundle.split('/')) };
   }
   return undefined;
 }
@@ -119,14 +119,17 @@ function patchOf(bundle) {
 const rows = [];
 const scannedBundles = [];
 for (const bundle of bundles) {
-  const patch = patchOf(bundle);
-  if (patch === undefined) continue;
+  const found = patchOf(bundle);
+  if (found === undefined) continue;
   scannedBundles.push(bundle);
-  for (const name of await rowsOf(patch)) rows.push({ name, bundle });
+  // A relative row in a bundle patch resolves against the BUNDLE's own
+  // directory, which is how `dsh plugin add` makes a package's own host file
+  // reachable no matter where it was installed from.
+  for (const name of await rowsOf(found.patch)) rows.push({ name, bundle, root: found.root });
 }
 // The profile's own patch layer can add rows too.
 const ownPatch = join(profileDir, 'cordis.patch.yml');
-if (existsSync(ownPatch)) for (const name of await rowsOf(ownPatch)) rows.push({ name, bundle: '(profile patch)' });
+if (existsSync(ownPatch)) for (const name of await rowsOf(ownPatch)) rows.push({ name, bundle: '(profile patch)', root: profileDir });
 assert.ok(scannedBundles.length > 0, 'at least one bundle patch layer was found to scan');
 console.log(`bundles : ${scannedBundles.join(', ')}`);
 console.log(`rows    : ${rows.length}`);
@@ -157,34 +160,55 @@ function clientExportOf(exportsField) {
 const graphEntries = new Map();
 const resolvedRows = new Map();
 for (const row of rows) {
-  // cordis builtins and relative rows outside this package are not packages.
-  if (row.name.startsWith('cordis:') || row.name.startsWith('.')) {
-    resolvedRows.set(row.name, { kind: row.name.startsWith('.') ? 'preset-relative' : 'builtin' });
+  // Cordis builtins are not packages.
+  if (row.name.startsWith('cordis:')) {
+    resolvedRows.set(row.name, { kind: 'builtin' });
     continue;
   }
-  const packageName = row.name.split('/').slice(0, row.name.startsWith('@') ? 2 : 1).join('/');
   let manifest;
-  for (const base of [join(profileDir, 'node_modules'), join(harnessRoot, 'node_modules'), join(harnessRoot)]) {
-    const candidate = join(base, ...packageName.split('/'), 'package.json');
-    if (existsSync(candidate)) {
-      manifest = candidate;
-      break;
+  if (row.name.startsWith('.') || row.name.startsWith('file:') || isAbsolute(row.name)) {
+    // A relative/file row resolves against the patch layer that declared it,
+    // exactly as the Loader rewrites the specifier. The HARNESS then walks up
+    // from the resolved module to the nearest manifest — that is how a bundle
+    // ships its own host anchor (`./host.mjs`) and still gets its `dsh.client`
+    // browser half discovered.
+    const target = row.name.startsWith('file:')
+      ? fileURLToPath(row.name)
+      : resolve(row.root ?? packageRoot, row.name);
+    if (!existsSync(target)) {
+      resolvedRows.set(row.name, { kind: 'unresolved' });
+      continue;
+    }
+    manifest = nearestPackage(target);
+    if (manifest === undefined) {
+      resolvedRows.set(row.name, { kind: 'unresolved' });
+      continue;
+    }
+  } else {
+    const packageName = row.name.split('/').slice(0, row.name.startsWith('@') ? 2 : 1).join('/');
+    for (const base of [join(profileDir, 'node_modules'), join(harnessRoot, 'node_modules'), join(harnessRoot)]) {
+      const candidate = join(base, ...packageName.split('/'), 'package.json');
+      if (existsSync(candidate)) {
+        manifest = candidate;
+        break;
+      }
+    }
+    if (manifest === undefined) {
+      resolvedRows.set(row.name, { kind: 'unresolved' });
+      continue;
     }
   }
-  if (manifest === undefined) {
-    resolvedRows.set(row.name, { kind: 'unresolved' });
-    continue;
-  }
   const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+  const label = pkg.name;
   const declaration = pkg.dsh?.client;
   if (declaration === undefined || declaration.platform !== 'web') {
     resolvedRows.set(row.name, { kind: 'host-only', manifest });
     continue;
   }
   const clientRel = clientExportOf(pkg.exports);
-  assert.ok(clientRel !== undefined, `${packageName} declares dsh.client but exports no "./client"`);
+  assert.ok(clientRel !== undefined, `${label} declares dsh.client but exports no "./client"`);
   const clientPath = join(dirname(manifest), clientRel);
-  assert.ok(existsSync(clientPath), `${packageName} declares dsh.client but its bundle is missing at ${clientPath}`);
+  assert.ok(existsSync(clientPath), `${label} declares dsh.client but its bundle is missing at ${clientPath}`);
   graphEntries.set(pkg.name, { manifest, clientPath, inject: declaration.inject ?? [], bundle: row.bundle });
   resolvedRows.set(row.name, { kind: 'client', manifest, clientPath });
 }
@@ -194,6 +218,82 @@ for (const row of rows) {
 // come from rows that are already in the graph.
 assert.ok(graphEntries.has('@deepseek-ai/dsh-client-ui-sidebar-right'), 'the web profile mounts the right sidebar tab host');
 assert.ok(graphEntries.has('@deepseek-ai/dsh-client-connection'), 'the web profile mounts the client connection over the api gateway');
+
+// ── every `dsh.client` package this repository ships must be REACHABLE ─────
+//
+// The trap this closes: a package can declare `dsh.client`, ship a perfect
+// bundle, and still never reach the page — because the scan walks the HOST
+// Loader's entries only, and a preset's rows live in an isolated subtree it
+// never visits.
+//
+// That is exactly how the Molbio and Papers tabs disappeared: the 57 tools were
+// moved into the molbio-lab preset (correctly — they must not load into every
+// session), which removed the package's only host-plane row. Every other check
+// stayed green: the artifact was fresh, it contained both registrations, and
+// the internal scan above found the panel package through its own bundle patch.
+//
+// So: for each of our packages that declares a browser half AND is selected by
+// this profile, there must be some host-plane row that RESOLVES TO IT. The row
+// may be as thin as `./host.mjs` — but it has to exist.
+//
+// A package the profile does NOT select (the panel-only package in a
+// tools-installed profile) is skipped: its absence is the owner's choice, not a
+// broken bundle.
+const shipped = [
+  { label: 'tools+panel', dir: packageRoot },
+  { label: 'panel only', dir: join(packageRoot, 'packages', 'molbio-panel') },
+];
+for (const { label, dir } of shipped) {
+  if (!existsSync(join(dir, 'package.json'))) continue;
+  const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+  if (manifest.dsh?.client?.platform !== 'web') continue;
+  const selected = bundles.some((name) => name === manifest.name || name.startsWith(`${manifest.name}@`));
+  if (!selected) {
+    console.log(`  ${label.padEnd(13)} ${manifest.name} skipped (not selected by profile ${profileName})`);
+    continue;
+  }
+
+  const reachable = [];
+  for (const row of rows) {
+    if (row.name.startsWith('cordis:')) continue;
+    let rowManifest;
+    if (row.name.startsWith('.') || row.name.startsWith('file:') || isAbsolute(row.name)) {
+      // Resolve against the patch layer that declared the row, exactly as the
+      // Loader rewrites the relative specifier.
+      const target = row.name.startsWith('file:')
+        ? fileURLToPath(row.name)
+        : resolve(row.root ?? packageRoot, row.name);
+      rowManifest = existsSync(target) ? nearestPackage(target) : undefined;
+    } else {
+      for (const base of [join(profileDir, 'node_modules'), join(harnessRoot, 'node_modules'), harnessRoot]) {
+        const candidate = join(base, ...row.name.split('/'), 'package.json');
+        if (existsSync(candidate)) {
+          rowManifest = candidate;
+          break;
+        }
+      }
+    }
+    if (rowManifest === undefined) continue;
+    try {
+      if (JSON.parse(readFileSync(rowManifest, 'utf8')).name === manifest.name) reachable.push(row.name);
+    } catch {
+      /* an unreadable manifest is reported by the scan above, not here */
+    }
+  }
+  assert.ok(
+    reachable.length > 0,
+    `${label}: "${manifest.name}" declares a browser half but NO host-plane row resolves to it — `
+    + 'the client-module scan walks the host Loader only, so its bundle can never reach the page '
+    + '(this is how the sidebar tabs vanished). Add an inert anchor row to the bundle patch '
+    + '(see cordis.patch.yml / host.mjs).',
+  );
+
+  const inGraph = graphEntries.has(manifest.name);
+  if (!manifest.name.startsWith('@deepseek-ai/')) {
+    assert.ok(inGraph, `${label}: "${manifest.name}" is reachable from a host row but its bundle is not in the graph`);
+  }
+  console.log(`  ${label.padEnd(13)} ${manifest.name} reachable via ${reachable.join(', ')}`);
+}
 
 // ── the packages this repository ships, through the very same scan ──────────
 

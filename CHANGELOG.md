@@ -10,6 +10,76 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.15.3] — 2026-09-23（DSH 0.1.7-rc.1：两个侧边栏 tab 静默消失 —— 补回宿主锚点）
+
+**症状**：右栏的 **Molbio** 与 **Papers** 两个 tab 在新版里没有了。工具本身正常（57 个，
+preset 挂载无 `broken`），所以这是一次**只掉客户端半**的回归。
+
+### 根因：客户端扫描只走宿主 Loader 树，而本包在宿主层已经没有任何行
+
+DSH 的 `dsh-client-modules` 负责把 `dsh.client` 包的浏览器半编进 `window.__DSH_BOOT__`，
+它的扫描条件是（`lib/index.js` 的 `processOne`）：
+
+```js
+for (const entry of this.ctx.loader.entries()) {
+  if (entry.options.name !== entryName || entry.fiber === void 0 || entry.disabled) continue;
+  const source = this.resolveSource(entry);   // 读这一行的包 manifest → dsh.client / exports["./client"]
+```
+
+即：**它只遍历宿主 Loader 的行**。preset 的行挂在隔离的一次性子树里，这个扫描**永远看不到**
+（官方文档原话："scans the host Loader's entries"）。
+
+而 0.13.0 那一轮，为了"57 个工具只在 molbio-lab 模式里加载"（这个目标是对的），
+`cordis.patch.yml` 变成了**空列表**、工具行搬进了 preset。于是本包**失去了唯一的宿主行**，
+客户端 bundle 再没有任何锚点可被发现——产物是好的、里面两个 tab 的注册也都在，
+**但没有任何东西会去加载它**。
+
+### 为什么全套件都是绿的
+
+因为**没有任何一条断言在问"这个包还能不能被扫到"**：
+
+- `test/client.mjs` 检查产物格式与数据通路（产物确实没问题）；
+- `test/panel-render.mjs` 直接把组件跑起来（组件确实没问题）；
+- `test/client-mount.mjs` 复刻的是**每一行**的扫描，而它把 `./host.mjs` 这类相对行
+  直接归为"非包"跳过——恰好跳过了唯一能锚定本包的那一行。
+
+### 修法
+
+新增 `host.mjs`：一个**惰性宿主锚点**（`export const name = 'molbio-client'`、
+`apply()` 空实现），并在 `cordis.patch.yml` 里插一行：
+
+```yaml
+- insert:
+    - id: molbio-client
+      name: './host.mjs'
+```
+
+**不能拿 `index.mjs` 当锚点**——那是工具插件，import 它就会把 57 个工具塞回每个会话，
+正是要避免的事。`packages/molbio-panel/index.mjs` 早就是这个模式（空宿主半边），
+所以面板专用包的 tab 从没消失过——这次的教训是**根包也需要一个**。
+
+### 验证（都是实跑，不是看代码）
+
+| 证据 | 结果 |
+| --- | --- |
+| `--dump-config` | 新行解析为 `file://…/dsh-molbio-tools/host.mjs` |
+| `window.__DSH_BOOT__`（起 scratch 服务取首页） | 修前**没有** `dsh-molbio-tools`；修后有条目 `{"id":"dsh-molbio-tools","url":"plugins/??dsh-molbio-tools/client.js&rev=…","inject":[sidebar-right, connection]}` |
+| 拉取该 URL | HTTP 200、349 KB，内含 `sidebarRightTabs` / `molbio-panel` / `molbio-papers` / `sidebar.right.pane.tab` |
+| `agentPresets/list` | 五个 preset 的 `broken` 全空（工具侧无回归） |
+
+### 新增守卫（已用突变实验证明会失败）
+
+`test/client-mount.mjs` 现在按"**该包是否被这个 profile 选中**"逐包断言：
+声明了 `dsh.client`、且被选中的包，**必须有某个宿主平面的行能解析到它**。
+
+- 它可以是很薄的一行（`./host.mjs`），也可以是真包名——但必须存在；
+- 把锚点行改回空列表，测试立刻 FAIL 并打印修法（含"这就是侧边栏 tab 消失的原因"）；
+- 未被该 profile 选中的包（面板专用包）跳过，因为"没装"是用户的选择，不是坏产物；
+- 同时让这个测试**会解析相对/file 行**（按 patch 层所在目录解析、向上找最近的 manifest），
+  与 harness 的行为一致——它之前不会，所以才会漏掉。
+
+工具仍 57；无版本目录；包版本 0.15.2 → **0.15.3**。
+
 ## [0.15.2] — 2026-09-23（`--changed`：按改动自动选任务；修 client bundle 的 CRLF 坑）
 
 **工具数、插件行为、benchmark 题目均未改动。** 这一版让"改哪里测哪里"成为默认，

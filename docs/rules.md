@@ -85,7 +85,7 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 ---
 
-## 4. 三条产物纪律
+## 4. 产物纪律（三条 + 一条发现规则）
 
 1. **产物必须与源一起提交**——`dsh plugin add` 装的是产物，用户机器上没有构建步骤。
 2. **发布白名单必须覆盖产物所在目录**（`lib/`、`packages/`）——`npm publish` 只带
@@ -93,14 +93,34 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
    `test/contract.mjs` 的打包检查专门盯着这一条。
 3. **产物不得进 preset 目录**——客户端模块靠 `rev` 哈希失效；0.13.0 起 preset 目录里
    本来也不再放任何东西了。
+4. **每个 `dsh.client` 包必须有一个宿主平面的行能解析到它。** DSH 的客户端模块扫描只走
+   **宿主 Loader 树**（`dsh-client-modules` 原话："scans the host Loader's entries"：它遍历
+   `ctx.loader.entries()`，要求 `entry.fiber !== undefined`，然后读那一行的包 manifest 取
+   `dsh.client` 与 `exports["./client"]`）。preset 的行挂在**隔离的子树**里，这个扫描永远看不到。
 
-附加一条边界：**`font-metrics.mjs` / `svgio.mjs` / `svgpng.mjs` 不进客户端产物**
-（`svgpng.mjs` import `node:zlib`，进 bundle 就会在浏览器里炸）。
-`contract.mjs` 与 `test/svgpng.mjs` 各有一条断言盯着这件事。
+   > **0.15.2 的教训（两个侧边栏 tab 静默消失）**：把 57 个工具移进 molbio-lab preset
+   > （这是对的——它们不该进每个会话）之后，本包**失去了唯一的宿主行**。产物是新的、里面
+   > 两个 tab 的注册也都在、`client-mount` 的旧断言也全绿——**因为没有任何一条在问"这个包
+   > 还能不能被扫到"**。结果：bundle 进不了 `window.__DSH_BOOT__`，右栏 Molbio/Papers
+   > 两个 tab 从此不存在。
+   >
+   > 修法：`cordis.patch.yml` 插一行**惰性锚点** `- id: molbio-client / name: './host.mjs'`
+   > （`host.mjs` 不注册工具、不发布服务，只提供可被扫描的行）。**不能用 `index.mjs` 当锚点**
+   > ——那是工具插件，import 它就会把 57 个工具塞回每个会话。
+   >
+   > `test/client-mount.mjs` 现在按"包是否被该 profile 选中"逐包断言这件事：被选中却没有任何
+   > 宿主行能解析到它 → FAIL 并指明修法。已用突变实验（把锚点行改回空列表）验证会失败。
+
+   相关的另一半：客户端 bundle 的**依赖**（`dsh.client.inject`）必须自身也是 graph 行，
+   否则产物里的 `require` 没有答案——同一条测试的 `missing` 断言守着。
 
 ---
 
 ## 5. 所有写入经 `ctx.fs`，并携带会话 `sandboxPolicy`
+
+附加一条边界：**`font-metrics.mjs` / `svgio.mjs` / `svgpng.mjs` 不进客户端产物**
+（`svgpng.mjs` import `node:zlib`，进 bundle 就会在浏览器里炸）。
+`contract.mjs` 与 `test/svgpng.mjs` 各有一条断言盯着这件事。
 
 与官方 `tool-fs` 模式一致；读取用 `readBytes` 带大小上限。
 

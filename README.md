@@ -85,19 +85,27 @@ dsh plugin --profile web update dsh-molbio-tools
 
 | 层 | 作用 |
 | --- | --- |
-| `cordis.patch.yml` | **什么都不插**（空列表）——留给将来真正属于宿主层的东西 |
+| `cordis.patch.yml` | 只插一行**惰性宿主锚点**（`./host.mjs`），不注册任何工具 |
 | `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，57 个工具在这一层里 |
 
 所以 57 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
-> 如果你确实想要"工具对所有会话全局可见"，那需要自己加一层宿主行——但那不是本包的设计，
-> 且会让专属模式里的同一行变成死行（0.1.7-alpha.1 上表现为选择器显示"加载失败"）。
+> **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
+> "scans the host Loader's entries"），而 preset 的行在隔离的子树里、扫描永远看不到。所以一个
+> 只在 preset 里被引用的 `dsh.client` 包会**失去唯一可被发现的宿主行**，它的浏览器半永远进不了
+> `window.__DSH_BOOT__`，右栏那两个 tab 会**静默消失**。`host.mjs` 就是为此存在的惰性锚点
+> （它不注册工具、不发布服务），这样既没有工具全局泄漏，面板又能被发现。
+> `test/client-mount.mjs` 现在会检查"每个声明了浏览器半、且被 profile 选中的包，必须有一个
+> 宿主行能解析到它"，缺了就 FAIL。
+
+> 如果你确实想要"工具对所有会话全局可见"，那需要把工具行加到宿主层——但那不是本包的设计，
+> 且会让专属模式里的同一行变成死行（0.1.7 上表现为选择器显示"加载失败"）。
 
 ### 只要浏览器面板（可选）
 
-如果只想要图形面板、不想把 57 个工具带进每个会话，装面板专用包即可（见
-[浏览器面板](#浏览器面板)）：
+如果只想要图形面板、不想让该 profile 装 57 个工具（连模式都不装），装面板专用包即可
+（见[浏览器面板](#浏览器面板)）：
 
 ```powershell
 dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-panel

@@ -1,36 +1,34 @@
-# dsh-molbio-tools bundle layer: the molecular-biology toolset.
+# dsh-molbio-tools bundle layer: the CLIENT-BUNDLE ANCHOR.
 #
-# ── WHY THIS LAYER NO LONGER INSERTS THE TOOL ITSELF ────────────────────────
+# ── WHAT THIS LAYER INSERTS, AND WHY IT IS NOT THE TOOL ────────────────────
 #
-# This file used to insert a host-plane row:
+#     - id: molbio-client
+#       name: './host.mjs'      # inert host half; see host.mjs
 #
-#     - insert:
-#         - id: tool-molbio
-#           name: dsh-molbio-tools
+# The 57 tools are NOT here. They load only inside the molbio-lab preset, which
+# is the point of that mode (see preset/molbio-lab/agent.cordis.yml, whose row is
+# generated into preset.patch.yml — the bundle's SECOND patch layer).
 #
-# That registered all 57 tools into the profile's GLOBAL layer, so every session
-# — whichever preset it used — carried them. The molbio-lab preset then declared
-# the very same `tool-molbio` row inside its own `config.plugins`, and on DSH
-# 0.1.7-alpha.1 that combination left the preset's copy an entry that never
-# started:
+# This row exists because DSH's client-module scan walks the HOST Loader tree
+# only. It reads each live host row's package manifest, takes `dsh.client` and
+# `exports["./client"]` from it, and composes the browser graph that becomes
+# `window.__DSH_BOOT__`. A preset's rows live in an isolated subtree that scan
+# never visits.
 #
-#     broken: "tool-molbio (./plugins/dsh-molbio-tools-v20/index.mjs): never started"
+# So when the tools moved into the preset, this package lost its only host-plane
+# row, its bundle stopped reaching the page, and the two right-sidebar tabs
+# (Molbio / Papers) silently disappeared: the panel code was still in the
+# artifact, nothing ever loaded it. `host.mjs` restores exactly one inert row so
+# the browser half is discoverable again — without putting any tool into a
+# session that did not choose the molbio-lab mode.
 #
-# The preset mounted, but its tool row was dead — the mode appeared in the picker
-# and loaded no molbio tool at all. Repeating a module in two layers of one
-# composition is the mistake; the tool belongs to exactly ONE of them.
+# An earlier version of this file inserted a host row for the tool itself
+# (`name: dsh-molbio-tools`), which both registered all 57 tools globally and
+# collided with the preset's own copy of that row:
 #
-# It belongs to the PRESET: the whole point of the molbio-lab mode is that the 57
-# tools load for sessions that choose it and nowhere else. That row lives in
-# `preset/molbio-lab/agent.cordis.yml` (generated into `preset.patch.yml`), which
-# `package.json` declares as the SECOND entry of `dsh.bundle.patch`.
+#     broken: "tool-molbio (...): never started"
 #
-# ── WHAT THIS LAYER IS FOR NOW ─────────────────────────────────────────────
-#
-# It inserts nothing today. It is kept as the bundle's first patch layer because
-# it is the natural home for any future HOST-plane row the package needs (a
-# service, a command, a host-scoped tool) — and because removing a declared
-# patch file would break `dsh.bundle.patch` ordering for existing installs.
-#
-# A patch layer is a top-level YAML list; an empty one is the empty list.
-[]
+# Keep the tool in the PRESET and only the anchor here.
+- insert:
+    - id: molbio-client
+      name: './host.mjs'
