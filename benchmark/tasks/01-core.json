@@ -51,16 +51,30 @@
       "category": "restriction",
       "tier": "core",
       "covers": ["molbio_methylation_check"],
-      "instruction": "My digest of pUC118.dna (working directory) with BamHI is barely working — almost no cut, even though the site is definitely in the sequence. Someone suggested Dam methylation. Work out what is going on: check the plasmid's Dam and Dcm sites, and tell me what the methylation analysis says about BamHI and which enzymes the tool considers usable on this plasmid.",
+      "instruction": "Before I blame my digest, I want to know whether Dam or Dcm methylation could be interfering. Check pUC118.dna (working directory) for Dam and Dcm sites, and tell me what the methylation analysis says about BamHI specifically, and which enzymes it considers safe to use on this plasmid.",
       "timeout_ms": 300000,
       "expect_tools": ["molbio_methylation_check"],
       "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
       "assertions": [
-        { "where": "tool", "pattern": "impaired:[^\\n]*BamHI", "note": "the tool flags BamHI" },
+        {
+          "where": "tool",
+          "pattern": "BamHI: cut\\(s\\)",
+          "note": "0.16.0: the tool no longer flags BamHI. This assertion is INVERTED from the pre-0.16.0 version (which required `impaired:[^\\n]*BamHI`) because that flag was itself the plugin defect: BamHI's GGATCC contains GATC, but BamHI tolerates Dam methylation (REBASE MS#909 records cleavage on Dam-methylated DNA; NEB lists it as not sensitive). The task used to be written around the false positive — see benchmark/README.md Findings for the original entry and the resolution."
+        },
+        {
+          "where": "tool",
+          "pattern": "dam \\d+, dcm \\d+ site\\(s\\)",
+          "note": "the analysis actually counted the marks in the plasmid"
+        },
         {
           "where": "answer",
-          "pattern": "impaired|blocked|Dam|dam",
-          "note": "the methylation verdict must be reported. NOTE what is deliberately NOT asserted: there is no assertion that the model AGREES with the tool. Measured behaviour is that it runs molbio_methylation_check, then cross-checks NEB over the web, finds the plugin's quick-reference table disagrees (the table marks BamHI impaired by dam; NEB lists BamHI as dam-insensitive), and reports the disagreement. That is the right thing to do with a hand-transcribed table, so this task grades whether the model CONSULTED the analysis; the table discrepancy is logged in benchmark/README.md as a plugin-data question instead of being scored as a model failure."
+          "pattern": "BamHI",
+          "note": "the model has to address the enzyme it was asked about"
+        },
+        {
+          "where": "answer",
+          "pattern": "not .{0,20}(sensitive|affected|blocked|impaired)|unaffected|tolerat|does not (block|inhibit)|cuts? (fine|normally)|no (dam|methylation) (effect|impact)|not (dam|dam-)",
+          "note": "the verdict on BamHI. Widened on purpose: the point is that the model reports BamHI as NOT methylation-blocked, however it phrases it. Before 0.16.0 the tool said the opposite and a model that cross-checked the supplier was penalised for being right; now the tool and the supplier agree, so the model's verdict is assertable."
         }
       ]
     },
@@ -158,12 +172,22 @@
         },
         {
           "where": "tool",
-          "pattern": "#1 amplicon 105-222 \\(118 bp\\)",
-          "note": "the tool's TOP-RANKED amplicon. NOTE what is not asserted: the direction the model reads the pair in. The tool prints `F` at 201-222 and `R` at 105-124 — F is DOWNSTREAM of R — and a model may legitimately report the opposite role assignment (or the reverse complement of a primer). The tool's own orientation inconsistency is a recorded plugin bug (benchmark/README.md Findings), not something this task should grade the model on."
+          "pattern": "#1 amplicon 105-223 \\(119 bp\\)",
+          "note": "the tool's TOP-RANKED amplicon, as of the 0.16.0 orientation fix. Before it, the same call printed `#1 amplicon 105-222 (118 bp)` with `F` at 201-222 (DOWNSTREAM of `R` at 105-124) — a pair that did not amplify as printed. The span moved by one base because the two primers now occupy two distinct, non-overlapping sites instead of the same doubly-counted window."
         },
-        { "where": "answer", "pattern": "ATTACTCCTGCTCTTCCCATAC|GTATGGGAAGAGCAGGAGTAAT", "note": "one of the two molecules that make up the top-ranked pair, in either reading" },
-        { "where": "answer", "pattern": "CACTACTCCTCTGTACGCAC|GTGCGTACAGAGGAGTAGTG", "note": "the other one" },
-        { "where": "answer", "pattern": "118|119", "note": "an amplicon size inside the requested window" }
+        {
+          "where": "tool",
+          "pattern": "F GTGCGTACAGAGGAGTAGTG \\(105-124",
+          "note": "0.16.0: the forward primer is now pinned UPSTREAM, which is the whole point of the fix. This assertion was deliberately absent before the fix (see benchmark/README.md Findings) because grading the role assignment would have punished a model for noticing the plugin's own bug. It is assertable now because the pair amplifies as printed."
+        },
+        {
+          "where": "tool",
+          "pattern": "R CGTATGGGAAGAGCAGGAG \\(205-223",
+          "note": "and the reverse primer is pinned DOWNSTREAM of it, as the molecule to order 5'->3'"
+        },
+        { "where": "answer", "pattern": "GTGCGTACAGAGGAGTAGTG|CACTACTCCTCTGTACGCAC", "note": "the forward molecule, in either reading" },
+        { "where": "answer", "pattern": "CGTATGGGAAGAGCAGGAG|CTCCTGCTCTTCCCATACG", "note": "the reverse molecule, in either reading" },
+        { "where": "answer", "pattern": "119|118", "note": "an amplicon size inside the requested window" }
       ]
     },
     {

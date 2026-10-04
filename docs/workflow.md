@@ -444,7 +444,7 @@ git status --short           # lib/client.js 与 packages/molbio-panel/lib/clien
 ### DSH 升级后：preset 组合的维护（必做）
 
 `preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的**行清单**副本 + 末尾一行
-`tool-molbio`（当前基线：**dsh 0.1.7-alpha.2**）。它不会自动跟随 DSH 升级，因此每次升级
+`tool-molbio`（当前基线：**dsh 0.1.7-rc.1**）。它不会自动跟随 DSH 升级，因此每次升级
 DSH 后：
 
 1. 取新版的 shipped `standard`：

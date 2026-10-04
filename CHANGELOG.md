@@ -10,6 +10,122 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.16.0] — 2026-09-24（两个 benchmark 查出的缺陷：引物朝向 + 甲基化参考表）
+
+**工具数不变（57），参数与输出 schema 不变。** 这一版修的是**两个"每个数字都对、但结论是错的"缺陷**，
+两个都是 benchmark（不是单元测试）发现的，两个在修完之前都是"记录在案、刻意不断言"的状态。
+清单见 [benchmark/README.md](benchmark/README.md) 的 Findings。
+
+### 1. `molbio_design_primers` 把正向/反向引物**标反了**（roadmap 2.0）
+
+**症状**：返回的引物对**按原样送进 `molbio_pcr_simulate` 得到 0 个产物**。600 bp 模板实测：
+工具打印 `F 555-572` 与 `R 419-437`——`F` 在**下游**、`R` 在**上游**，两条引物朝外延伸。
+
+**根因不在数值，而在两个数值之间的关系**：引擎在两条链上各扫一遍候选——
+`scanCandidates(template, …)` 扫顶链（分子向右延伸，3' 端在坐标**高**的一端），
+`scanCandidates(rc, …)` 扫反向互补（分子向左延伸，3' 端在坐标**低**的一端，映射字段叫 `anchor`）。
+**符号与坐标被交叉写在了一起**：
+
+```js
+// 修复前：把顶链命中（f，右向）当 reverse 却用它的 start，
+//         把 RC 命中（r，左向）当 forward 却用它的 anchor
+forward: { sequence: f.sequence, start: f.anchor + 1, … }
+reverse: { sequence: r.sequence, start: r.start  + 1, … }
+const ampliconStart = r.anchor;      // 扩增子两端也一起反了
+const ampliconEnd   = fwdEnd;
+```
+
+**修法**：让角色与坐标同源——顶链命中（`f`）是 forward、用 `f.start`；RC 命中（`r`）是 reverse、
+用 `r.anchor`；扩增子为 `f.start .. r.anchor + r.length - 1`。配套把配对窗口从"3' 端对齐"
+改成**物理约束**（`fwdEnd < r.anchor`，两条引物不得重叠）——旧窗口只对"两条引物占同一个窗口"
+这种退化几何成立。目标位点偏好（`target_distance`）也随之归属到正确的引物上。
+
+**为什么只有 benchmark 能发现**：工具自己的每个字段都对（两条分子的序列、Tm、GC、结构分数全对），
+错的是"哪条叫 F"。`test/smoke.mjs` 甚至把这个错误约定**写进了断言**
+（`assert.equal(pair.amplicon.start, pair.reverse.start)`），所以套件全绿。
+
+**新增串联回归**（`test/smoke.mjs`）：对四组模板的**每一对**返回引物断言——
+把 `forward`/`reverse` **原样**喂给 `molbio_pcr_simulate` 必须得到**恰好 1 个产物**，
+产物大小等于报告的 amplicon、起止坐标等于报告的两条引物。这类"两个工具之间关系"的缺陷，
+只有把两个工具**串起来**才看得见。
+
+**顺带重建的四处既有夹具**（同一个退化几何的账单，不是放宽标准）：
+- TaqMan 的引物对坐标随之平移（探针几何本身是对的，`probeCandidates` 自己判断谁在上游）；
+- v12 的"错配救援"端到端夹具**不再可构造**：它原来靠 24 bp 模板 + `amplicon_max: 24`
+  让两条 18 bp 引物占同一窗口（合法最小扩增子其实是 18+18+1 = 37 bp）。对约 5000 个随机模板
+  （run/GC/Tm 三类失败、两种侧翼方案）做过搜索，**在引物不重叠的几何下找不到
+  "精确引物不存在、但错配引物存在"的模板**，所以该端到端断言改为**直接单元测试
+  `mismatchVariants` 的 3' 关键区闸门**（保护区 0 个区内位置、放开后 22 个），
+  并把"报告出来的错配"不变式保留在返回的引物对上；
+- 引物二聚体夹具同理重建（`F-site + 1 bp + rc(R-site)`）：现在**恰好一个**候选对，
+  严格阈值下被拒、放宽后进入；
+- 甲基化夹具里 BamHI 的状态（见下）。
+
+### 2. `METHYLATION_SENSITIVITY` 参考表与来源不符（roadmap 2.1）
+
+**症状**（benchmark 发现）：`molbio_methylation_check` 把 **BamHI 判为 dam 敏感（impaired）**，
+理由是 `GGATCC` 内含 `GATC`。模型跑完工具后去查 NEB，发现**相反**的结论并如实报告——
+于是"模型是对的、表是错的"，任务只能刻意不断言谁对。
+
+**机制**：旧表的构造规则是"**识别位点里含 GATC/CCWGG ⇒ 该酶敏感**"。这条规则只在**位点本身
+包含甲基化位点**时有定义，而它恰好在两类酶上出错：
+
+| 类别 | 例子 | 为什么错 |
+| --- | --- | --- |
+| 位点含 GATC/CCWGG，但酶**耐受**甲基化 | **BamHI**、BglII\*、BstYI\* | 位点包含只说明"甲基化碱基**能**被呈递"，不说明酶被抑制 |
+| 位点**不可能**包含该位点，靠侧翼才形成 | **EcoRV**（`GATATC` 无论侧翼如何都凑不出 `GATC`/`CCWGG`）、ClaI、XbaI、NruI、TaqI、BspEI | 需要**序列上的重叠检查**，不是表项 |
+
+最终 **15/29 条**与来源不一致。修法**不是**再手抄一遍，而是：
+- 每一项对着 **REBASE 的逐酶甲基化记录**核对（`build/rebase-audit.mjs` 可重新推导，
+  `build/rebase-audit.json` 留档）。REBASE 按颜色编码每条记录：绿=切、橙=(N% cleaved)=受损、
+  红=不切；修饰码（`m6`=Dam、`m4`=Dcm）是位点行上一行的 token；
+- **BamHI 直接删除**：REBASE 对 Dam 甲基化 DNA 的记录是**切割**（MS#909，原文
+  "tested on Dam methylated phage and plasmid DNAs"），NEB 目录写 "Not sensitive to dam, dcm or
+  mammalian CpG methylation"，且已有**需要 m6A 才能切**的 BamHI 突变体（J Mol Biol 285:1525, 1999）；
+- 另删 MluI/PvuII/XhoI（dam）与 BstNI/KpnI/NaeI/SacI/HincII（dcm）；EcoRV 整条删除
+  （dam 与 dcm 都不可能重叠）；**BspHI 从 blocked 降为 sensitive**（NEB 原话
+  "Impaired by overlapping dam methylation"，REBASE 同时有 cut 与 not cut 记录）；
+- **刻意不改的**（避免反向过修）：BglII/BstYI（位点确含 GATC，REBASE 在半甲基化**与**全甲基化
+  底物上都记录到受损：MS#2329/#1168、MS#2380/#2381/#835）、SmaI（六条 Dcm 记录在 impaired 与
+  not cut 之间交替——真实的上下文依赖）、ScaI（m4 下有 not cut 记录）、
+  AvaII/SexAI/StuI/ApaI（各自有 m4 not-cut 或 NEB "blocked by overlapping dcm methylation"；SexAI
+  的 `ACCWGGT` 本身就含 `CCWGG`）。判据是**证据 vs 推断**：SmaI/ScaI 的位点同样装不下 `CCWGG`，
+  但它们各自**有** Dcm 记录，所以留下；HincII 一条都没有，所以删掉。
+
+**语义澄清**：这张表是"**值得检查的酶**"清单，不是"位点"清单——`methylationSites`/`methylationImpact`
+在序列里找**真实的** GATC/CCWGG，只有与**该酶自己的识别位点重叠**时才报告它。所以"位点含 GATC"
+的酶（BclI/BstYI/BglII）只有在序列里**确实存在** GATC 时才被报告，这正是想要的。
+
+**表项被删 ≠ 酶从报告里消失**：默认酶集合是"甲基化表 ∩ 酶切表"，KpnI 因此退出了默认选择
+（它本来就没有 dam/dcm 标记可报），但 `enzymes: ["common"]` 仍覆盖整张酶切表——
+`test/smoke.mjs` 现在同时盯着这两件事，防止"删表项"变成"静默丢能力"。
+
+### 3. 被这次修复作废的两条 benchmark 录音（诚实清单）
+
+`test/fixtures/benchmark-traces.json` 是**真实模型响应**的冻结副本，用来证明判分器仍能判错、
+没有退化成"给措辞打分"。其中 **`methylation-block` 与 `qpcr-primers` 两条录的是修复前的答案**
+（模型当时**正确地**报告了工具的旧结论），因此**无法**满足修复后的任务断言。判分器的回归材料
+只能用**真实模型运行**刷新（`node benchmark/run.mjs --model --task <id>` 后 `_freeze-trace.mjs`），
+而**本机当前没有可用凭证**，所以：
+
+- 两条录音就地标为 `answer_excluded_from_scoring: true` + `answer_excluded_reason`（含重录命令），
+  **没有删除、也没有手改答案**——手改出来的"模型说过这句话"是伪造的证据；
+- `test/benchmark-score.mjs` **每次运行都打印**这两条挂起项（挂起是负债，不是免检），要求 `reason`
+  足够具体（> 40 字符），并断言**至少 8 条录音**仍在被验证；
+- 两个任务的 `where: "tool"` 断言已按**修复后的真实输出**重写，所以 `--offline`（零成本、不调模型）
+  仍然全绿——它证明的是"期望值仍然为真"，与录音能否重放无关。
+
+**重录之后请删掉这两个标记**（`--model --task <id>` → `_freeze-trace.mjs`）。
+
+### 4. 顺带：`benchmark/README.md` 的两条 Findings 结案
+
+`molbio_design_primers` 朝向与 `molbio_methylation_check` 的 BamHI 两条从"记录、未修"改为
+"已修（0.16.0）"，各自附上验证方式与"为什么单元测试看不见"。两个 benchmark 任务的答案断言
+也随之可以**断言引物角色**（`qpcr-primers`）与**BamHI 未被标记**（`methylation-block`）——
+在修复之前，这两条断言都会惩罚一个发现了真 bug 的模型。
+
+工具仍 57；无版本目录；包版本 0.15.3 → **0.16.0**。
+
 ## [0.15.3] — 2026-09-23（DSH 0.1.7-rc.1：两个侧边栏 tab 静默消失 —— 补回宿主锚点）
 
 **症状**：右栏的 **Molbio** 与 **Papers** 两个 tab 在新版里没有了。工具本身正常（57 个，

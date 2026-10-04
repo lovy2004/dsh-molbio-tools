@@ -1053,16 +1053,20 @@ export function analyzeQpcr({ targetTreated, targetControl, referenceTreated, re
 
 // ── methylation sensitivity and double-digest buffer compatibility (v17) ────
 //
-// Both tables are small published reference data sets, transcribed by hand from
-// the standard supplier tables (New England Biolabs and the REBASE-derived
-// summaries every molecular-biology bench book reprints). They are a QUICK
-// REFERENCE, not an authority: suppliers add/retire buffers and re-measure
-// methylation sensitivity, so every derived result carries the note
+// Both tables are small published reference data sets, transcribed from the
+// standard supplier tables (New England Biolabs and the REBASE-derived summaries
+// every molecular-biology bench book reprints). They are a QUICK REFERENCE, not
+// an authority: suppliers add/retire buffers and re-measure methylation
+// sensitivity, so every derived result carries the note
 // `METHYLATION_DATA_NOTE` / `BUFFER_DATA_NOTE` and callers must present these
 // values as "check against the supplier's current table".
+//
+// The methylation table was re-derived from REBASE per-enzyme records in 0.16.0
+// after a benchmark finding (see the block comment on `METHYLATION_SENSITIVITY`
+// and `build/rebase-audit.mjs`); the buffer table is still hand-transcribed.
 
 /** Note attached to every methylation-derived result. */
-export const METHYLATION_DATA_NOTE = 'Methylation sensitivity is a hand-transcribed quick reference (NEB/REBASE-style tables): dam/dcm/CpG blocking depends on the enzyme lot and the methylation state of the DNA — verify against the supplier\'s current table before choosing an enzyme.';
+export const METHYLATION_DATA_NOTE = 'Methylation sensitivity is a curated quick reference checked against REBASE per-enzyme records and the NEB catalogue (build/rebase-audit.mjs re-dumps the evidence): dam/dcm blocking depends on the enzyme lot and the methylation state of the DNA — verify against the supplier\'s current table before choosing an enzyme.';
 
 /** Note attached to every buffer-derived result. */
 export const BUFFER_DATA_NOTE = 'Buffer compatibility is a hand-transcribed quick reference for the NEB buffer series; suppliers change buffer formulations, so confirm against the current supplier table (or run a pilot digest) before committing to a double digest.';
@@ -1088,8 +1092,81 @@ export const METHYLATION_SITES = {
  * Enzyme → methylation marks it is sensitive to.
  * `blocked`: does not cut that methylated site. `sensitive`: cutting impaired
  * (overlapping-site / partial-digest cases are the usual reason).
+ *
+ * ── How an entry here is actually used (0.16.0) ─────────────────────────────
+ * This table is a list of ENZYMES WORTH CHECKING, not a list of sites. The
+ * `methylationSites` / `methylationImpact` pair scans the sequence for the real
+ * Dam (GATC) and Dcm (CCWGG) sites and reports an enzyme only when one of those
+ * sites **overlaps that enzyme's own recognition site**. So an enzyme whose site
+ * merely *contains* the letters GATC is only reported when a genuine GATC is
+ * present — and for the enzymes below whose site does contain GATC (BclI,
+ * BstYI, BglII) that is precisely the intended behaviour.
+ *
+ * ── The 0.16.0 correction ───────────────────────────────────────────────────
+ * The previous table over-reported Dam/Dcm sensitivity, and the pattern is now
+ * diagnosable: an entry was written whenever the enzyme's RECOGNITION SITE
+ * *contained* the methylase site, without checking whether the enzyme tolerates
+ * the methylated base. 15 of 29 entries disagreed with the sources. The
+ * distinction only matters for the enzymes that fail it, because for the others
+ * the overlap check above already gates the report:
+ *
+ *   - **BamHI is the benchmark's own finding** (`benchmark/README.md`): GGATCC
+ *     does contain GATC, but REBASE's record for BamHI on Dam-methylated phage
+ *     and plasmid DNA is a *cleavage* (MS#909, tested on "Dam methylated phage
+ *     and plasmid DNAs"), and the NEB catalogue lists BamHI as "Not sensitive to
+ *     dam, dcm or mammalian CpG methylation". A BamHI mutant that *requires*
+ *     N6-methyladenine for cleavage has even been isolated
+ *     (J Mol Biol 285:1525, 1999). Site containment is not inhibition — it only
+ *     means a methylated base *can* be presented to the enzyme.
+ *   - **EcoRV cannot overlap a Dam site at all.** GATATC contains no GATC and no
+ *     CCWGG, and no flanking base can create one (checked exhaustively in
+ *     build/rebase-audit.mjs), so `blocked: ['dam'], sensitive: ['dcm']` was
+ *     unreachable-but-wrong: it could only fire through a GATC that happens to
+ *     sit next to a GATATC, where the mark is not in the enzyme's site.
+ *   - The same "site contains it, therefore sensitive" mistake produced the
+ *     removed MluI/PvuII/XhoI (dam) and KpnI/NaeI/BstNI/SacI (dcm) entries.
+ *     KpnI is the instructive one: the Dcm sensitivity belongs to its
+ *     isoschizomer Acc65I/Asp718, not to KpnI.
+ *   - **HincII** was removed on the same reasoning as EcoRV: `GTYRAC` cannot
+ *     contain `CCWGG`, `build/rebase-audit.mjs` finds no `m4` record for it at
+ *     all, and the only HincII records REBASE carries are `m6` — so the
+ *     `dcm: sensitive` claim was unsupported rather than merely overstated.
+ *     (SmaI and ScaI are the contrast case and were KEPT despite also being
+ *     unable to contain `CCWGG` in their own site: each has explicit REBASE
+ *     records for the Dcm modification — six alternating impaired/not-cut for
+ *     SmaI, a not-cut for ScaI — i.e. evidence, not inference. PspGI and SexAI
+ *     are likewise kept on NEB's explicit "blocked by dcm methylation" chart,
+ *     and SexAI's `ACCWGGT` in fact contains `CCWGG` outright.)
+ *   - **BspHI** was over-stated rather than wrong: REBASE carries both a
+ *     "not cut" and a "cut" record for it (MS#770 vs #935), and NEB describes it
+ *     as "impaired", so it moved from `blocked` to `sensitive`.
+ *
+ * Entries deliberately NOT changed, to avoid over-correcting in the other
+ * direction: **BglII and BstYI** (whose sites do contain GATC, and which REBASE
+ * records as impaired on hemimethylated *and* fully Dam-methylated substrates —
+ * MS#2329/#1168 and #2380/#2381/#835), **SmaI** (six Dcm records alternating
+ * impaired/not-cut — genuine context dependence), **ScaI** (a not-cut record
+ * under m4), and **AvaII/SexAI/StuI/ApaI** (each backed by its own m4 not-cut or
+ * NEB "blocked by overlapping dcm methylation" record).
+ *
+ * KNOWN AUDIT OUTPUT, not a defect: `build/rebase-audit.mjs` reports **PspGI**
+ * and **SexAI** as having no `m4` record of their own, because REBASE's page for
+ * each happens to carry none. Both are nonetheless corrected Dcm entries and
+ * both are structurally sound — PspGI's site *is* `CCWGG`, and SexAI's
+ * `ACCWGGT` contains `CCWGG` — and NEB's chart lists both as "blocked by dcm
+ * methylation". Treat those two as an expected line in the audit, not as a
+ * claim to remove.
+ *
+ * `build/rebase-audit.mjs` dumps REBASE's per-enzyme records (and writes
+ * `build/rebase-audit.json`) so this table can be re-checked without
+ * re-transcribing it; it does NOT settle verdicts, because those pages carry
+ * many disagreeing records per enzyme. Run it after any edit here.
  */
 export const METHYLATION_SENSITIVITY = {
+  // Dam: the recognition site is Dam-blocked only via an overlapping GATC —
+  // for these enzymes that overlap is created by the flanking bases, not by the
+  // site itself (ATCGAT+C, TCTAGA+TC, TCGCGA+A, TCGA+N, TCCGGA+TC), which is
+  // exactly why the sequence overlap check has to exist.
   ClaI: { blocked: ['dam'] },
   XbaI: { blocked: ['dam'] },
   MboI: { blocked: ['dam'] },
@@ -1098,27 +1175,23 @@ export const METHYLATION_SENSITIVITY = {
   NruI: { blocked: ['dam'] },
   TaqI: { blocked: ['dam'] },
   BspEI: { blocked: ['dam'] },
-  BspHI: { blocked: ['dam'] },
+  // Dam-impaired (the sites themselves contain GATC / RGATCY, and REBASE records
+  // impaired cutting rather than a clean block).
   BstYI: { sensitive: ['dam'] },
   BglII: { sensitive: ['dam'] },
-  MluI: { sensitive: ['dam'] },
-  PvuII: { sensitive: ['dam'] },
-  XhoI: { sensitive: ['dam'] },
-  EcoRV: { blocked: ['dam'], sensitive: ['dcm'] },
-  BamHI: { sensitive: ['dam'] },
+  BspHI: { sensitive: ['dam'] },
+  // Dcm: blocked through an overlapping CCWGG.
   AvaII: { blocked: ['dcm'] },
   EcoRII: { blocked: ['dcm'] },
   StuI: { blocked: ['dcm'] },
   ApaI: { blocked: ['dcm'] },
-  BstNI: { blocked: ['dcm'] },
-  KpnI: { blocked: ['dcm'] },
-  NaeI: { blocked: ['dcm'] },
   PspGI: { blocked: ['dcm'] },
   SexAI: { blocked: ['dcm'] },
+  // Dcm-impaired (each has an explicit not-cut/impaired REBASE record AND a site
+  // that a CCWGG can overlap in context: SmaI's six m4 records alternate
+  // impaired/not-cut, ScaI has a not-cut record under m4).
   SmaI: { sensitive: ['dcm'] },
-  HincII: { sensitive: ['dcm'] },
   ScaI: { sensitive: ['dcm'] },
-  SacI: { sensitive: ['dcm'] },
 };
 
 /**

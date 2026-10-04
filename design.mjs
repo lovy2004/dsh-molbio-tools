@@ -4,6 +4,49 @@
  * Automatic PCR primer pair design. Pure computation: scans the template for
  * forward primers, scans the reverse complement for reverse primers, then
  * pairs them within the amplicon window and ranks by Tm balance.
+ *
+ * ── `designPrimerPairs`' returned-pair orientation convention (fixed 0.16.0) ─
+ * A pair returned by `designPrimerPairs` (tool: `molbio_design_primers`) is a
+ * pair that AMPLIFIES AS PRINTED, and every reported number is expressed in the
+ * orientation the two molecules are actually used in (5'->3', as ordered):
+ *
+ *   forward.sequence === template[forward.start-1 .. forward.end-1]   (top strand)
+ *   reverse.sequence === rc(template[reverse.start-1 .. reverse.end-1])
+ *   forward.start < reverse.start                  (F is UPSTREAM of R)
+ *   amplicon.start === forward.start, amplicon.end === reverse.end
+ *
+ * The two scans produce candidates in mirrored roles, and getting them the wrong
+ * way round is the silent defect this file shipped until 0.16.0: the pair
+ * labelled F/R was reported the other way up, so `molbio_pcr_simulate` — a tool
+ * whose input is exactly this pair — returned **0 products** for a pair the
+ * designer had just called its best. Both molecules were right and every
+ * standalone number was right; only the relationship between them was wrong, so
+ * no per-value assertion could see it. `test/smoke.mjs` now pins the invariant
+ * that closes that hole: every designed pair, fed to the simulator EXACTLY as
+ * returned, must yield exactly one product spanning the reported amplicon.
+ *
+ *   - `scanCandidates(template, …)` (`fwd`) walks the top strand left to right,
+ *     so a hit is a molecule on the TOP strand extending right: `seq === slice`,
+ *     and its 3' end is the HIGHEST coordinate it covers. It is the FORWARD
+ *     primer, which opens the amplicon on the left at its own `start`.
+ *   - `scanCandidates(rc, …)` (`revOnRc` → `rev`) walks the same duplex from the
+ *     other side, so a hit is a molecule on the BOTTOM strand extending left:
+ *     `seq === rc(slice)`. Its 3' end is the LOWEST coordinate it covers, which
+ *     is what the mapping calls `anchor` — that is why the coordinate is read
+ *     from `anchor` and not from the RC-scan `start`. It is the REVERSE primer,
+ *     and the amplicon ends at `anchor + length - 1`.
+ *
+ * NOTE — `designIntronSpanningPrimers` (tool: `molbio_design_intron_primers`)
+ * deliberately does NOT follow this convention and is unchanged in 0.16.0: it
+ * reports both primers as sense substrings of the spliced transcript, which is
+ * what makes its `exon`/`junction_left`/`junction_right` geometry, its
+ * spliced-vs-genomic mismatch report and its 3'-tail mispriming check read
+ * uniformly on one sequence. Both ends are therefore reported 5'->3' on the
+ * sense strand, `forward` is downstream of `reverse`, and the molecule to order
+ * as the reverse primer is the reverse complement of the reported `reverse`.
+ * That is a real usability wart, not a silent one (nothing feeds this pair to
+ * `molbio_pcr_simulate`), so it is recorded on the roadmap rather than changed
+ * in the same release that moves `designPrimerPairs`.
  */
 
 import {
@@ -475,8 +518,12 @@ export function designPrimerPairs(template, opts) {
   const tmCenter = (opts.tmMin + opts.tmMax) / 2;
   for (const f of fwd) {
     const fwdEnd = f.start + f.length - 1; // 0-based 3' end on template
-    const aMin = fwdEnd - opts.ampliconMax + 1;
-    const aMax = fwdEnd - opts.ampliconMin + 1;
+    // Physical pairing window: the amplicon runs f.start .. r.anchor+len-1, so
+    // the two primers must not overlap (fwdEnd < r.anchor) and the span must fit
+    // the amplicon bounds. `anchor` is ascending, so this is a contiguous range
+    // and the binary search below lands on its lower edge.
+    const aMin = Math.max(fwdEnd + 1, f.start + opts.ampliconMin - 1);
+    const aMax = f.start + opts.ampliconMax - 1;
     let lo = 0;
     let hi = anchors.length;
     while (lo < hi) {
@@ -491,8 +538,12 @@ export function designPrimerPairs(template, opts) {
       if (Math.abs(f.tm - r.tm) > opts.maxTmDelta) continue;
       const dimer = dimerThermo(f.sequence, r.sequence, opts.ctMolar ?? DEFAULT_CT_MOLAR);
       if (dimer.any_tm > opts.maxDimerTm || dimer.end_tm > opts.maxDimerEndTm) continue;
-      const ampliconStart = r.anchor;
-      const ampliconEnd = fwdEnd;
+      // The amplicon spans from the forward primer's 5' end (0-based `f.start`)
+      // to the reverse primer's 5' end (`r.anchor + r.length - 1`). It is the
+      // same physical span the pairing above was filtered on, just expressed at
+      // the ends the two molecules are actually used at.
+      const ampliconStart = f.start;
+      const ampliconEnd = r.anchor + r.length - 1;
       const ampliconLength = ampliconEnd - ampliconStart + 1;
       if (ampliconLength < opts.ampliconMin || ampliconLength > opts.ampliconMax) continue;
       let fMispriming = { count: 0, sites: [] };
@@ -525,6 +576,12 @@ export function designPrimerPairs(template, opts) {
         + mismatchPenalty(rMismatches, zone)
         + 8 * fMispriming.count + 8 * rMispriming.count
         + (targetDistance !== undefined ? targetWeight * targetDistance : 0);
+      // Role mapping (see the file header): the top-strand scan hit `f` reads
+      // RIGHTWARD from its own 3' end, so it is the pair's FORWARD primer and
+      // the amplicon OPENS at `f.start`. The RC-scan hit `r` reads LEFTWARD, so
+      // it is the REVERSE primer and the amplicon CLOSES at its 3' end
+      // `r.anchor + r.length - 1`. Reporting these two the other way round is
+      // the 0.16.0 defect: the pair did not amplify as printed.
       pairs.push({
         forward: {
           sequence: f.sequence,
@@ -542,7 +599,7 @@ export function designPrimerPairs(template, opts) {
           mismatches: fMismatches,
           mispriming_count: fMispriming.count,
           mispriming_sites: fMispriming.sites,
-          ...(fTargetDistance !== undefined ? { target_distance: fTargetDistance } : {}),
+          ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
         },
         reverse: {
           sequence: r.sequence,
@@ -560,7 +617,7 @@ export function designPrimerPairs(template, opts) {
           mismatches: rMismatches,
           mispriming_count: rMispriming.count,
           mispriming_sites: rMispriming.sites,
-          ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
+          ...(fTargetDistance !== undefined ? { target_distance: fTargetDistance } : {}),
         },
         amplicon: {
           start: ampliconStart + 1,

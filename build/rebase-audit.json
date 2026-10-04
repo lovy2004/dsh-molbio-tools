@@ -1,0 +1,585 @@
+{
+  "ApaI": {
+    "claim": {
+      "blocked": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "blocked"
+    },
+    "recognitionSite": "GGGCCC",
+    "rebase": {
+      "dam": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      },
+      "dcm": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      }
+    }
+  },
+  "AvaII": {
+    "claim": {
+      "blocked": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "blocked"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      },
+      "dcm": {
+        "rows": 1,
+        "counts": {
+          "cut": 1
+        },
+        "detail": [
+          "cut"
+        ]
+      }
+    }
+  },
+  "BclI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "TGATCA",
+    "rebase": {
+      "dam": {
+        "rows": 3,
+        "counts": {
+          "impaired": 2,
+          "not cut": 1
+        },
+        "detail": [
+          "impaired",
+          "not cut",
+          "impaired"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "BglII": {
+    "claim": {
+      "sensitive": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "impaired",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "AGATCT",
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "impaired": 1,
+          "cut": 1
+        },
+        "detail": [
+          "impaired",
+          "cut"
+        ]
+      },
+      "dcm": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      }
+    }
+  },
+  "BspEI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "TCCGGA",
+    "rebase": {
+      "dam": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "BspHI": {
+    "claim": {
+      "sensitive": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "impaired",
+      "dcm": "not sensitive"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 4,
+        "counts": {
+          "not cut": 2,
+          "cut": 1,
+          "impaired": 1
+        },
+        "detail": [
+          "not cut",
+          "not cut",
+          "cut",
+          "impaired"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "BstYI": {
+    "claim": {
+      "sensitive": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "impaired",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "RGATCY",
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "impaired": 1,
+          "cut": 1
+        },
+        "detail": [
+          "impaired",
+          "cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "ClaI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "ATCGAT",
+    "rebase": {
+      "dam": {
+        "rows": 4,
+        "counts": {
+          "cut": 1,
+          "not cut": 3
+        },
+        "detail": [
+          "cut",
+          "not cut",
+          "not cut",
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "EcoRII": {
+    "claim": {
+      "blocked": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "blocked"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 1,
+        "counts": {
+          "impaired": 1
+        },
+        "detail": [
+          "impaired"
+        ]
+      },
+      "dcm": {
+        "rows": 3,
+        "counts": {
+          "cut": 1,
+          "not cut": 2
+        },
+        "detail": [
+          "cut",
+          "not cut",
+          "not cut"
+        ]
+      }
+    }
+  },
+  "HphI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "MboI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 3,
+        "counts": {
+          "not cut": 2,
+          "impaired": 1
+        },
+        "detail": [
+          "not cut",
+          "impaired",
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 1,
+        "counts": {
+          "impaired": 1
+        },
+        "detail": [
+          "impaired"
+        ]
+      }
+    }
+  },
+  "NruI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "TCGCGA",
+    "rebase": {
+      "dam": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "PspGI": {
+    "claim": {
+      "blocked": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "blocked"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "ScaI": {
+    "claim": {
+      "sensitive": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "impaired"
+    },
+    "recognitionSite": "AGTACT",
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "not cut": 2
+        },
+        "detail": [
+          "not cut",
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      }
+    }
+  },
+  "SexAI": {
+    "claim": {
+      "blocked": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "blocked"
+    },
+    "recognitionSite": "ACCWGGT",
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "cut": 2
+        },
+        "detail": [
+          "cut",
+          "cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "SmaI": {
+    "claim": {
+      "sensitive": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "impaired"
+    },
+    "recognitionSite": "CCCGGG",
+    "rebase": {
+      "dam": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      },
+      "dcm": {
+        "rows": 2,
+        "counts": {
+          "impaired": 2
+        },
+        "detail": [
+          "impaired",
+          "impaired"
+        ]
+      }
+    }
+  },
+  "StuI": {
+    "claim": {
+      "blocked": [
+        "dcm"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "not sensitive",
+      "dcm": "blocked"
+    },
+    "recognitionSite": "AGGCCT",
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "cut": 2
+        },
+        "detail": [
+          "cut",
+          "cut"
+        ]
+      },
+      "dcm": {
+        "rows": 1,
+        "counts": {
+          "not cut": 1
+        },
+        "detail": [
+          "not cut"
+        ]
+      }
+    }
+  },
+  "TaqI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "not cut": 2
+        },
+        "detail": [
+          "not cut",
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "XbaI": {
+    "claim": {
+      "blocked": [
+        "dam"
+      ]
+    },
+    "claimVerdict": {
+      "dam": "blocked",
+      "dcm": "not sensitive"
+    },
+    "recognitionSite": "TCTAGA",
+    "rebase": {
+      "dam": {
+        "rows": 2,
+        "counts": {
+          "not cut": 2
+        },
+        "detail": [
+          "not cut",
+          "not cut"
+        ]
+      },
+      "dcm": {
+        "rows": 0,
+        "counts": {},
+        "detail": []
+      }
+    }
+  },
+  "_sites": {
+    "dam": {
+      "site": "GATC",
+      "label": "Dam (GATC) — GATC methylated at the adenine by DNA adenine methyltransferase"
+    },
+    "dcm": {
+      "site": "CCWGG",
+      "label": "Dcm (CCWGG) — the internal cytosine of CCWGG is methylated"
+    }
+  },
+  "_unsupported": [
+    "PspGI (dcm claim: blocked, no m4 record)",
+    "SexAI (dcm claim: blocked, no m4 record)"
+  ]
+}

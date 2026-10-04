@@ -387,11 +387,28 @@ returned these two molecules with F/R reversed and both printed as the wrong
 strand, and the pair as printed does not amplify"); it is confirmed here against
 `pcr.mjs`.
 
-**Status: recorded, not fixed.** The fix belongs in the primer designer's
-orientation handling and needs its own regression test (a designed pair must
-simulate to exactly one product when passed as printed). Until then
-`qpcr-primers` deliberately does **not** assert which role a model assigns, only
-the two molecules and the amplicon size — see the note in `tasks/01-core.json`.
+**Status: FIXED in 0.16.0.** The engine had the two scans' *roles* and
+*coordinates* crossed: the top-strand hit (which reads rightward from its own 3'
+end, so it is the FORWARD primer) was reported as `reverse` using the wrong
+coordinate field, and the reverse-complement hit as `forward`. `design.mjs` now
+derives both from the same scan, and the pairing window was moved onto the
+physical constraint (the two primer sites must not overlap) because the old
+window only held for the degenerate case where both primers occupied the same
+window.
+
+The regression that closes it is deliberately **cross-tool** (`test/smoke.mjs`):
+every designed pair, fed to `molbio_pcr_simulate` **exactly as returned**, must
+yield exactly one product whose size and endpoints match the reported amplicon.
+The old suite could not see this defect because it asserted the *buggy*
+convention directly (`assert.equal(pair.amplicon.start, pair.reverse.start)`),
+and because every individual field — sequence, Tm, GC, structure — was correct.
+
+Consequence worth knowing: the corrected top-ranked pair on the `qpcr-primers`
+template is now `F GTGCGTACAGAGGAGTAGTG (105-124)` / `R CGTATGGGAAGAGCAGGAG
+(205-223)`, amplicon **105-223 (119 bp)** — one base longer than the old 118 bp,
+because the two primers now occupy two disjoint sites instead of the same
+doubly-counted window. The task asserts the roles now, which it deliberately did
+not before.
 
 ### The methylation reference table disagrees with NEB on BamHI
 
@@ -401,12 +418,38 @@ target `GATC`. A model asked about a failing BamHI digest ran the tool, then
 checked NEB over the web and reported the opposite: NEB lists BamHI as
 **insensitive** to dam, dcm and CpG methylation.
 
-The task deliberately does not assert agreement either way (see the note in
-`tasks.json`). What this exposes is a plugin-data question worth verifying
-against REBASE before the next release: does the hand-transcribed table
-over-report Dam sensitivity for BamHI (and, by extension, for the other enzymes
-whose sites merely *contain* `GATC`)? The tool's own output already warns that
-methylation sensitivity "is a hand-transcribed quick reference".
+**Status: FIXED in 0.16.0.** The model was right and the hand-transcribed table
+was wrong. The table had been built by the rule "the recognition site contains
+GATC/CCWGG, therefore the enzyme is sensitive", which conflates two different
+things: site containment only shows that a methylated base **can** be presented
+to the enzyme, not that the enzyme is inhibited by it. 15 of the 29 entries
+disagreed with the sources. BamHI is now absent from the table, on the strength
+of REBASE's per-enzyme record for Dam-methylated DNA (MS#909, recorded as a
+*cleavage*, "tested on Dam methylated phage and plasmid DNAs") and the NEB
+catalogue's "Not sensitive to dam, dcm or mammalian CpG methylation" — plus the
+existence of a BamHI mutant that *requires* N6-methyladenine for cleavage
+(J Mol Biol 285:1525, 1999).
+
+`build/rebase-audit.mjs` dumps REBASE's per-enzyme records (the pages
+colour-code each one: green = cut, orange = `(N% cleaved)` = impaired, red = not
+cut) and writes `build/rebase-audit.json`, so the next audit is a diff rather
+than a re-transcription. It deliberately does **not** collapse a page to one
+verdict: those pages carry many records per enzyme (different methylases,
+substrates, hemi- vs fully-methylated DNA, old papers vs recent) that genuinely
+disagree, and the correct summary is a judgement about the enzyme. Its most
+useful single output is therefore the list of claims with **no** REBASE record at
+all. Entries were deliberately **left alone** where the evidence was
+context-dependent rather than wrong — BglII/BstYI (REBASE records impaired
+cutting on hemimethylated *and* fully methylated substrates), SmaI (six Dcm
+records alternating impaired/not-cut), ScaI, and the m4- or NEB-backed
+AvaII/SexAI/StuI/ApaI. The rule applied throughout was **evidence vs inference**:
+SmaI and ScaI cannot contain `CCWGG` in their own site either, but each has Dcm
+records, so they stay; HincII had none, so it went.
+
+The `methylation-block` task was written around this false positive — it used to
+require the tool to flag BamHI and explicitly refused to grade whether the model
+agreed with it. It now asserts the corrected behaviour (`BamHI: cut(s)`) and does
+grade the verdict.
 
 ### Tool-result truncation can hide evidence from a grader
 

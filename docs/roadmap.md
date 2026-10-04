@@ -10,12 +10,14 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.13.1）
+## 1. 当前状态（0.16.0）
 
 - 57 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.1.7-alpha.2**。
+- 基线：DSH **0.1.7-rc.1**。
+- **benchmark 交出的前两条缺陷已在 0.16.0 修完**（引物朝向、甲基化参考表），
+  见 [history.md](history.md) 的 v0.16.0 段与 [CHANGELOG](../CHANGELOG.md)。
 
 ---
 
@@ -24,60 +26,60 @@ L = 需要新机制或外部资源）。
 本仓库的历史偏好很明确：**优先修"已经在产品里、但不报错的错"**，而不是再加一个功能。
 理由见 v20 计划的开头——工具集的价值取决于输出能不能被信任。
 
-### 2.0 `molbio_design_primers` 的引物朝向（**最高优先级——已确认的功能缺陷**）
+### 2.0 ✅ 已修（0.16.0）`molbio_design_primers` 的引物朝向
 
-benchmark 查出的真实缺陷：返回的引物对把 forward/reverse **标反了**，`F` 在下游
-（201-222）、`R` 在上游（105-124），按原样送进 `molbio_pcr_simulate` **不产生产物**。
-正确的两条分子就在同一份输出里（把叫 `R` 的那条取反向互补即真正的正向引物）。
-证据与复核方法见 [benchmark/README.md](../benchmark/README.md) 的 Findings。
+`forward`/`reverse` 曾**标反**（F 在下游、R 在上游），按原样送进 `molbio_pcr_simulate`
+得到 **0 个产物**。修法与"为什么只有串联测试看得见"见 [CHANGELOG 0.16.0](../CHANGELOG.md)。
 
-- 修的地方：引物设计引擎返回 `forward`/`reverse` 时的朝向处理；
-- **必须同时补回归测试**：设计出的每一对，按原样送进模拟器必须得到**恰好一个产物**。
-  这类"每个数字都对、但两个数字之间的关系错了"的缺陷，只有把两个工具**串起来**才看得见；
-- 修好之后，`qpcr-primers` 任务可以把"哪条是 forward"重新钉回去。
+**遗留的一条同源问题（未改，故意）**：`molbio_design_intron_primers` 用的是**另一个约定**——
+它把两条引物都报成**剪接后转录本的 sense 子串**（这样 `exon` / `junction_left` /
+`junction_right` 几何、剪接 vs 基因组双坐标错配报告、3' 尾错配检查才能统一读在**一条**序列上）。
+代价是：它报的 `reverse` **不是**要订购的那条分子，真正的反向引物是它的反向互补，
+而且 `forward` 在 `reverse` **下游**。这是**可用性瑕疵、不是沉默的错**
+（没有任何工具把这个对送进模拟器），所以没有跟 `designPrimerPairs` 在同一版里一起改。
+要动它就得同时改渲染、错配报告与 `test/smoke.mjs` 的 sense-substring 断言。
 
-### 2.1 `molbio_methylation_check` 的表与 NEB 不一致（**数据复核**）
+### 2.1 ✅ 已修（0.16.0）`molbio_methylation_check` 的表与 NEB 不一致
 
-工具把 BamHI 判为 `impaired by dam`（`GGATCC` 内含 `GATC`），而 NEB 列 BamHI 为对 dam
-**不敏感**。需要对着 REBASE 复核整张表——尤其是"仅因位点包含 `GATC` 就判 Dam 敏感"
-的那一类酶。详见 [benchmark/README.md](../benchmark/README.md) 的 Findings。
+根因是"位点里含 GATC/CCWGG ⇒ 该酶敏感"这条构造规则（15/29 条与来源不符），
+修法与逐酶证据见 [CHANGELOG 0.16.0](../CHANGELOG.md)；`build/rebase-audit.mjs` 可重新推导。
 
 ### 2.2 比对后处理套件（M）
 
 `conservationAnalysis` 已给出共识/逐列 identity/熵，缺的是**修剪与覆盖度视图**：
 IUPAC 共识、缺口比例修剪、同一性矩阵、逐列覆盖度。survey 第 6 名。
 
-### 2.2 批量分析 + 表格导出（M）
+### 2.3 批量分析 + 表格导出（M）
 
 survey 第 7 条：对工作区里所有匹配文件跑同一项分析并出 CSV。
 牵连点是"写文件"路径已经齐备（`ctx.fs` + sandboxPolicy），主要是参数设计。
 
-### 2.3 `svgpng.mjs` 的旋转多行文本（M）
+### 2.4 `svgpng.mjs` 的旋转多行文本（M）
 
 v20 给**矩形**布局折了行，但**环形/扇形**布局的旋转标签仍按整行绘制——旋转文本没有按真实
 字宽测过，硬折会算错行数。真修法是让折行也知道旋转，或给径向标签改用别的排布
 （沿切线/半径分层），并补像素断言。属于"画面正确性"那一类，优先级高。
 
-### 2.4 Cas12a/Cas13 等 PAM 家族（M）
+### 2.5 Cas12a/Cas13 等 PAM 家族（M）
 
 `pam` 参数已能传 `NNRT`，缺**家族特定的评分曲线与几何校验**（PAM 位置、种子区定义、
 crRNA 长度差异）。需要参考表，不需要外部二进制。
 
-### 2.5 gRNA 基因组级脱靶（L）
+### 2.6 gRNA 基因组级脱靶（L）
 
 当前把传入序列当参考。基因组规模需要先建一次索引再复用（索引的生命周期、内存上限、
 跨调用缓存都是新机制），且**不能**引入外部二进制（本包的零依赖约束）。
 
-### 2.6 多重 PCR 的温度梯度/浓度配平建议（S/M）
+### 2.7 多重 PCR 的温度梯度/浓度配平建议（S/M）
 
 `molbio_multiplex_check` 已报告互扰；缺的是"给一组引物建议退火温度与各引物浓度"这类
 可执行结论。纯计算。
 
-### 2.7 TaqMan 的 MGB / 双标记探针与订购 CSV（S/M）
+### 2.8 TaqMan 的 MGB / 双标记探针与订购 CSV（S/M）
 
 v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
 
-### 2.8 浏览器面板的候选（客户端半，不动 preset 目录）
+### 2.9 浏览器面板的候选（客户端半，不动 preset 目录）
 
 - 给 `molbio_sequence_logo` / `molbio_grna_design` 等工具加**调用卡**（同一套
   `presentationMeta` + 卡片模式，上线前先跑 `test/client.mjs` 的抢座位顺序那一层）；

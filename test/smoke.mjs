@@ -374,8 +374,8 @@ function makeTemplate(n, seed = 42) {
     assert.ok(pair.amplicon.length >= 80 && pair.amplicon.length <= 1000);
     assert.equal(pair.forward.sequence, template.slice(pair.forward.start - 1, pair.forward.end));
     assert.equal(pair.reverse.sequence, lib.reverseComplement(template.slice(pair.reverse.start - 1, pair.reverse.end)));
-    assert.equal(pair.amplicon.start, pair.reverse.start);
-    assert.equal(pair.amplicon.end, pair.forward.end);
+    assert.equal(pair.amplicon.start, pair.forward.start);
+    assert.equal(pair.amplicon.end, pair.reverse.end);
     assert.ok(pair.forward.tm >= 55 && pair.forward.tm <= 65);
     assert.ok(pair.reverse.tm >= 55 && pair.reverse.tm <= 65);
     assert.ok(['G', 'C'].includes(pair.forward.sequence.at(-1)), 'GC clamp');
@@ -383,6 +383,38 @@ function makeTemplate(n, seed = 42) {
   }
   const none = await run('molbio_design_primers', { template, tm_min: 95, tm_max: 105 });
   assert.equal(none.pairs.length, 0);
+}
+
+{
+  // ── 0.16.0 regression: a designed pair must AMPLIFY AS PRINTED ─────────────
+  //
+  // The defect this closes: the designer reported the forward/reverse roles the
+  // other way up, so `F` sat downstream of `R` and the printed pair extended
+  // outward. Every per-value assertion above stayed green — the molecules and
+  // their Tm/GC were all correct — because the error was in the RELATIONSHIP
+  // between the two. Only feeding the pair to the simulator, exactly as
+  // returned, can see it. This is deliberately a cross-tool test: `pcr.mjs`
+  // treats reverse primers as molecules to order (`rc(primer)` against the top
+  // strand), so if the designer's convention ever drifts back, the two tools
+  // disagree here instead of on a user's bench.
+  for (const seed of [7, 11, 23, 101]) {
+    const template = makeTemplate(600, seed);
+    const designed = await run('molbio_design_primers', { template, max_results: 5 });
+    assert.ok(designed.pairs.length > 0, `seed ${seed}: designer should find pairs`);
+    for (const pair of designed.pairs) {
+      assert.ok(pair.forward.start < pair.reverse.start, `seed ${seed}: the forward primer must be upstream of the reverse primer`);
+      assert.ok(pair.forward.end < pair.reverse.start, `seed ${seed}: the two primer sites must not overlap`);
+      const simulated = await run('molbio_pcr_simulate', {
+        template,
+        primer_pairs: [{ name: 'as-printed', forward: pair.forward.sequence, reverse: pair.reverse.sequence }],
+      });
+      const amplicons = simulated.pairs[0].amplicons;
+      assert.equal(amplicons.length, 1, `seed ${seed}: the pair as printed must give exactly one product (F ${pair.forward.start}-${pair.forward.end}, R ${pair.reverse.start}-${pair.reverse.end})`);
+      assert.equal(amplicons[0].size, pair.amplicon.length, `seed ${seed}: the product must be the reported amplicon`);
+      assert.equal(amplicons[0].forward_site.start, pair.forward.start, `seed ${seed}: the product starts at the forward primer`);
+      assert.equal(amplicons[0].reverse_site.end, pair.reverse.end, `seed ${seed}: the product ends at the reverse primer (as ordered)`);
+    }
+  }
 }
 
 // ── GenBank parsing ─────────────────────────────────────────────────────────
@@ -1149,31 +1181,53 @@ function makeTemplate(n, seed = 42) {
 }
 
 {
-  // Rescue: a template where every exact window fails the run constraint, but a
-  // couple of 5'-side mismatches salvage a pair. Structural filters are relaxed
-  // so the run constraint is the only blocker; the 3'-terminal base and the 3'
-  // critical zone still must stay perfectly matched.
-  const template = 'T'.repeat(10) + 'GCGC' + 'T'.repeat(10);
+  // ── v12 mismatch tolerance: what the 0.16.0 orientation fix changed ────────
+  //
+  // The old end-to-end "rescue" test ran on a 24 bp template
+  // (`'T'.repeat(10)+'GCGC'+'T'.repeat(10)`) with 18 bp primers and
+  // `amplicon_max: 24`. It only produced a rescued pair because the OLD designer
+  // paired the forward and reverse primers over the **same window** read from
+  // opposite strands — the two "sites" overlapped completely, so the pair was
+  // not a pair. A 24 bp amplicon cannot hold two 18 bp primers at two disjoint
+  // sites, so that fixture is unbuildable now; the shortest legal amplicon here
+  // is 18 + 18 + 1 = 37 bp.
+  //
+  // A search over ~5000 randomized templates (run/gc/tm blocks, both flanking
+  // schemes, `maxMismatches` 2-3) found NO case where hand-built exact primers
+  // were absent but mismatch-rescued primers existed under disjoint geometry.
+  // That is not a coverage gap to paper over: `scanCandidates` returns exact
+  // windows unconditionally and only falls through to mismatched variants when
+  // a window FAILS a constraint, and a rescued pair still has to beat the exact
+  // candidates on `penalty` — with real geometry, some exact window is always
+  // available first. So the honest assertion is the one below, which pins the
+  // *reported* mismatch contract wherever mismatches do appear, plus a direct
+  // unit test of the 3'-zone gate that the old end-to-end test also covered.
+  //
+  // This is recorded as a real consequence of the fix in CHANGELOG 0.16.0.
   const params = {
-    template,
-    primer_len_min: 18, primer_len_max: 18,
+    primer_len_min: 12, primer_len_max: 24,
     tm_min: 30, tm_max: 95, gc_min: 15, gc_max: 100,
     gc_clamp: 0, max_run: 4,
     max_self_any: 20, max_self_end: 20, max_hairpin_tm: 120,
     max_dimer_tm: 120, max_dimer_end_tm: 120,
     max_end_stability: 30, max_end_gc: 5, max_tm_delta: 200,
-    amplicon_min: 1, amplicon_max: 24, region_end: 24,
-    max_results: 5,
+    amplicon_min: 40, amplicon_max: 200,
   };
-  const exact = await run('molbio_design_primers', { ...params, max_mismatches: 0 });
-  assert.equal(exact.pairs.length, 0, 'every exact window must fail the run constraint');
+  // Mismatch tolerance must never DEGRADE the result: on a template with exact
+  // candidates, enabling it leaves the top pair identical.
+  const tolerantTemplate = makeTemplate(600, 7);
+  const strict = await run('molbio_design_primers', { ...params, template: tolerantTemplate, max_mismatches: 0, max_results: 5 });
+  const tolerant = await run('molbio_design_primers', { ...params, template: tolerantTemplate, max_mismatches: 2, max_results: 5 });
+  assert.ok(strict.pairs.length > 0);
+  assert.equal(tolerant.pairs[0].forward.sequence, strict.pairs[0].forward.sequence);
+  assert.equal(tolerant.pairs[0].reverse.sequence, strict.pairs[0].reverse.sequence);
+  assert.equal(tolerant.pairs[0].penalty, strict.pairs[0].penalty);
 
-  const rescued = await run('molbio_design_primers', { ...params, max_mismatches: 2 });
-  assert.ok(rescued.pairs.length > 0, 'mismatch tolerance must rescue a pair');
-  const pair = rescued.pairs[0];
-
-  // per-primer invariant checks on BOTH strands
-  const checkInvariants = (primer, isReverse) => {
+  // Whenever a returned primer DOES carry mismatches, the reported mismatch
+  // contract must hold on both strands: the position indexes the primer, the
+  // terminal base and the 3' critical zone are untouched, `primer_base` matches
+  // the reported sequence, and `template_base` is the perfect-match base.
+  const checkInvariants = (primer, template, isReverse) => {
     assert.equal(primer.mismatch_count, primer.mismatches.length);
     for (const m of primer.mismatches) {
       assert.ok(m.position >= 1 && m.position <= primer.length, 'mismatch position inside the primer');
@@ -1186,23 +1240,60 @@ function makeTemplate(n, seed = 42) {
       if (!isReverse) assert.equal(m.template_base, templateBase, 'forward: perfect base = the template base');
       else assert.equal(m.template_base, lib.complement(templateBase), 'reverse: perfect base = complement of the template base');
     }
+    // The rule has to hold on the sequence itself, not just in the report: the
+    // reported molecule must equal the slice it claims (forward) or that slice's
+    // reverse complement (reverse), except at the reported mismatch positions.
+    const slice = template.slice(primer.start - 1, primer.end);
+    const expected = isReverse ? lib.reverseComplement(slice) : slice;
+    const mismatched = primer.mismatches.map((m) => m.position);
+    for (let i = 0; i < expected.length; i++) {
+      if (mismatched.includes(i + 1)) continue;
+      assert.equal(primer.sequence[i], expected[i], `${isReverse ? 'reverse' : 'forward'} primer base ${i + 1} must equal the template slice outside its reported mismatches`);
+    }
   };
-  checkInvariants(pair.forward, false);
-  checkInvariants(pair.reverse, true);
-  assert.ok(pair.forward.mismatch_count > 0 || pair.reverse.mismatch_count > 0, 'the rescue pair must carry at least one mismatch');
+  for (const pair of tolerant.pairs) {
+    checkInvariants(pair.forward, tolerantTemplate, false);
+    checkInvariants(pair.reverse, tolerantTemplate, true);
+    assert.equal(pair.forward.mismatch_count + pair.reverse.mismatch_count, [...pair.forward.mismatches, ...pair.reverse.mismatches].length);
+  }
+}
 
-  // Same template with region_start=2: the only rescue left needs a mismatch
-  // inside the 3'-critical zone, which is off by default and on with
-  // max_3prime_mismatches=1.
-  const zoneParams = { ...params, region_start: 2, max_mismatches: 3 };
-  const zone0 = await run('molbio_design_primers', { ...zoneParams, max_3prime_mismatches: 0 });
-  assert.equal(zone0.pairs.length, 0, 'zone-protected rescue must be impossible without zone tolerance');
-  const zone1 = await run('molbio_design_primers', { ...zoneParams, max_3prime_mismatches: 1 });
-  assert.ok(zone1.pairs.length > 0, 'zone tolerance must unlock the rescue');
-  const zoneMismatches = [...zone1.pairs[0].forward.mismatches, ...zone1.pairs[0].reverse.mismatches];
-  assert.ok(zoneMismatches.length > 0);
-  assert.ok(zoneMismatches.every((m) => m.distance_from_3prime >= 1), 'still no terminal-base mismatch');
-  assert.ok(zoneMismatches.some((m) => m.distance_from_3prime <= 5), 'zone tolerance allows mismatches near the 3-prime end');
+{
+  // ── v12 3'-critical-zone gate, at the unit level ───────────────────────────
+  // The end-to-end version of this check went with the overlapping-primer
+  // fixture above, but the GATE is the actual rule and is directly testable:
+  // `mismatchVariants(seed, k, opts, failure)` decides which positions may be
+  // substituted at all. A seed that is one long run makes the run-breaking
+  // variants explicit, so this distinguishes "zone protected" from "zone open"
+  // by counting, instead of by hoping a template provokes it.
+  const seed = 'T'.repeat(18);
+  const failure = { reason: 'run' };
+  const design = await import('../design.mjs');
+  const base = { ...design.DESIGN_DEFAULTS, mismatch3PrimeZone: 5 };
+  const inZone = (variant) => variant.offsets.some((o) => seed.length - 1 - o.p <= 5);
+  const protectedVariants = design.mismatchVariants(seed, 1, { ...base, max3PrimeMismatches: 0 }, failure);
+  const openVariants = design.mismatchVariants(seed, 1, { ...base, max3PrimeMismatches: 1 }, failure);
+  assert.ok(protectedVariants.length > 0, 'the run still yields repairable variants with the zone protected');
+  assert.equal(protectedVariants.filter(inZone).length, 0, 'zone-protected generation must never offer a position inside the 3-prime zone');
+  assert.ok(openVariants.filter(inZone).length > 0, 'zone tolerance must offer positions inside the 3-prime zone');
+  assert.ok(openVariants.length > protectedVariants.length, 'opening the zone strictly adds candidate positions');
+  // Structural contract of a variant: `sequence` must be exactly the seed with
+  // the recorded offsets applied. An offset inside the seed is a substitution;
+  // an offset one past the end is the generator offering a base appended at the
+  // 3' terminal position — which `scanCandidates`/`evaluateSeq` then reject as a
+  // terminal mismatch, which is why every reported mismatch above satisfies
+  // distance_from_3prime >= 1. (Both forms are recorded here rather than
+  // asserted away, because "the generator offers it and the engine refuses it"
+  // is the actual division of responsibility.)
+  for (const variant of [...protectedVariants, ...openVariants]) {
+    for (const offset of variant.offsets) {
+      assert.ok(offset.p >= 0 && offset.p <= seed.length, `variant offset ${offset.p} must be an index into the seed or its terminal position`);
+    }
+    const rebuilt = [...seed];
+    for (const offset of variant.offsets) rebuilt[offset.p] = offset.base;
+    assert.equal(variant.sequence, rebuilt.join(''), 'the variant sequence must be the seed with exactly its offsets applied');
+    assert.ok(variant.sequence.length === seed.length || variant.sequence.length === seed.length + 1, 'a variant is the seed, optionally with one appended terminal base');
+  }
 }
 
 {
@@ -1293,18 +1384,31 @@ function makeTemplate(n, seed = 42) {
 
   // primer dimer: G12/C12 forms a 67 °C duplex — rejected at the Primer3 default
   assert.ok(lib.dimerThermo('GGGGGGGGGGGG', 'CCCCCCCCCCCC', 200e-9).any_tm > 47);
-  const dimerTemplate = 'C'.repeat(12) + 'A'.repeat(20) + 'G'.repeat(12);
+  // ── 0.16.0: rebuilt for disjoint primer sites ──────────────────────────────
+  // The old fixture was `'C'.repeat(12)+'A'.repeat(20)+'G'.repeat(12)` with
+  // `ampliconMin = ampliconMax = 12`, which again only existed because the two
+  // primers were paired over the SAME 12 bp window from opposite strands. A real
+  // amplicon needs F's site and R's site side by side, so the template below is
+  //   F-site + 1 bp + rc(R-site)
+  // and the 3'-end dimer is F's 3' C-run against R's 3' G-run. The pair exists
+  // (it is the only one) but its 3'-end dimer Tm (53.4 °C) is above the Primer3
+  // 47 °C default, so the strict run rejects it and the relaxed run admits it —
+  // which is exactly the rule this test is about.
+  const dimerF = 'ATATATATATATCCCCCC';
+  const dimerR = 'GGGGGGATATATATATAT';
+  assert.ok(lib.dimerThermo(dimerF, dimerR, 200e-9).end_tm > 47, 'the fixture pair must trip the 3-prime dimer threshold');
+  const dimerTemplate = dimerF + 'T' + lib.reverseComplement(dimerR);
   const dimerParams = {
-    lenMin: 12, lenMax: 12, tmMin: 0, tmMax: 100, gcMin: 0, gcMax: 100, gcClamp: 0, maxRun: 20,
-    maxSelfAny: 100, maxSelfEnd: 100, maxHairpinTm: 120, maxDimerTm: 200, maxDimerEndTm: 47,
-    maxEndStability: 30, maxEndGc: 5, maxTmDelta: 200, ampliconMin: 12, ampliconMax: 12,
-    regionStart: 1, regionEnd: 44, maxResults: 50, maxCandidates: 5000,
+    lenMin: 18, lenMax: 18, tmMin: 0, tmMax: 100, gcMin: 0, gcMax: 100, gcClamp: 0, maxRun: 20,
+    maxSelfAny: 100, maxSelfEnd: 100, maxHairpinTm: 200, maxDimerTm: 200, maxDimerEndTm: 47,
+    maxEndStability: 30, maxEndGc: 5, maxTmDelta: 200,
+    regionStart: 1, regionEnd: dimerTemplate.length, maxResults: 50, maxCandidates: 5000,
+    ampliconMin: 20, ampliconMax: 200,
   };
   const dimerStrict = design.designPrimerPairs(dimerTemplate, dimerParams);
-  assert.ok(dimerStrict.length > 0, 'other pairs still exist');
-  assert.ok(!dimerStrict.some((p) => p.forward.sequence === 'CCCCCCCCCCCC'), 'the 67 °C G/C dimer pair must be rejected at the Primer3 47 °C threshold');
+  assert.equal(dimerStrict.length, 0, 'the 67 °C G/C dimer pair must be rejected at the Primer3 47 °C threshold');
   const dimerLoose = design.designPrimerPairs(dimerTemplate, { ...dimerParams, maxDimerEndTm: 200 });
-  assert.ok(dimerLoose.some((p) => p.forward.sequence === 'CCCCCCCCCCCC'), 'relaxing the threshold admits the G/C dimer pair');
+  assert.ok(dimerLoose.some((p) => p.forward.sequence === dimerF && p.reverse.sequence === dimerR), 'relaxing the threshold admits the G/C dimer pair');
 }
 
 // ── v12: mispriming check (item 6 of the Primer3 parity) ────────────────────
@@ -1856,13 +1960,16 @@ function splicedToGenomic(splicedPos, exons) {
 
   // ── TaqMan probe design ───────────────────────────────────────────────────
   const assays = await run('molbio_design_taqman', { sequence: slice });
-  assert.equal(assays.assays.length, 7, 'seven assays satisfy the probe window on this slice');
+  assert.equal(assays.assays.length, 9, 'nine assays satisfy the probe window on this slice');
   assert.deepEqual(assays.probe_options.length, [18, 27]);
   assert.equal(assays.probe_options.min_tm_delta_vs_primer, 5);
   assert.equal(assays.conditions.primer_nm, 200);
   assert.deepEqual(assays.primer_options.amplicon, [70, 200], 'the assay designer uses qPCR-sized amplicons by default');
   assert.deepEqual(assays.primer_options.region, [1, 600]);
-  assert.equal(assays.notes.filter((note) => note.includes('no probe clears the')).length, 5, 'every amplicon whose probe falls short of the Tm margin is reported');
+  // 0.16.0: this was 5 when the primer roles were swapped. With the forward
+  // primer genuinely upstream, every amplicon on this slice has a probe window
+  // that also clears the Tm margin, so no fallback note is needed.
+  assert.equal(assays.notes.filter((note) => note.includes('no probe clears the')).length, 0, 'no assay on this slice falls short of the Tm margin');
 
   // Every reported assay must respect the geometry and the probe rules. These
   // are the invariants the module got wrong twice during development, so they
@@ -1902,39 +2009,47 @@ function splicedToGenomic(splicedPos, exons) {
   }
 
   // The best-ranked assay, pinned: the probe sits in the amplicon's gap, in the
-  // standard (forward) orientation.
+  // standard (forward) orientation, read outward from the FORWARD primer's 3'
+  // end. (0.16.0: every pinned value below moved — see the note above.)
   const best = assays.assays[0];
-  assert.equal(best.amplicon.length, 83);
-  assert.equal(best.forward.sequence, 'GTTCGGTGTAGGTCGTTCG');
-  assert.equal(best.reverse.sequence, 'AAGGGAGAAAGGCGGACAG');
-  assert.equal(best.probe.sequence, 'AGCGTGGCGCTTTCTCAT');
+  assert.equal(best.amplicon.length, 166);
+  assert.equal(best.forward.sequence, 'GGGATAACGCAGGAAAGAAC');
+  assert.equal(best.reverse.sequence, 'TATCTTTATAGTCCTGTCGGG');
+  assert.equal(best.forward.start, 64);
+  assert.equal(best.forward.end, 83);
+  assert.equal(best.reverse.start, 209);
+  assert.equal(best.reverse.end, 229);
+  assert.equal(best.probe.sequence, 'CCGCGTTGCTGGCGTTTT');
   assert.equal(best.probe.orientation, 'forward');
-  assert.equal(best.probe.start, 321);
-  assert.equal(best.probe.end, 338);
+  assert.equal(best.probe.start, 127);
+  assert.equal(best.probe.end, 144);
   assert.equal(best.probe.length, 18);
-  assert.equal(best.probe.tm, 61.71);
-  assert.equal(best.probe.tm_delta_vs_primer, 0.81);
-  assert.equal(best.probe.gc_percent, 55.56);
-  assert.equal(best.probe.distance_from_primer_3prime, 6);
-  assert.equal(best.assay_penalty, 11.22);
+  assert.equal(best.probe.tm, 64.24);
+  assert.equal(best.probe.tm_delta_vs_primer, 6.24);
+  assert.equal(best.probe.gc_percent, 61.11);
+  assert.equal(best.probe.distance_from_primer_3prime, 44);
+  assert.equal(best.assay_penalty, 16.65);
   // The reported Tm is the same NN model the primer tools use.
   const probeTm = lib.primerTm(best.probe.sequence, { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: 200 }).tm_celsius;
   assert.equal(best.probe.tm, probeTm, 'the probe Tm is the shared NN model, not a second implementation');
 
-  // A second assay, pinned, whose stem primer is the reverse one: the probe is
-  // read outward from the reverse primer's 3' end (that is what the reported
-  // distance measures), and still sits in the same physical gap.
-  const second = assays.assays[2];
-  assert.equal(second.amplicon.length, 170);
-  assert.equal(second.probe.sequence, 'CCTGTCCGCCTTTCTCCCTTC');
-  assert.equal(second.probe.orientation, 'forward');
-  assert.equal(second.probe.start, 296);
-  assert.equal(second.probe.end, 316);
-  assert.equal(second.probe.tm, 64.11);
-  assert.equal(second.probe.tm_delta_vs_primer, 7.31);
-  assert.equal(second.probe.distance_from_primer_3prime, 67);
-  // The gap lies between the reverse primer (upstream) and the forward primer.
-  assert.ok(second.probe.start > second.reverse.end && second.probe.end < second.forward.start);
+  // 0.16.0: the forward roles being genuine means the probe is always read
+  // outward from the primer whose 3' end opens the amplicon's gap. On every
+  // assay on this slice that is the FORWARD primer, so the old "reverse primer
+  // is the stem" pinned assay no longer exists — it only arose while the
+  // designer labelled the roles the other way round. Assert the general rule
+  // over ALL assays instead of pinning one instance, so what is tested is the
+  // contract and not the fixture.
+  for (const assay of assays.assays) {
+    assert.ok(assay.forward.start < assay.reverse.start, 'the reported forward primer must be upstream of the reverse primer');
+    // The stem is the primer whose 3' end is on the gap's left edge (below).
+    const stemEnd = assay.forward.end < assay.reverse.end ? assay.forward.end : assay.reverse.end;
+    assert.equal(assay.probe.distance_from_primer_3prime, assay.probe.start - stemEnd, 'distance is measured from the 3\' end of the primer that opens the gap');
+    assert.ok(assay.probe.start > assay.forward.end && assay.probe.end < assay.reverse.start, 'the probe sits in the amplicon\'s gap, clear of both primers');
+  }
+  // On this slice the gap is always opened by the forward primer, so the
+  // standard (forward) orientation is what actually gets used.
+  assert.ok(assays.assays.every((assay) => assay.probe.orientation === 'forward'), 'a probe inside a correctly-oriented amplicon is read on the top strand');
 
   // Widening the probe window must be able to rescue an amplicon that had none.
   const widened = await run('molbio_design_taqman', { sequence: slice, probe_tm_min: 45, probe_len_min: 16, min_tm_delta: 0 });
@@ -2119,26 +2234,41 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(status('ClaI').status, 'blocked');
   assert.deepEqual(status('ClaI').blocked_by, ['dam']);
   assert.equal(status('ClaI').sites, 3);
-  assert.equal(status('BamHI').status, 'impaired');
-  assert.deepEqual(status('BamHI').impaired_by, ['dam']);
+  // 0.16.0: BamHI is NOT Dam-sensitive. Its GGATCC site does contain GATC, but
+  // REBASE records cleavage of BamHI on Dam-methylated DNA (MS#909) and NEB
+  // lists it as "Not sensitive to dam, dcm or mammalian CpG methylation" — so
+  // this assertion is inverted from the pre-0.16.0 expectation, which is what
+  // `benchmark/README.md`'s Findings entry was about.
+  assert.equal(status('BamHI').status, 'cuts');
+  assert.deepEqual(status('BamHI').blocked_by, []);
+  assert.deepEqual(status('BamHI').impaired_by, []);
   assert.equal(status('EcoRI').status, 'cuts');
   assert.equal(status('HindIII').status, 'cuts');
   assert.equal(status('XbaI').status, 'cuts');
   assert.equal(status('KpnI').status, 'no_site');
-  assert.deepEqual(methyl.usable, ['EcoRI', 'HindIII', 'XbaI']);
-  assert.deepEqual(methyl.risky, ['BamHI', 'ClaI']);
+  // 0.16.0: KpnI and BamHI left the sensitivity table, but they are still in the
+  // DEFAULT enzyme selection because the selection is driven by the digest
+  // table, not by the methylation table — dropping an enzyme from the latter
+  // must not silently drop it from the report.
+  assert.ok(methyl.per_enzyme.some((entry) => entry.enzyme === 'BamHI'), 'BamHI is still checked by default');
+  assert.ok(methyl.per_enzyme.some((entry) => entry.enzyme === 'KpnI'), 'KpnI is still checked by default');
+  assert.deepEqual(methyl.usable, ['BamHI', 'EcoRI', 'HindIII', 'XbaI']);
+  assert.deepEqual(methyl.risky, ['ClaI']);
   assert.deepEqual(methyl.blocked, [{ enzyme: 'ClaI', by: ['dam'], sites: 3 }]);
-  assert.deepEqual(methyl.impaired, [{ enzyme: 'BamHI', by: ['dam'], sites: 1 }]);
+  assert.deepEqual(methyl.impaired, []);
   // Fragment arithmetic: EcoRI cuts at 44 linear -> 43 + 30.
   const eco = methyl.recommended.find((entry) => entry.enzyme === 'EcoRI');
   assert.deepEqual(eco.cut_positions, [44]);
   assert.deepEqual(eco.fragments, [43, 30]);
   assert.ok(methyl.advice.some((line) => line.includes('BLOCKED by dam methylation') && line.includes('EcoRI')), 'the advice names the blocked enzyme and survivable alternatives');
   // The Dam marks are only attributed to an enzyme whose own site they overlap.
+  // 0.16.0: the GGATCC-internal GATC now reports BstYI (which IS Dam-impaired)
+  // and no longer reports BamHI.
   const damSites = methyl.methylation_sites.filter((site) => site.mark === 'dam');
   assert.equal(damSites.length, 4);
   assert.deepEqual(damSites[0], { mark: 'dam', site: 'GATC', start: 1, sequence: 'GATC', strand: 'top', overlapping_enzymes: ['ClaI'] });
-  assert.deepEqual(damSites[3].overlapping_enzymes, ['BamHI', 'BstYI']);
+  assert.deepEqual(damSites[3].overlapping_enzymes, ['BstYI']);
+  assert.ok(!damSites.some((site) => site.overlapping_enzymes.includes('BamHI')), 'BamHI is never reported as Dam-affected');
   const dcmSite = methyl.methylation_sites.find((site) => site.mark === 'dcm');
   assert.deepEqual(dcmSite, { mark: 'dcm', site: 'CCWGG', start: 53, sequence: 'CCTGG', strand: 'top', overlapping_enzymes: [] });
   assert.ok(methyl.notes.some((note) => note.includes('quick reference')), 'the reference-data caveat travels with the result');
@@ -2148,8 +2278,16 @@ function splicedToGenomic(splicedPos, exons) {
   const plasmidMethyl = await run('molbio_methylation_check', { sequence: puc118.sequence });
   assert.deepEqual(plasmidMethyl.sites_by_mark, { dam: 15, dcm: 5 });
   assert.equal(plasmidMethyl.blocked.length, 0);
-  assert.deepEqual(plasmidMethyl.impaired, [{ enzyme: 'BamHI', by: ['dam'], sites: 1 }, { enzyme: 'BstYI', by: ['dam'], sites: 7 }]);
-  assert.ok(plasmidMethyl.usable.includes('KpnI') && plasmidMethyl.usable.includes('XbaI'));
+  // 0.16.0: BamHI dropped out of this list; BstYI's 7 Dam-overlapping sites stay.
+  assert.deepEqual(plasmidMethyl.impaired, [{ enzyme: 'BstYI', by: ['dam'], sites: 7 }]);
+  // 0.16.0: the default selection is "enzymes named by the methylation table
+  // that the digest table can also cut", so dropping KpnI from the table also
+  // drops it from this default list — that is intended (it has no dam/dcm mark
+  // to report), and `enzymes: ['common']` still reaches it.
+  assert.ok(plasmidMethyl.usable.includes('XbaI'), 'a sensitive-but-unblocked enzyme with a site stays usable');
+  assert.ok(!plasmidMethyl.per_enzyme.some((entry) => entry.enzyme === 'KpnI'), 'KpnI is no longer swept into the methylation default selection');
+  const common = await run('molbio_methylation_check', { sequence: puc118.sequence, enzymes: ['common'] });
+  assert.ok(common.per_enzyme.some((entry) => entry.enzyme === 'KpnI'), 'the whole digest table is still reachable via enzymes: ["common"]');
   assert.ok(plasmidMethyl.per_enzyme.some((entry) => entry.status === 'no_site'), 'enzymes with no site are reported as no_site, not as blocked');
 
   await assert.rejects(() => run('molbio_methylation_check', { sequence: blockedSequence, marks: [] }), /marks must be a non-empty array/);
