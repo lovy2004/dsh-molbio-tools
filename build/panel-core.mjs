@@ -107,6 +107,14 @@ export function decodeWorkspaceBytes(data) {
 }
 
 /**
+ * Guard for the browser half only: the panel parses on the UI thread, so an
+ * oversized file is refused with a message instead of freezing the tab.
+ * Deliberately much smaller than the host's read cap (`MAX_DNA_BYTES` in
+ * index.mjs, 50 MB) — the host does not block a user interface.
+ */
+export const MAX_PANEL_FILE_BYTES = 5 * 1024 * 1024;
+
+/**
  * Parse one workspace file into the record the panel renders.
  * @param {string} name file name (drives the parser choice).
  * @param {Uint8Array} bytes raw file content.
@@ -119,6 +127,11 @@ export function parsePlasmidFile(name, bytes) {
   const parser = PLASMID_EXTENSIONS[extension];
   if (parser === undefined) {
     throw new MolbioInputError(`the panel does not open .${extension} files; use .dna, .gb, .gbk or .genbank`);
+  }
+  if (bytes.length > MAX_PANEL_FILE_BYTES) {
+    throw new MolbioInputError(
+      `${name} is ${(bytes.length / 1024 / 1024).toFixed(1)} MB; the panel opens sequence files up to ${MAX_PANEL_FILE_BYTES / 1024 / 1024} MB`,
+    );
   }
   const parsed = parser === 'snapgene'
     ? parseSnapGeneBytes(bytes)

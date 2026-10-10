@@ -33,6 +33,7 @@ const { assertSupportedJsonSchema, validateJsonSchemaValue } = dshTools;
 const plugin = await import('../index.mjs');
 const lib = await import('../lib.mjs');
 const view = await import('../view.mjs');
+const snapgene = await import('../snapgene.mjs');
 const { reverseComplement: reverseComplementOf } = lib;
 
 // The auto-view opener would spawn real viewer processes on the machine
@@ -452,6 +453,42 @@ function makeTemplate(n, seed = 42) {
   assert.equal(promoter.label, 'Ptac');
 }
 
+// ── multi-part GenBank locations (reported, never silently flattened) ───────
+
+{
+  const record = (location, label) => [
+    'LOCUS       TESTREC               200 bp    DNA     circular SYN 01-JAN-2020',
+    'FEATURES             Location/Qualifiers',
+    `     misc_feature    ${location}`,
+    `                     /label="${label}"`,
+    'ORIGIN',
+    '        1 acgtacgtac gtacgtacgt acgtacgtac gtgtacgtac gtacgtacgt acgtacgtac',
+    '//',
+  ].join('\n');
+  const genbankRender = (value) => registered.find((t) => t.name === 'molbio_parse_genbank').output.render({}, value)[0].text;
+
+  // start/end stay the OUTER bound (unchanged arithmetic), and the span is flagged.
+  const spliced = await run('molbio_parse_genbank', { genbank: record('join(1..10,50..60)', 'spliced') });
+  const [feature] = spliced.features;
+  assert.deepEqual([feature.start, feature.end, feature.strand], [1, 60, 1], 'the outer bound is unchanged');
+  assert.equal(feature.location, 'join(1..10,50..60)', 'the original location string travels with the feature');
+  assert.equal(feature.multi_part, true, 'a join() is reported as multi-part instead of a bare 1-60');
+  assert.match(genbankRender(spliced), /\[multi-part join\(1\.\.10,50\.\.60\)\]/, 'the rendered text says so too');
+  assert.match(genbankRender(spliced), /note: 1 feature\(s\) have a multi-part location/);
+
+  // A contiguous location is NOT flagged, so the flag keeps its meaning.
+  const plain = await run('molbio_parse_genbank', { genbank: record('20..30', 'plain') });
+  assert.deepEqual([plain.features[0].multi_part, plain.features[0].location], [false, '20..30']);
+  assert.ok(!genbankRender(plain).includes('multi-part'), 'no note when every location is contiguous');
+
+  // `^` is the point BETWEEN two bases. Deleting the caret used to glue the two
+  // numbers together (123^124 -> 123124, a coordinate off the sequence).
+  const junction = await run('molbio_parse_genbank', { genbank: record('123^124', 'insertion point') });
+  assert.deepEqual([junction.features[0].start, junction.features[0].end], [123, 124], 'a ^ junction reads as 123..124');
+  assert.equal(junction.features[0].location, '123^124', 'and its original spelling is kept');
+  assert.equal(junction.features[0].multi_part, false, 'a junction is one point, not several parts');
+}
+
 // ── plasmid map ─────────────────────────────────────────────────────────────
 
 {
@@ -505,6 +542,12 @@ function makeTemplate(n, seed = 42) {
   const renderBlocks = registered.find((t) => t.name === 'molbio_parse_snapgene').output.render({}, out);
   assert.ok(renderBlocks[0].text.includes('pUC118'));
 
+  // pUC118's AmpR really is TWO segments in the file (2102-2893 + 2894-2962).
+  // The outer bound is unchanged; the split is now visible instead of implied.
+  assert.deepEqual([ampR.location, ampR.multi_part], ['2102-2893,2894-2962', true]);
+  assert.match(renderBlocks[0].text, /\[multi-part 2102-2893,2894-2962\]/);
+  assert.equal(out.features_skipped, undefined, 'every pUC118 feature parsed, so nothing is reported as skipped');
+
   const map = await run('molbio_plasmid_map_file', { path: 'C:/tmp/pUC118.dna', enzymes: ['EcoRI', 'HindIII', 'PstI'] });
   assert.equal(map.name, 'pUC118');
   assert.equal(map.length, 3162);
@@ -520,6 +563,47 @@ function makeTemplate(n, seed = 42) {
 
   // unsupported extension
   await assert.rejects(() => run('molbio_plasmid_map_file', { path: 'C:/tmp/x.fasta' }), /unsupported file type/);
+}
+
+// ── a dropped SnapGene annotation is counted, not lost ──────────────────────
+
+{
+  const stats = { skipped: 0 };
+  const features = snapgene.parseFeaturesXml([
+    '<Features>',
+    '  <Feature name="keep" type="CDS" directionality="1"><Segment range="10-20" /></Feature>',
+    '  <Feature name="bad" type="CDS" directionality="1"><Segment range="not-a-range" /></Feature>',
+    '  <Feature name="empty" type="CDS" directionality="1"></Feature>',
+    '</Features>',
+  ].join('\n'), stats);
+  assert.equal(features.length, 1, 'only the readable feature is returned');
+  assert.equal(stats.skipped, 2, 'both unreadable features are counted');
+  assert.equal(features[0].multi_part, false);
+  assert.equal(features[0].location, '10-20');
+}
+
+// ── a large ASCII sequence packet decodes instead of overflowing the stack ──
+
+{
+  // `String.fromCharCode(...bytes)` passed every byte as a call argument and
+  // threw "Maximum call stack size exceeded" at roughly 200 kb — an ordinary
+  // BAC-sized plasmid, and far below the 50 MB the host is willing to read.
+  const bases = 'ACGT'.repeat(50000); // 200,000 bases
+  const bytes = new Uint8Array(5 + 4 + 5 + 1 + bases.length);
+  const view = new DataView(bytes.buffer);
+  let off = 0;
+  bytes[off] = 0x09; // cookie packet (its payload is not inspected)
+  view.setUint32(off + 1, 4);
+  off += 5 + 4;
+  bytes[off] = 0x00; // DNA packet: one flags byte, then the bases
+  view.setUint32(off + 1, 1 + bases.length);
+  bytes[off + 5] = 0x01; // circular
+  for (let i = 0; i < bases.length; i++) bytes[off + 6 + i] = bases.charCodeAt(i);
+
+  const record = snapgene.parseSnapGeneBytes(bytes);
+  assert.equal(record.length, 200000, 'a 200 kb sequence decodes instead of overflowing the call stack');
+  assert.equal(record.sequence, bases);
+  assert.equal(record.topology, 'circular');
 }
 
 // ── cloning (batch 1) ───────────────────────────────────────────────────────

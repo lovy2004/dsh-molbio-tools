@@ -1,0 +1,66 @@
+name: tests
+
+# The suite IS this project's quality model — every guard in `docs/rules.md`
+# rule 9 ("a guard nobody has seen fail is not a guard") only counts if it runs
+# where a change lands. Before this file existed, `npm test` ran when a human
+# remembered to type it, which is how two released versions once lived only in a
+# working tree.
+#
+# ── Why windows-latest ──────────────────────────────────────────────────────
+#
+# The fixtures drive the tools through a mock filesystem whose session cwd is
+# `C:/tmp`, and several assertions compare the path a tool RETURNS after
+# `node:path.join` has run on it (`'C:\\tmp\\pTEST.svg'` in test/smoke.mjs). On a
+# Linux runner those comparisons fail on the separator alone, reporting the
+# host's path semantics instead of anything this repository owns. Windows is
+# also the platform this package is developed and verified on. Making the suite
+# platform-neutral (normalise before comparing) is worth doing, but it is a
+# change to the suite, not a prerequisite for CI.
+#
+# ── Why the harness is installed, and why it is PINNED ──────────────────────
+#
+# Several guards compare this repository against the DSH it ships for
+# (`test/contract.mjs`, `preset-health.mjs`, `drift-probe.mjs`, `smoke.mjs`,
+# `client-mount.mjs`, `map-card.mjs`, `benchmark-profile.mjs` resolve it through
+# `benchmark/harness.mjs`). That harness comes from npm, so CI installs it —
+# pinned to the exact baseline `docs/roadmap.md` declares the package verified
+# against. Pinning is the point: with `@latest` a red build would mean "DSH
+# moved", and the guards would be reporting the environment instead of this
+# repository. Bumping the pin is a deliberate act, done together with the
+# `docs/workflow.md` post-upgrade pass — never as a drive-by.
+#
+# The package itself has no dependencies, so there is no install step for it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install the DSH baseline the guards compare against
+        run: npm install --global @deepseek-ai/dsh@0.1.7-rc.1
+
+      # Printed before the suite so a failure is readable: most "could not locate
+      # an installed DSH harness" exits become self-explanatory from this line.
+      - name: Report the harness the guards resolved
+        run: node --input-type=module -e "import { findHarnessRoot } from './benchmark/harness.mjs'; const root = findHarnessRoot(); if (root === undefined) { console.error('no harness resolved'); process.exit(1); } console.log('harness:', root);"
+
+      - name: Run the suite
+        run: npm test
+        env:
+          # The image tools open the generated SVG with the desktop opener unless
+          # this is set (docs/rules.md rule 8).
+          MOLBIO_AUTO_VIEW: '0'

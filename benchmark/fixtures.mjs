@@ -163,6 +163,62 @@ export function buildFixtures(makeTemplate) {
     AMPHIPATHIC_PEPTIDE: 'LKKLLKKLLKKLLK',
     /** A 33-residue peptide for the MS-digestion and hydropathy tasks. */
     DIGEST_PEPTIDE: 'MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ',
+    /**
+     * The two experiment tables the chart tasks read (`molbio_plot`).
+     *
+     * They live here rather than as committed files because `verifications.mjs`
+     * (the offline grader) and `run.mjs` (the model runner) must seed BYTE-
+     * identical workspaces — the whole point of the offline gate is that a
+     * `where: "tool"` expectation is checked against what the tool really
+     * prints for the very input the model gets.
+     *
+     * `CT_CSV`: six wells per strain. The ko group carries a 34.5 outlier, so a
+     * box plot has something to report beyond its fences and the histogram has
+     * a real tail.
+     * `GROWTH_CSV`: three strains, four time points each, x values that repeat
+     * across the strains — which is exactly what a grouped line chart splits.
+     */
+    CT_CSV: [
+      'sample,strain,ct',
+      '1,wt,22.1', '2,wt,22.4', '3,wt,23.9', '4,wt,22.8', '5,wt,22.2', '6,wt,22.6',
+      '7,ko,19.4', '8,ko,19.1', '9,ko,19.8', '10,ko,34.5', '11,ko,19.3', '12,ko,19.6',
+      '',
+    ].join('\n'),
+    GROWTH_CSV: [
+      'time_h,strain,od600',
+      '0,wt,0.05', '2,wt,0.21', '4,wt,0.82', '6,wt,1.41',
+      '0,mutA,0.04', '2,mutA,0.11', '4,mutA,0.31', '6,mutA,0.52',
+      '0,rescue,0.05', '2,rescue,0.19', '4,rescue,0.74', '6,rescue,1.28',
+      '',
+    ].join('\n'),
+    /**
+     * A differential-expression table for the volcano task (batch 2).
+     *
+     * Six genes: two clearly up (large positive log2FC, small p), two clearly
+     * down, and two that must NOT be called significant — one with a large
+     * effect and a useless p, one with a good p and no effect. Those last two
+     * are the point: a chart that coloured purely by fold change, or purely by
+     * p, would call them both hits.
+     */
+    DE_CSV: [
+      'gene,log2fc,p',
+      'KRAS,2.5,0.0001', 'EGFR,1.8,0.01', 'MYC,0.3,0.6',
+      'TP53,-2.2,0.002', 'BRCA1,-1.9,0.004', 'PTEN,-0.2,0.9',
+      '',
+    ].join('\n'),
+    /**
+     * A wide-format matrix for the heatmap task (batch 2): the first column is
+     * the row label and every other column is a sample, which is the shape a
+     * real expression table arrives in.
+     */
+    HEATMAP_TSV: [
+      'gene\tctrl1\tctrl2\tctrl3\tkd1\tkd2\tkd3',
+      'KRAS\t0.10\t0.20\t0.05\t2.10\t1.90\t2.30',
+      'EGFR\t-0.30\t-0.10\t-0.20\t1.40\t1.20\t1.50',
+      'MYC\t0.05\t-0.10\t0.10\t0.20\t0.10\t0.30',
+      'TP53\t-1.20\t-1.10\t-1.30\t0.40\t0.50\t0.30',
+      '',
+    ].join('\n'),
   };
 }
 

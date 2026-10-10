@@ -13,20 +13,38 @@
  *
  * THE ONE HARD RULE
  * -----------------
- * Everything here emits the SVG subset `svgpng.mjs` can rasterize — `rect`,
+ * Everything here emits the SVG subset the RASTERIZER can draw — `rect`,
  * `line`, `circle`, `polygon`, `polyline`, `path`, `text` (including `<tspan>`
- * runs, up to one level of nesting), hex colours, plain numeric attributes. No
- * `<g>`, no `transform`, no `url(#…)`, no gradients, no CSS classes. That is not
- * a style preference: `test/svgpng.mjs` asserts on REAL renderer output that
- * `unsupported` and `missing_glyphs` are both EMPTY, and `attach_image` hands
- * those pixels to the model. A new construct must therefore fail in the test
- * suite rather than vanish from the picture.
+ * runs, up to one level of nesting), hex colours, plain numeric attributes, and
+ * `transform` only in the rotate-about-a-point form `textRun` emits. No `<g>`,
+ * no `url(#…)`, no gradients, no CSS classes. That is not a style preference:
+ * the rasterizer's test asserts on REAL renderer output that `unsupported` and
+ * `missing_glyphs` are both EMPTY, and `attach_image` hands those pixels to the
+ * model. A new construct must therefore fail in the test suite rather than
+ * vanish from the picture.
  *
- * Host side only: like `svgpng.mjs` this module is not part of the client
- * bundle.
+ * Naming the rasterizer or its Node built-in in a comment here is FINE now:
+ * the browser-half guard reads the artifact's own module registrations rather
+ * than searching its text, so prose cannot trip it. (It used to be a substring
+ * search, which is exactly why the old comments in this file and in
+ * `font-metrics.mjs` tiptoed around the name. See `docs/roadmap.md` 3.5.)
  */
 
 import { textWidth, wrapText } from './font-metrics.mjs';
+
+/**
+ * The font stack every figure declares.
+ *
+ * Times New Roman first, then the metric-compatible clones a Linux or macOS
+ * machine actually has (Liberation Serif and Nimbus Roman are Times-metric, so
+ * a figure does not reflow between machines), then the generic serif family.
+ *
+ * This affects the SVG only — the text a viewer, a journal's production system,
+ * or Illustrator sees. The rasterizer draws its own built-in polyline font and
+ * ignores `font-family` entirely, so the `attach_image` PNG is unaffected by
+ * this choice (see the README note on that hand-off).
+ */
+export const FIGURE_FONT = "'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif";
 
 /** Escape the five XML characters that cannot appear raw in text/attributes. */
 export function escapeXml(text) {
@@ -110,11 +128,18 @@ export function niceTicks(domain, count = 5) {
  * "what am I looking at", is repeated as a visible caption when `caption` is
  * true.
  *
+ * The figure font stack is declared HERE, once, and inherited by every label.
+ * It used to be repeated on each `<text>` (each of these figures has 7-84 of
+ * them); the root is the single place that reaches all of them, including any
+ * text a caller writes directly into `body`. `font-family` is an inherited SVG
+ * property, and the browser half appends these documents as real DOM nodes
+ * (see `build/client-entry.mjs`), so inheritance reaches them there too.
+ *
  * @returns {string}
  */
 export function svgDocument({ width, height, title = '', description = '', background = '#ffffff', body = '', extra = '' }) {
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${round(width)}" height="${round(height)}" viewBox="0 0 ${round(width)} ${round(height)}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${round(width)}" height="${round(height)}" viewBox="0 0 ${round(width)} ${round(height)}" font-family="${FIGURE_FONT}">`,
     title === '' ? '' : `<title>${escapeXml(title)}</title>`,
     description === '' ? '' : `<desc>${escapeXml(description)}</desc>`,
     extra,
@@ -149,13 +174,20 @@ export function panel({ x, y, width, height, title = '', subtitle = '', fill = '
   };
 }
 
-/** One text run. `anchor` is start/middle/end; `rotate` turns about (x, y). */
-export function textRun({ x, y, text, size = 11, fill = '#24292f', anchor = 'start', weight = '', rotate = 0, baseline = '', family = 'sans-serif', length = undefined, spacing = undefined }) {
+/**
+ * One text run. `anchor` is start/middle/end; `rotate` turns about (x, y).
+ *
+ * No `font-family`: these documents declare the figure font ONCE on the root
+ * `<svg>` (see `svgDocument`) and every run inherits it. `family` remains as an
+ * escape hatch for a caller that genuinely needs one run in another face — pass
+ * it and the attribute comes back — but the default is to inherit.
+ */
+export function textRun({ x, y, text, size = 11, fill = '#24292f', anchor = 'start', weight = '', rotate = 0, baseline = '', family = undefined, length = undefined, spacing = undefined }) {
   const attributes = [
     `x="${round(x)}"`,
     `y="${round(y)}"`,
     `font-size="${round(size)}"`,
-    `font-family="${family}"`,
+    family === undefined ? '' : `font-family="${family}"`,
     `fill="${fill}"`,
     anchor === 'start' ? '' : `text-anchor="${anchor}"`,
     weight === '' ? '' : `font-weight="${weight}"`,
@@ -179,10 +211,10 @@ export function textRun({ x, y, text, size = 11, fill = '#24292f', anchor = 'sta
  * `anchor` applies identically to every line, so a centred or end-anchored
  * multi-line block stays aligned as a block.
  *
- * Host side only. `svgpng.mjs` rasterizes this form; the browser half never
- * sees it (see this module's header).
+ * Rasterized by the host-side rasterizer; the browser half does not draw this
+ * form (see this module's header on why the filename stays out of this file).
  */
-export function textSpanLines({ x, y, lines, size = 11, fill = '#24292f', anchor = 'start', weight = '', baseline = '', lineHeight = undefined, family = 'sans-serif' }) {
+export function textSpanLines({ x, y, lines, size = 11, fill = '#24292f', anchor = 'start', weight = '', baseline = '', lineHeight = undefined, family = undefined }) {
   const step = lineHeight ?? size * 1.2;
   const body = lines
     .map((line, index) => {
@@ -199,7 +231,7 @@ export function textSpanLines({ x, y, lines, size = 11, fill = '#24292f', anchor
     `x="${round(x)}"`,
     `y="${round(y)}"`,
     `font-size="${round(size)}"`,
-    `font-family="${family}"`,
+    family === undefined ? '' : `font-family="${family}"`,
     `fill="${fill}"`,
     anchor === 'start' ? '' : `text-anchor="${anchor}"`,
     weight === '' ? '' : `font-weight="${weight}"`,
@@ -364,4 +396,51 @@ export function greyRamp(t) {
   const channel = Math.round(255 - value * 170);
   const hex = channel.toString(16).padStart(2, '0');
   return `#${hex}${hex}${hex}`;
+}
+
+/**
+ * Continuous colour ramps as lists of hex stops, low end first.
+ *
+ * Discreteness is the caller's choice: `colorRamp` interpolates between the
+ * stops, which is what a heatmap cell or a graded scatter mark needs. The
+ * existing `greyRamp`/`qualityColor` stay as they are — they are banded by
+ * design (a phred score has three meaningful zones, not a continuum).
+ *
+ * Names are conventional in scientific plotting, so a reader who sees
+ * `divergingRedBlue` knows what to expect: a neutral light midpoint for a value
+ * that means "no change", and saturated ends for the two directions.
+ */
+export const COLOR_RAMPS = {
+  /** White-centred, blue (low) → red (high). The signed-value default. */
+  divergingRedBlue: ['#2166ac', '#67a9cf', '#f7f7f7', '#ef8a62', '#b2182b'],
+  /** Perceptually ordered dark→light (viridis-like): for a magnitude. */
+  viridis: ['#440154', '#414487', '#2a788e', '#22a884', '#7ad151', '#fde725'],
+  /** White→deep blue: magnitude where dark means more. */
+  blues: ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b'],
+  /** The grey ramp as stops, for a neutral scale. */
+  greys: ['#ffffff', '#d9d9d9', '#969696', '#525252', '#000000'],
+};
+
+/**
+ * Map `t` in 0..1 onto a named ramp, interpolating between its stops.
+ * Values outside 0..1 clamp to the ends (a heatmap must not produce a colour
+ * that is not on the scale).
+ */
+export function colorRamp(t, name = 'divergingRedBlue') {
+  const stops = COLOR_RAMPS[name] ?? COLOR_RAMPS.divergingRedBlue;
+  const value = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
+  const span = stops.length - 1;
+  const scaled = value * span;
+  const lower = Math.min(span, Math.floor(scaled));
+  const upper = Math.min(span, lower + 1);
+  const mix = scaled - lower;
+  const from = hexToRgb(stops[lower]);
+  const to = hexToRgb(stops[upper]);
+  const channels = [0, 1, 2].map((index) => Math.round(from[index] + (to[index] - from[index]) * mix));
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** "#4a7dd8" → [74, 125, 216]. */
+function hexToRgb(hex) {
+  return [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
 }

@@ -408,10 +408,17 @@ check('the committed client artifact is what the current sources build (no stale
     .filter((rel) => existsSync(join(packageRoot, rel)));
   assert.ok(artifacts.length > 0, 'at least one client artifact exists');
 
+  // Compare CONTENT, not bytes. The generator emits LF, while a checkout with
+  // `core.autocrlf=true` materializes the artifact with CRLF — so a raw
+  // comparison reports "stale" for a file whose content is identical, which is
+  // how a real staleness signal gets ignored. `build/client-bundle.mjs --check`
+  // normalizes for exactly this reason; line endings are not what this guards.
+  const lf = (value) => value.replace(/\r\n/g, '\n');
+
   for (const rel of artifacts) {
-    const committed = readFileSync(join(packageRoot, rel), 'utf8');
+    const committed = lf(readFileSync(join(packageRoot, rel), 'utf8'));
     const owner = JSON.parse(readFileSync(join(packageRoot, dirname(rel), '..', 'package.json'), 'utf8'));
-    const { text: expected } = generator.renderBundle(owner.name);
+    const expected = lf(generator.renderBundle(owner.name).text);
     assert.equal(
       committed,
       expected,
@@ -422,6 +429,83 @@ check('the committed client artifact is what the current sources build (no stale
   // The check is only meaningful if the generator actually ran: a graph of zero
   // modules would compare two identical empty strings.
   assert.ok(generator.order.length > 0, 'the generator walked a non-empty module graph');
+});
+
+/**
+ * The longest top-level declaration in a module, with the `export` keyword
+ * removed — the form the bundler leaves in the artifact, because it lowers
+ * `export function f` to `function f` and records `f` in the exports object.
+ *
+ * Used by the content guard below, which is the check the equality guard above
+ * cannot be: that one compares the committed artifact against what the sources
+ * build NOW, so it is blind to an artifact that was built from an older graph
+ * and left stale. A module that never made it into an old build is simply absent
+ * from both sides of that comparison once the older generator also skipped it.
+ */
+function declarationExemplar(source) {
+  const matches = [...source.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+[A-Za-z_$][\w$]*/gm)];
+  if (matches.length === 0) return undefined;
+  const longest = matches.reduce((best, match) => (match[0].length > best.length ? match[0] : best), '');
+  return longest.replace(/^export\s+/, '');
+}
+
+check('the committed client artifact really contains every module the bundler declares', async () => {
+  // WHY THIS EXISTS. `lib/client.js` and `packages/molbio-panel/lib/client.js`
+  // shipped for several versions WITHOUT `svgio.mjs` and `font-metrics.mjs` in
+  // them, even though the panel imports both (it draws plasmid maps and sequence
+  // logos with them) and the generator had always listed them. Nothing caught it:
+  // the equality guard above asks "is the committed artifact what the current
+  // sources build", and that question is answered the same way whether or not an
+  // older build dropped a module. Only checking the artifact's CONTENT closes it.
+  const { createGenerator } = await import(pathToFileURL(join(packageRoot, 'build', 'client-bundle-core.mjs')).href);
+  const generator = await createGenerator({
+    entry: join(packageRoot, 'build', 'client-entry.mjs'),
+    baseDir: packageRoot,
+  });
+
+  const artifacts = ['lib/client.js', join('packages', 'molbio-panel', 'lib', 'client.js')]
+    .filter((rel) => existsSync(join(packageRoot, rel)));
+  assert.ok(artifacts.length > 0, 'at least one client artifact exists');
+
+  // Modules whose only exports are re-exports carry no declaration of their own;
+  // their content is checked through the module they re-export from.
+  const declarationless = [];
+  let checked = 0;
+  for (const rel of artifacts) {
+    const artifact = readFileSync(join(packageRoot, rel), 'utf8');
+    for (const path of generator.order) {
+      const probe = declarationExemplar(readFileSync(path, 'utf8'));
+      if (probe === undefined) {
+        if (rel === artifacts[0]) declarationless.push(path.replace(packageRoot, '.'));
+        continue;
+      }
+      assert.ok(
+        artifact.includes(probe),
+        `${rel} does not contain ${path.replace(packageRoot, '.')}'s declaration \`${probe}\` — the artifact was built from an incomplete module graph. Run \`npm run build:client\` and commit the result.`,
+      );
+      if (rel === artifacts[0]) checked += 1;
+    }
+  }
+
+  // Guards that can silently stop checking anything are worse than no guard: the
+  // count and the content assertion on the probe itself are what hold the search
+  // honest.
+  assert.ok(checked >= 15, `the content guard actually checked a meaningful number of modules (checked ${checked})`);
+  assert.ok(
+    checked + declarationless.length === generator.order.length,
+    `${generator.order.length} module(s) in the graph, ${checked} checked by declaration + ${declarationless.length} with no declaration to check`,
+  );
+  for (const rel of ['lib.mjs', 'svgio.mjs', 'logo.mjs', 'font-metrics.mjs']) {
+    assert.ok(
+      generator.order.some((path) => path.endsWith(rel)),
+      `${rel} is in the module graph (the modules this guard exists for)`,
+    );
+  }
+  // Negative control: the search must be capable of reporting absence.
+  assert.ok(
+    !readFileSync(join(packageRoot, artifacts[0]), 'utf8').includes('function thisDeclarationDoesNotExist'),
+    'the content search reports absence for a declaration that is not there',
+  );
 });
 
 // ── 11. the image hand-off contract (v18) ───────────────────────────────────

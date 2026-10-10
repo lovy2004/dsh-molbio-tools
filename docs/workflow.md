@@ -247,7 +247,7 @@ offline 证明"期望值仍然为真"，model 测量"模型是否仍然会用"�
 | 改了**几个**工具 | `--tools a,b,c`（也接受 `molbio_` 前缀与 `primer_*` 通配） | 并集 |
 | 改了**一个**已知任务 | `--task <id>` | 一题 |
 | 改了**共享模块**，想知道影响面 | `--list --changed`（不花钱） | 0 |
-| 发版前 | `node --run bench:full` | 49 题 |
+| 发版前 | `node --run bench:full` | 55 题 |
 | 只是提交文档 | `--changed` 会回答"无事可跑" | 0 |
 
 ```bash

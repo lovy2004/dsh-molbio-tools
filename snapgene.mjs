@@ -5,8 +5,11 @@
  * packets — [1 byte type][4 bytes big-endian length][data] — starting with a
  * cookie packet (type 0x09), then the DNA packet (type 0x00: flags + sequence
  * bytes), then optional XML packets: 0x0A features, 0x05 primers, 0x06 notes,
- * 0x08 additional sequence properties. Older packed binary features are not
- * supported. Zero dependencies: includes a minimal XML scanner.
+ * 0x08 additional sequence properties. A feature whose Segments name more than
+ * one range is reduced to its OUTER bounds and flagged `multi_part`, with the
+ * ranges kept as `location`; features whose location cannot be read at all are
+ * counted in `features_skipped` instead of vanishing. Older packed binary
+ * features are not supported. Zero dependencies: includes a minimal XML scanner.
  */
 
 import { MolbioInputError } from './lib.mjs';
@@ -149,7 +152,8 @@ export function parseSnapGeneBytes(bytes) {
     off += 5 + length;
   }
 
-  const features = featuresXml !== undefined ? parseFeaturesXml(featuresXml) : [];
+  const featureStats = { skipped: 0 };
+  const features = featuresXml !== undefined ? parseFeaturesXml(featuresXml, featureStats) : [];
   const primers = primersXml !== undefined ? parsePrimersXml(primersXml) : [];
   const notes = notesXml !== undefined ? parseNotesXml(notesXml) : {};
   const name = notes.customMapLabel ?? notes.accession ?? 'snapgene';
@@ -159,6 +163,7 @@ export function parseSnapGeneBytes(bytes) {
     length: sequence.length,
     topology: (flags & 0x01) !== 0 ? 'circular' : 'linear',
     features,
+    ...featureStats.skipped > 0 ? { features_skipped: featureStats.skipped } : {},
     sequence,
     ...notes.description !== undefined ? { description: notes.description } : {},
     ...notes.accession !== undefined ? { accession: notes.accession } : {},
@@ -173,8 +178,8 @@ export function parseSnapGeneBytes(bytes) {
  */
 function decodeSequence(seqBytes) {
   if (seqBytes.length === 0) return '';
-  const ascii = [...seqBytes].every((byte) => byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122);
-  if (ascii) return String.fromCharCode(...seqBytes).toUpperCase();
+  const ascii = seqBytes.every((byte) => byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122);
+  if (ascii) return decodeAscii(seqBytes);
   let out = '';
   for (const byte of seqBytes) {
     const base = 'ACGT'[byte & 0x7f];
@@ -187,8 +192,33 @@ function decodeSequence(seqBytes) {
   return out.toUpperCase();
 }
 
-/** Parse the 0x0A features packet (XML). */
-export function parseFeaturesXml(xml) {
+/**
+ * Latin-1 decode of the ASCII form, in bounded chunks.
+ *
+ * `String.fromCharCode(...bytes)` passes every byte as a call argument, which
+ * overflows the engine's argument limit at roughly 200 kb ("Maximum call stack
+ * size exceeded") — an ordinary BAC-sized plasmid, and far below the 50 MB the
+ * host is willing to read — so the spread has to be bounded. 8192 is
+ * comfortably under the limit and keeps the intermediate strings small.
+ */
+const DECODE_CHUNK = 8192;
+
+function decodeAscii(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += DECODE_CHUNK) {
+    out += String.fromCharCode(...bytes.subarray(i, i + DECODE_CHUNK));
+  }
+  return out.toUpperCase();
+}
+
+/**
+ * Parse the 0x0A features packet (XML).
+ *
+ * `stats`, when given, receives `skipped`: the number of Feature elements that
+ * had no readable range and were therefore dropped. A dropped annotation is
+ * reported by the caller rather than lost without a trace.
+ */
+export function parseFeaturesXml(xml, stats = undefined) {
   const doc = parseXml(xml);
   const root = childrenOf(doc, 'Features')[0];
   if (root === undefined) throw new MolbioInputError('SnapGene features packet is not in the expected XML format');
@@ -199,6 +229,7 @@ export function parseFeaturesXml(xml) {
     const directionality = Number(attrOf(element, 'directionality') ?? 0);
     let start = Infinity;
     let end = 0;
+    const ranges = [];
     for (const segment of childrenOf(element, 'Segment')) {
       const range = attrOf(segment, 'range') ?? '';
       for (const part of range.split(':')) {
@@ -208,9 +239,13 @@ export function parseFeaturesXml(xml) {
         const b = match[2] === undefined ? a : Number(match[2]);
         start = Math.min(start, a);
         end = Math.max(end, b);
+        ranges.push(match[2] === undefined ? String(a) : `${a}-${b}`);
       }
     }
-    if (!Number.isFinite(start)) continue;
+    if (!Number.isFinite(start)) {
+      if (stats !== undefined) stats.skipped += 1;
+      continue;
+    }
     const qualifiers = {};
     for (const q of childrenOf(element, 'Q')) {
       const key = attrOf(q, 'name');
@@ -225,6 +260,8 @@ export function parseFeaturesXml(xml) {
       end,
       strand: directionality === 1 ? 1 : directionality === 2 ? -1 : 1,
       label: name !== '' ? name : qualifiers.product ?? qualifiers.gene ?? type,
+      location: ranges.join(','),
+      multi_part: ranges.length > 1,
       ...qualifiers.gene !== undefined ? { gene: qualifiers.gene } : {},
       ...qualifiers.product !== undefined ? { product: qualifiers.product } : {},
       ...qualifiers.note !== undefined ? { note: qualifiers.note } : {},

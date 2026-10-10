@@ -1,0 +1,21 @@
+# ── Line endings ──────────────────────────────────────────────────────────────
+#
+# Everything textual is LF, in the repository AND in the working tree.
+#
+# Why this file exists: `test/contract.mjs` compares the committed client
+# artifacts (`lib/client.js`, `packages/molbio-panel/lib/client.js`) with what
+# `build/client-bundle-core.mjs` generates from the sources, and the generator
+# emits LF. With `core.autocrlf=true` (the Windows default) a fresh checkout
+# materializes those artifacts with CRLF, so the guard reported "stale" for a
+# file whose CONTENT was identical — the false positive that gets a real
+# staleness signal ignored. The comparison normalizes line endings too, but the
+# repository should not hand out the mismatch in the first place.
+#
+# One-time consequence of adding this: none for this tree (every tracked text
+# file was already LF); a checkout that had CRLF files will see them rewritten.
+* text=auto eol=lf
+
+# Binary fixtures: never "normalize" these. `test/fixtures/pUC118.dna` is a real
+# SnapGene file, and .ab1 traces are binary too.
+*.dna binary
+*.ab1 binary

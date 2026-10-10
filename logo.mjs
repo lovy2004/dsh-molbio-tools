@@ -29,6 +29,7 @@
  */
 
 import { MolbioInputError } from './lib.mjs';
+import { FIGURE_FONT } from './svgio.mjs';
 
 /** Bitmask of the ACGT set each IUPAC symbol expands to (A=1, C=2, G=4, T=8). */
 const EXPANDED_BASES = {
@@ -157,7 +158,7 @@ export function renderSequenceLogo(compositions, options = {}) {
   const yFor = (value) => top + plotHeight - (value / maxBits) * plotHeight;
   const parts = [];
 
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="Helvetica, Arial, sans-serif">`);
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${FIGURE_FONT}">`);
   parts.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"/>`);
   parts.push(`<text x="${left}" y="30" font-size="16" font-weight="bold" fill="#1a1a1a">${escapeXml(options.title ?? 'Sequence logo')}</text>`);
   parts.push(`<text x="${left}" y="50" font-size="11" fill="#555555">${escapeXml(headerText(compositions, scoreType, options))}</text>`);
@@ -209,7 +210,7 @@ export function renderSequenceLogo(compositions, options = {}) {
       const fontSize = Math.min(glyphHeight / 0.74, maxFontSize);
       // Baseline AT the slot's bottom keeps a capped (narrow-column) glyph
       // resting on the letter below it instead of floating between slots.
-      parts.push(`<text x="${round(centerX)}" y="${round(yBottom)}" font-size="${round(fontSize)}" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" textLength="${round(columnWidth * 0.92)}" lengthAdjust="spacingAndGlyphs" fill="${LOGO_COLORS[base]}">${base}</text>`);
+      parts.push(`<text x="${round(centerX)}" y="${round(yBottom)}" font-size="${round(fontSize)}" text-anchor="middle" textLength="${round(columnWidth * 0.92)}" lengthAdjust="spacingAndGlyphs" fill="${LOGO_COLORS[base]}">${base}</text>`);
       cursor += bits;
     }
     if (item.bits > 0.0005) {

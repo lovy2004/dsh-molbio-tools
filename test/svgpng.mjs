@@ -22,9 +22,10 @@
  *   node test/svgpng.mjs --preview <dir>  # render one document per plot type
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inflateSync } from 'node:zlib';
 
 import { DEFAULT_SUPERSAMPLE, FONT_CHARACTERS, MAX_RASTER_PIXELS, encodePng, parseColor, renderSvgToPng } from '../svgpng.mjs';
@@ -522,16 +523,63 @@ test('the wrapped tree labels really do not overlap their neighbours', () => {
   assert.ok([...dense.slice(tail)].some((value) => !value), 'the last line is followed by blank rows, not clipped at the canvas edge');
 });
 
-test('the rasterizer stays out of the browser half', () => {
-  // It imports node:zlib, so pulling it into the client bundle would break the
-  // panel in a browser. The bundler takes an explicit module list; this keeps
-  // svgpng.mjs off it.
+test('the rasterizer stays out of the browser half', async () => {
+  // It imports a Node built-in (zlib), so pulling it into the client bundle
+  // would break the panel in a browser.
+  //
+  // This assertion is STRUCTURAL on purpose. It used to be
+  // `bundle.includes('svgpng')`, and that substring search was a false-positive
+  // machine: the rasterizer's filename appearing in a COMMENT in any bundled
+  // module tripped it (which really happened — see `docs/roadmap.md` 3.5, and
+  // the wording rule in `svgio.mjs` / `font-metrics.mjs` that it forced).
+  // Registrations are what matter, so the artifact is read back through its own
+  // loader table and the question asked of the module graph is "is the
+  // rasterizer in it", answered by the same code the bundler uses.
+  const { moduleIdsFromArtifact, createGenerator } = await import(
+    pathToFileURL(join(packageRoot, 'build', 'client-bundle-core.mjs')).href
+  );
+  const generator = await createGenerator({
+    entry: join(packageRoot, 'build', 'client-entry.mjs'),
+    baseDir: packageRoot,
+  });
+  const rasterizer = generator.idOf(join(packageRoot, 'svgpng.mjs'));
+  assert.equal(rasterizer, 'svgpng.mjs', 'the rasterizer has the id this check looks for');
+
+  // 1. The artifact does not register it, and registers nothing else unexpected.
   const artifact = join(packageRoot, 'lib', 'client.js');
-  const bundle = readFileSync(artifact, 'utf8');
-  assert.ok(!bundle.includes('svgpng'), 'the client artifact does not embed svgpng.mjs');
-  assert.ok(!bundle.includes('node:zlib'), 'and does not embed node:zlib');
-  const core = readFileSync(join(packageRoot, 'build', 'client-bundle-core.mjs'), 'utf8');
-  assert.ok(!core.includes('svgpng'), 'the client bundle module list does not include svgpng.mjs');
+  const registered = moduleIdsFromArtifact(readFileSync(artifact, 'utf8'));
+  assert.ok(registered.size > 0, 'the artifact registers modules (a parse that found none would pass vacuously)');
+  assert.ok(!registered.has(rasterizer), `the client artifact does not bundle ${rasterizer}`);
+  assert.ok(
+    registered.has('svgio.mjs') && registered.has('font-metrics.mjs'),
+    'and it DOES bundle the two modules that share the drawing path with it',
+  );
+  for (const id of registered) {
+    assert.ok(generator.ids.includes(id), `the artifact registers only modules the bundler declares (${id} is not declared)`);
+  }
+
+  // 2. The module GRAPH does not reach it either, and the graph does reach the
+  //    modules that live beside it. Both directions matter: a graph that
+  //    contained nothing would satisfy direction one for the wrong reason.
+  assert.ok(!generator.ids.includes(rasterizer), `the browser module graph does not reach ${rasterizer}`);
+  for (const id of ['svgio.mjs', 'font-metrics.mjs', 'logo.mjs', 'plasmid.mjs']) {
+    assert.ok(generator.ids.includes(id), `the browser module graph does reach ${id}`);
+  }
+
+  // 3. The mechanism that keeps it out still fires. Without this, an edit that
+  //    quietly disabled the guard would leave every assertion above green,
+  //    because they only observe the CURRENT graph.
+  const probeDir = mkdtempSync(join(tmpdir(), 'molbio-nodefree-'));
+  try {
+    writeFileSync(join(probeDir, 'probe.mjs'), "import { deflateSync } from 'node:zlib';\nexport const x = deflateSync;\n");
+    await assert.rejects(
+      () => createGenerator({ entry: join(probeDir, 'probe.mjs'), baseDir: probeDir }),
+      /must stay Node-free/,
+      'a module importing a Node built-in is refused by the bundler',
+    );
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
 });
 
 // ── samples: one document per plot type, exactly what a tool would write ─────

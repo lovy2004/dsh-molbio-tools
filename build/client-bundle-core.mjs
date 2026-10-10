@@ -122,6 +122,54 @@ function moduleId(path, baseDir) {
 }
 
 /**
+ * The module ids an artifact actually registers, read back from its own loader
+ * table (`__molbio_modules["id"] = () => {`).
+ *
+ * This is the STRUCTURAL way to ask "is module X in the bundle". The obvious
+ * alternatives are both traps:
+ *  - `text.includes('svgpng')` is a substring search over the whole artifact, so
+ *    a COMMENT in any bundled module that mentions the name reports a false hit;
+ *  - walking the graph yourself duplicates the collection logic and can drift.
+ * Here the artifact is parsed for the keys it registers, so only real
+ * registrations count.
+ *
+ * Prose is skipped, not merely unlikely: the bundler embeds every module's
+ * source verbatim, comments included, so a commented-out registration is a real
+ * possibility and matching one would recreate the very false positive this
+ * function exists to remove. Line comments and `/* … *\/` blocks are tracked
+ * while scanning; a line inside either is ignored.
+ */
+export function moduleIdsFromArtifact(text) {
+  const ids = new Set();
+  const pattern = /^\s*__molbio_modules\[("(?:[^"\\]|\\.)*")\] = \(\) => \{/;
+  let inBlockComment = false;
+  for (const rawLine of text.split('\n')) {
+    let line = rawLine;
+    if (inBlockComment) {
+      const end = line.indexOf('*/');
+      if (end === -1) continue;
+      line = line.slice(end + 2);
+      inBlockComment = false;
+    }
+    const comment = line.indexOf('//');
+    line = comment === -1 ? line : line.slice(0, comment);
+    const block = line.indexOf('/*');
+    if (block !== -1) {
+      const end = line.indexOf('*/', block + 2);
+      if (end === -1) {
+        line = line.slice(0, block);
+        inBlockComment = true;
+      } else {
+        line = line.slice(0, block) + line.slice(end + 2);
+      }
+    }
+    const match = pattern.exec(line);
+    if (match !== null) ids.add(JSON.parse(match[1]));
+  }
+  return ids;
+}
+
+/**
  * The generator. `entry` is the client entry module, `baseDir` the directory
  * module ids are relative to (the plugin package root, so BOTH targets emit the
  * same ids and differ only in the registration id).
@@ -202,13 +250,29 @@ export async function createGenerator({ entry, baseDir }) {
     parts.push('\t}');
     parts.push('});');
     parts.push('');
-    return { text: parts.join('\n'), externalSpecifiers };
+    const text = parts.join('\n');
+
+    // Self-check at BUILD time, not only in the test suite: the artifact must
+    // register exactly the modules this graph walked. A silent mismatch here
+    // (a module in the graph that never reached the text) is the failure mode
+    // that once shipped `svgio.mjs` and `font-metrics.mjs` missing from the
+    // panel bundle while every existing guard stayed green.
+    const declared = order.map((path) => moduleId(path, baseDir));
+    const registered = moduleIdsFromArtifact(text);
+    const absent = declared.filter((id) => !registered.has(id));
+    if (absent.length > 0) {
+      throw new Error(`bundle for ${packageName} registers ${registered.size} module(s) but the graph declares ${declared.length}; missing: ${absent.join(', ')}`);
+    }
+
+    return { text, externalSpecifiers };
   }
 
   return {
     order,
     /** Module ids in registration order, for diagnostics. */
     ids: order.map((path) => moduleId(path, baseDir)),
+    /** The id one source path registers under — the structural key for "is X bundled?". */
+    idOf: (path) => moduleId(path, baseDir),
     renderBundle,
   };
 }

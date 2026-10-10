@@ -139,10 +139,109 @@
       "timeout_ms": 300000,
       "expect_tools": ["molbio_plot"],
       "assertions": [
-        { "where": "tool", "pattern": "fold\\.svg \\(bar, 2 points\\)" },
-        { "where": "tool", "pattern": "fit\\.svg \\(scatter, 4 points\\)" },
+        { "where": "tool", "pattern": "fold\\.svg \\(bar\\): 2 points" },
+        { "where": "tool", "pattern": "fit\\.svg \\(scatter\\): 4 points" },
         { "where": "answer", "pattern": "fold\\.svg" },
         { "where": "answer", "pattern": "fit\\.svg" }
+      ]
+    },
+    {
+      "id": "chart-box-plot",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "The qPCR run is in the workspace as ct.csv (columns sample, strain, ct). Compare the two strains as a box plot — I want to see the spread and any wells that failed, and I need the median Ct of each strain. Write it to ct-box.svg.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "ct-box\\.svg \\(box\\): 2 series, 12 values" },
+        { "where": "tool", "pattern": "wt: 6 values, median 22\\.5", "note": "the per-series summary the tool renders" },
+        { "where": "tool", "pattern": "ko: 6 values, median 19\\.5" },
+        { "where": "tool", "pattern": "outliers 34\\.5", "note": "the failed well is reported as an outlier, not folded into the whisker" },
+        { "where": "answer", "pattern": "22\\.5" },
+        { "where": "answer", "pattern": "19\\.5" },
+        { "where": "answer", "pattern": "outlier|34\\.5" }
+      ]
+    },
+    {
+      "id": "chart-line-series",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "growth.csv in the workspace has time_h, strain and od600 columns for three strains. Plot the growth curves as one line chart with a line per strain, and tell me which strain grew least. Write it to growth.svg.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "growth\\.svg \\(line\\): 3 series, 12 points", "note": "the group column must split the table into three series, not plot one jumbled line" },
+        { "where": "tool", "pattern": "y 0\\.04 to 1\\.41", "note": "the y extent of the real table, so the tool was given the data and not an empty frame" },
+        { "where": "answer", "pattern": "mutA" },
+        { "where": "answer", "pattern": "0\\.52|0\\.5\\b" }
+      ]
+    },
+    {
+      "id": "chart-histogram",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "From the same ct.csv, show me the distribution of all twelve Ct values as a histogram so I can see how the run behaved overall. Write it to ct-hist.svg.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "ct-hist\\.svg \\(histogram\\): 12 values in \\d+ bins", "note": "the bin count is chosen by the tool's own rule, so only its shape is pinned" },
+        { "where": "tool", "pattern": "freedman-diaconis", "note": "the default binning rule is named in the output" },
+        { "where": "tool", "pattern": "range 19\\.1 to 34\\.5", "note": "the sample's real extent" },
+        { "where": "answer", "pattern": "19\\.1" },
+        { "where": "answer", "pattern": "34\\.5" }
+      ]
+    },
+    {
+      "id": "chart-violin",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "For the same ct.csv, I want to see the SHAPE of the distribution per strain, not just a box — one of the strains has a failed well that a box hides. Draw it as a violin plot with the median and IQR marked, write it to ct-violin.svg, and tell me each strain's median and whether the outlier changes the shape.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "ct-violin\\.svg \\(violin\\): 2 series, 12 values" },
+        { "where": "tool", "pattern": "wt: 6 values, median 22\\.5" },
+        { "where": "tool", "pattern": "ko: 6 values, median 19\\.5" },
+        { "where": "tool", "pattern": "outliers 34\\.5" },
+        { "where": "answer", "pattern": "22\\.5" },
+        { "where": "answer", "pattern": "19\\.5" },
+        { "where": "answer", "pattern": "outlier|34\\.5|spike|tail" }
+      ]
+    },
+    {
+      "id": "chart-volcano",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "de.csv in the workspace has a differential-expression table with gene, log2fc and p columns. Draw a volcano plot to de.svg and tell me which genes are both significantly changed AND substantially changed — I do not want genes that only move a little, or only look good on one of the two axes.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "volcano\\.svg \\(volcano\\): 6 points, 4 significant", "note": "MYC (big fold, useless p) and PTEN (good p, no fold) must NOT be counted" },
+        { "where": "tool", "pattern": "2 up, 2 down" },
+        { "where": "answer", "pattern": "KRAS" },
+        { "where": "answer", "pattern": "TP53" },
+        { "where": "answer", "pattern": "MYC|PTEN", "note": "the two genes the model must EXCLUDE — naming them as excluded is fine, so this only requires they were considered" }
+      ]
+    },
+    {
+      "id": "chart-heatmap",
+      "category": "visualisation",
+      "tier": "full",
+      "covers": ["molbio_plot"],
+      "instruction": "expression.tsv is a wide table: the first column is the gene name and the rest are samples. Draw it as a heatmap to heatmap.svg, row-scaled so the genes are comparable, and tell me which genes separate the control columns from the kd columns.",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_plot"],
+      "assertions": [
+        { "where": "tool", "pattern": "heatmap\\.svg \\(heatmap\\): 4 rows x 6 columns, 24 cells" },
+        { "where": "tool", "pattern": "scale row_zscore", "note": "the requested display transform is named in the output" },
+        { "where": "tool", "pattern": "colour divergingRedBlue", "note": "negative values select the diverging ramp automatically" },
+        { "where": "answer", "pattern": "KRAS" },
+        { "where": "answer", "pattern": "TP53" }
       ]
     }
   ]

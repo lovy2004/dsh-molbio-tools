@@ -30,16 +30,17 @@
 
 ## 60 秒速览
 
-- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**57 个 `molbio_*` 工具**。
-- **基线**：DSH **0.1.7-rc.1**；`package.json` 版本 0.16.0。
+- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**57 个 `molbio_*` 工具**（其中
+  `molbio_plot` 一个工具承载 8 种图表）。
+- **基线**：DSH **0.1.7-rc.1**；`package.json` 版本 0.18.0。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
   **两个独立的 npm 条目**，必须分别发布。
 - **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 是**空列表**，
   57 个工具由 preset 层承载，只会挂进 "Molecular Biology Lab" 模式。
-- **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`）+ 客户端四套件 +
+- **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`/`charts`）+ 客户端四套件 +
   DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
   benchmark 的 profile 守卫与**离线期望值校验**。
-- **benchmark**：`npm run bench` 用真实模型跑 15 条任务，分
+- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 55 题），分
   `tools_ok` / `args_ok` / `answer_ok` 三项判分；`npm run bench:offline` 零成本校验期望值。
 
 包内目录结构：

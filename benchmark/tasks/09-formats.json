@@ -50,6 +50,7 @@
       "assertions": [
         { "where": "tool", "pattern": "pUC118 \\(U07649\\): 3162 bp, circular" },
         { "where": "tool", "pattern": "CDS 2102-2962", "note": "the AmpR feature's span, from the GenBank record" },
+        { "where": "tool", "pattern": "\\[multi-part 2102-2893,2894-2962\\]", "note": "the SAME AmpR is stored as two segments in the SnapGene file; reducing it to an outer bound must SAY so, so that 2102-2962 is never silently read as one contiguous span" },
         { "where": "tool", "pattern": "beta-lactamase", "note": "the /product qualifier" },
         { "where": "answer", "pattern": "U07649" },
         { "where": "answer", "pattern": "2102" },

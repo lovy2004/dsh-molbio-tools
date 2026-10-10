@@ -64,6 +64,15 @@ export function revComp(sequence) {
 const FILE_SETUPS = {
   'fasta-tools': { 'seqs.fa': FIXTURES.FASTA_TEXT, 'reads.fq': FIXTURES.FASTQ_TEXT },
   'sanger-verify': { 'read.seq': FIXTURES.SANGER_TEXT },
+  // The chart tasks read a table, and the runner seeds the SAME texts (see
+  // FILE_FIXTURES in run.mjs), so the offline expectation is checked against
+  // the output the tool really produces for the model's input.
+  'chart-box-plot': { 'ct.csv': FIXTURES.CT_CSV },
+  'chart-line-series': { 'growth.csv': FIXTURES.GROWTH_CSV },
+  'chart-histogram': { 'ct.csv': FIXTURES.CT_CSV },
+  'chart-violin': { 'ct.csv': FIXTURES.CT_CSV },
+  'chart-volcano': { 'de.csv': FIXTURES.DE_CSV },
+  'chart-heatmap': { 'expression.tsv': FIXTURES.HEATMAP_TSV },
 };
 
 /**
@@ -255,6 +264,26 @@ export function invocationsFor(task) {
     plotting: () => [
       { tool: 'molbio_plot', args: { kind: 'bar', labels: ['ctrl', 'kd'], values: [1, 6.65], errors: [0.1, 0.9], output_path: join(puc118Root(), 'fold.svg') } },
       { tool: 'molbio_plot', args: { kind: 'scatter', x: [1, 2, 3, 4], y: [2.1, 3.9, 6.2, 7.8], fit: true, output_path: join(puc118Root(), 'fit.svg') } },
+    ],
+    // The chart tasks read their table from the workspace, so the invocation has
+    // to point at the same seeded file the task instruction names (`at`).
+    'chart-box-plot': () => [
+      { tool: 'molbio_plot', args: { kind: 'box', data_path: at('ct.csv'), columns: { value: 'ct', group: 'strain' }, output_path: at('ct-box.svg'), title: 'Ct by strain', y_label: 'Ct' } },
+    ],
+    'chart-line-series': () => [
+      { tool: 'molbio_plot', args: { kind: 'line', data_path: at('growth.csv'), columns: { x: 'time_h', y: 'od600', group: 'strain' }, output_path: at('growth.svg'), title: 'Growth curves' } },
+    ],
+    'chart-histogram': () => [
+      { tool: 'molbio_plot', args: { kind: 'histogram', data_path: at('ct.csv'), columns: { value: 'ct' }, output_path: at('ct-hist.svg'), title: 'Ct distribution' } },
+    ],
+    'chart-violin': () => [
+      { tool: 'molbio_plot', args: { kind: 'violin', data_path: at('ct.csv'), columns: { value: 'ct', group: 'strain' }, output_path: at('ct-violin.svg'), title: 'Ct by strain', y_label: 'Ct' } },
+    ],
+    'chart-volcano': () => [
+      { tool: 'molbio_plot', args: { kind: 'volcano', data_path: at('de.csv'), columns: { x: 'log2fc', y: 'p', label: 'gene' }, label_top: 2, output_path: at('volcano.svg'), title: 'Differential expression' } },
+    ],
+    'chart-heatmap': () => [
+      { tool: 'molbio_plot', args: { kind: 'heatmap', data_path: at('expression.tsv'), scale: 'row_zscore', output_path: at('heatmap.svg'), title: 'Expression by gene' } },
     ],
 
     // alignment and composition

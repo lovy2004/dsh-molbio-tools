@@ -15,6 +15,7 @@
 
 import { MolbioInputError } from './lib.mjs';
 import { normalizeProtein } from './protein.mjs';
+import { FIGURE_FONT } from './svgio.mjs';
 
 /** Kyte-Doolittle hydropathy scale (same numbers protein.mjs uses for GRAVY). */
 export const KYTE_DOOLITTLE = {
@@ -187,7 +188,7 @@ const RESIDUE_RADIUS = 17;
 export function renderHelicalWheel(wheel, { title = 'Helical wheel' } = {}) {
   const center = WHEEL_SIZE / 2;
   const parts = [];
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHEEL_SIZE} ${WHEEL_SIZE}" font-family="system-ui, sans-serif" role="img">`);
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHEEL_SIZE} ${WHEEL_SIZE}" font-family="${FIGURE_FONT}" role="img">`);
   parts.push(`<title>${escapeXml(`${title}: residues ${wheel.start}-${wheel.end}, hydrophobic moment ${wheel.hydrophobic_moment}`)}</title>`);
   parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
   parts.push(`<text x="${center}" y="26" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);
@@ -305,7 +306,7 @@ export function renderHydropathyPlot(profile, { title = 'Kyte-Doolittle hydropat
   const xOf = (position) => PLOT_MARGIN.left + (length <= 1 ? plotWidth / 2 : ((position - 1) / (length - 1)) * plotWidth);
   const yOf = (value) => PLOT_MARGIN.top + ((max - value) / (max - min)) * plotHeight;
   const parts = [];
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}" font-family="system-ui, sans-serif" role="img">`);
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}" font-family="${FIGURE_FONT}" role="img">`);
   parts.push(`<title>${escapeXml(`${title}: ${length} residues, window ${window}, ${profile.peaks.length} peak(s) above ${threshold}`)}</title>`);
   parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
   parts.push(`<text x="${PLOT_WIDTH / 2}" y="26" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);

@@ -45,6 +45,12 @@ import { FIXTURES } from './sequences.mjs';
 const FILE_FIXTURES = {
   'fasta-tools': { 'seqs.fa': FIXTURES.FASTA_TEXT, 'reads.fq': FIXTURES.FASTQ_TEXT },
   'sanger-verify': { 'read.seq': FIXTURES.SANGER_TEXT },
+  'chart-box-plot': { 'ct.csv': FIXTURES.CT_CSV },
+  'chart-line-series': { 'growth.csv': FIXTURES.GROWTH_CSV },
+  'chart-histogram': { 'ct.csv': FIXTURES.CT_CSV },
+  'chart-violin': { 'ct.csv': FIXTURES.CT_CSV },
+  'chart-volcano': { 'de.csv': FIXTURES.DE_CSV },
+  'chart-heatmap': { 'expression.tsv': FIXTURES.HEATMAP_TSV },
 };
 
 /** Where reports land. Gitignored: a report is a measurement, not a source. */

@@ -283,6 +283,19 @@ const genbankText = [
 const fromText = panelCore.parsePlasmidFile('pTEST.gb', new TextEncoder().encode(genbankText));
 assert.equal(fromText.name, 'pTEST');
 assert.equal(fromText.length, 100);
+
+// The browser half refuses an oversized file with a message instead of parsing
+// it on the UI thread (the host's own read cap is deliberately larger).
+assert.equal(panelCore.MAX_PANEL_FILE_BYTES, 5 * 1024 * 1024);
+assert.throws(
+  () => panelCore.parsePlasmidFile('pTEST.gb', new Uint8Array(panelCore.MAX_PANEL_FILE_BYTES + 1)),
+  /panel opens sequence files up to 5 MB/,
+  'an oversized file is refused, not parsed',
+);
+assert.doesNotThrow(
+  () => panelCore.parsePlasmidFile('pTEST.gb', new TextEncoder().encode(genbankText)),
+  'a file at or under the cap still parses',
+);
 assert.equal(fromText.features.length, 1);
 assert.deepEqual([fromText.features[0].label, fromText.features[0].start, fromText.features[0].end], ['Test protein', 1, 60]);
 // the same text through the Node parser gives the same record

@@ -51,6 +51,20 @@ import {
 import { readTraceFromBytes, verifySanger } from './sanger.mjs';
 import { CODON_HOSTS, codonOptimize, peptideDigest, proteinProperties } from './protein.mjs';
 import { linearFit, renderBarChart, renderGel, renderScatterChart } from './plot.mjs';
+import {
+  SERIES_COLORS,
+  findColumn,
+  numericColumn,
+  numericColumns,
+  parseTable,
+  renderBoxPlot,
+  renderHeatmap,
+  renderHistogram,
+  renderLineChart,
+  renderViolinPlot,
+  renderVolcanoPlot,
+  resolveTable,
+} from './charts.mjs';
 import { entryStats, parseFasta, parseFastq, toFasta } from './seqio.mjs';
 import { addExperiment, addProtocol, loadRecords, recordPath, saveRecords, updateProtocol } from './records.mjs';
 import { toBibtex } from './papers.mjs';
@@ -1801,14 +1815,35 @@ const FEATURE_IN_SCHEMA = {
     label: { type: 'string' },
     type: { type: 'string', description: 'Feature type used for the color: CDS, gene, rep_origin, promoter, terminator, misc_feature, ...' },
     start: { type: 'integer', description: '1-based start position.' },
-    end: { type: 'integer', description: '1-based end position (inclusive).' },
+    end: { type: 'integer', description: '1-based end position (inclusive). For a multi-part location this is the OUTER bound, so it includes the gaps between the parts.' },
     strand: { type: 'integer', enum: [1, -1], description: '1 = forward, -1 = reverse complement (default 1).' },
+    location: { type: 'string', description: 'The location exactly as the source file wrote it (e.g. "join(1..10,50..60)"); start/end are only its outer bounds.' },
+    multi_part: { type: 'boolean', description: 'True when the location names several ranges, so that start-end spans a gap.' },
   },
 };
 
+/**
+ * One feature line's span for a parser's rendered text. A multi-part location
+ * says so inline: its start-end is the OUTER bound and covers the gaps, which
+ * is the number a reader would otherwise mistake for the feature's length.
+ */
+function featureSpan(feature) {
+  return feature.multi_part === true
+    ? `${feature.start}-${feature.end} [multi-part ${feature.location}]`
+    : `${feature.start}-${feature.end}`;
+}
+
+/** The trailing note a parser render adds when at least one feature was flattened. */
+function multiPartNote(features) {
+  const count = features.filter((feature) => feature.multi_part === true).length;
+  return count === 0
+    ? undefined
+    : `note: ${count} feature(s) have a multi-part location (join/order, or several segments); start-end is their OUTER bound and includes the gaps — read "location" for the parts.`;
+}
+
 const parseGenbankTool = define({
   name: 'molbio_parse_genbank',
-  description: 'Parse a GenBank flatfile record into structured data: locus name, accession, definition, topology (circular/linear), features (type, 1-based span, strand, label from /product or /gene), and the origin sequence. Feed the returned features to molbio_plasmid_map to draw the map.',
+  description: 'Parse a GenBank flatfile record into structured data: locus name, accession, definition, topology (circular/linear), features (type, 1-based span, strand, label from /product or /gene), and the origin sequence. A feature whose location has several parts (join/order) comes back with `multi_part: true` and its original location string: `start`/`end` are then only the OUTER bounds and include the gaps, so read `location` before calling it a length. Feed the returned features to molbio_plasmid_map to draw the map.',
   parameters: {
     type: 'object',
     required: ['genbank'],
@@ -1841,6 +1876,8 @@ const parseGenbankTool = define({
             gene: { type: 'string' },
             product: { type: 'string' },
             note: { type: 'string' },
+            location: { type: 'string' },
+            multi_part: { type: 'boolean' },
           },
         },
       },
@@ -1853,8 +1890,10 @@ const parseGenbankTool = define({
       `${value.features.length} feature(s):`,
     ];
     for (const feature of value.features) {
-      lines.push(`  ${feature.type} ${feature.start}-${feature.end} (${feature.strand === -1 ? 'complement' : 'forward'}): ${feature.label}`);
+      lines.push(`  ${feature.type} ${featureSpan(feature)} (${feature.strand === -1 ? 'complement' : 'forward'}): ${feature.label}`);
     }
+    const note = multiPartNote(value.features);
+    if (note !== undefined) lines.push(note);
     return lines.join('\n');
   },
   execute(args) {
@@ -2021,7 +2060,7 @@ async function readFileBytes(ctx, exec, path) {
 
 const parseSnapgeneTool = (ctx) => define({
   name: 'molbio_parse_snapgene',
-  description: 'Parse a SnapGene .dna file (binary) into structured data: map label, length, topology (circular/linear), annotated features (type, 1-based span, strand from SnapGene directionality, label), the full sequence, optional description/accession and any saved primers. Feed the returned features to molbio_plasmid_map to draw the map, or use molbio_plasmid_map_file to read a file and draw it in one call.',
+  description: 'Parse a SnapGene .dna file (binary) into structured data: map label, length, topology (circular/linear), annotated features (type, 1-based span, strand from SnapGene directionality, label), the full sequence, optional description/accession and any saved primers. A feature stored as several segments comes back with `multi_part: true` and its ranges in `location`: `start`/`end` are then only the OUTER bounds, so read `location` before calling it a length. `features_skipped` counts annotations that were dropped because their location could not be read. Feed the returned features to molbio_plasmid_map to draw the map, or use molbio_plasmid_map_file to read a file and draw it in one call.',
   parameters: {
     type: 'object',
     required: ['path'],
@@ -2054,9 +2093,12 @@ const parseSnapgeneTool = (ctx) => define({
             gene: { type: 'string' },
             product: { type: 'string' },
             note: { type: 'string' },
+            location: { type: 'string' },
+            multi_part: { type: 'boolean' },
           },
         },
       },
+      features_skipped: { type: 'integer' },
       sequence: { type: 'string' },
       primers: {
         type: 'array',
@@ -2081,8 +2123,11 @@ const parseSnapgeneTool = (ctx) => define({
       `${value.features.length} feature(s):`,
     ];
     for (const feature of value.features) {
-      lines.push(`  ${feature.type} ${feature.start}-${feature.end} (${feature.strand === -1 ? 'reverse' : 'forward'}): ${feature.label}`);
+      lines.push(`  ${feature.type} ${featureSpan(feature)} (${feature.strand === -1 ? 'reverse' : 'forward'}): ${feature.label}`);
     }
+    const note = multiPartNote(value.features);
+    if (note !== undefined) lines.push(note);
+    if (value.features_skipped !== undefined) lines.push(`note: ${value.features_skipped} feature(s) were dropped because their location could not be read.`);
     if (value.primers !== undefined && value.primers.length > 0) {
       lines.push(`${value.primers.length} saved primer(s):`);
       for (const primer of value.primers) lines.push(`  ${primer.name}${primer.sequence !== undefined ? ': ' + primer.sequence : ''}`);
@@ -2531,6 +2576,8 @@ const CLONE_FEATURE_SCHEMA = {
     product: { type: 'string' },
     note: { type: 'string' },
     spans_insertion: { type: 'boolean' },
+    location: { type: 'string', description: 'The feature\'s location in the SOURCE file. Present on dropped_features (the vector\'s own annotations); the remapped `features` of the final construct omit it, because its coordinates no longer match that string.' },
+    multi_part: { type: 'boolean' },
   },
 };
 
@@ -3714,25 +3761,115 @@ const qpcrEfficiencyTool = (ctx) => define({
   },
 });
 
+// ── charts from experiment data (molbio_plot) ───────────────────────────────
+
+/**
+ * Build the table a table-backed chart reads, honouring the "file OR inline
+ * text" choice and naming which one is missing when neither is given.
+ *
+ * `data_path` is resolved against the session workspace before it reaches the fs
+ * seam, exactly as the write path does: `ctx.fs.resolve` is handed whatever
+ * spelling the model used, so a bare `ct.csv` would otherwise be looked up
+ * outside the workspace. The read itself goes through `readFileBytes` (the
+ * sandboxed fs seam with the session policy) — never `node:fs`.
+ */
+async function resolveChartTable(ctx, exec, args) {
+  const fs = fsService(ctx);
+  const sandboxPolicyService = ctx.get('sandboxPolicy');
+  const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+  const table = await resolveTable(args, async (path) => {
+    const target = workspaceFilePath(path, exec, policy?.workspaceRoot);
+    // Check existence first: a missing file otherwise reaches the parser as an
+    // empty string and is reported as "the data has no rows", which sends the
+    // caller looking for a formatting problem instead of a wrong path.
+    const info = await fs.stat(await fs.resolve(target));
+    if (info === undefined) {
+      throw new MolbioInputError(`no file at ${target} — data_path is resolved against the session workspace, so pass a workspace-relative name or an absolute path inside it`);
+    }
+    const bytes = await readFileBytes(ctx, exec, target);
+    return new TextDecoder().decode(bytes).replace(/^\uFEFF/, '');
+  });
+  if (table === null) {
+    throw new MolbioInputError(`molbio_plot kind=${args.kind} needs data: pass data_path (a workspace CSV/TSV file) or data (inline CSV/TSV text), plus columns saying which column feeds the chart`);
+  }
+  return table;
+}
+
+/** Pick the single numeric series for a histogram or a one-column box plot. */
+function singleValueSeries(table, requested, kindLabel) {
+  if (requested !== undefined) return numericColumn(table, findColumn(table, requested, 'value_column'));
+  const candidates = numericColumns(table);
+  if (candidates.length === 1) return numericColumn(table, candidates[0]);
+  if (candidates.length === 0) {
+    throw new MolbioInputError(`the table has no numeric column for ${kindLabel}; columns are: ${table.column_names.map((name) => JSON.stringify(name)).join(', ')}`);
+  }
+  throw new MolbioInputError(`the table has ${candidates.length} numeric columns, so ${kindLabel} must say which one to use: pass value_column as one of ${candidates.map((column) => JSON.stringify(column.name)).join(', ')}`);
+}
+
+/** Row labels for a group column, in stable first-appearance order. */
+function groupValues(table, column) {
+  const order = [];
+  for (const value of column.values) {
+    const label = value === null ? '(missing)' : String(value);
+    if (!order.includes(label)) order.push(label);
+  }
+  return order;
+}
+
 const plotTool = (ctx) => define({
   safe: false,
   name: 'molbio_plot',
-  description: 'Draw a chart as a standalone SVG file in the workspace. kind=bar: labels/values with optional error bars (e.g. qPCR fold change mean ± SD). kind=scatter: x/y series, with fit=true adding a least-squares line. output_path is required — the SVG is written by the tool and then opened automatically with the OS default application (auto_view default true; set auto_view: false to skip).',
+  description: [
+    'Draw an experiment-data chart as a standalone SVG file in the workspace.',
+    'Data comes either from arrays in this call (bar, scatter) or from a workspace CSV/TSV table named by data_path — or inline table text via data — with `columns` saying which column feeds the chart.',
+    'kinds: bar = labelled values with optional error bars; scatter = x/y points with an optional least-squares line; line = one or more series against a numeric x (group_column splits them); histogram = distribution of one numeric column (bins default to the Freedman-Diaconis rule); box = box-and-whisker per group (Q1-Q3 box, median, 1.5xIQR whiskers, outliers as dots); violin = the same samples as a kernel-density silhouette with the box summary inside it; volcano = effect size against significance from log2 fold-change and p columns (this computes no statistics — it plots the p-values the table already carries); heatmap = a row-by-column matrix, one cell per value, with a colour bar.',
+    'Every computed statistic is returned in the result, so report those numbers instead of re-deriving them from the picture.',
+    'output_path is required. The tool writes the SVG itself and then opens it with the OS default application (auto_view default true; set false to skip) — never reproduce the SVG text in the conversation.',
+  ].join(' '),
   parameters: {
     type: 'object',
     required: ['kind', 'output_path'],
     properties: {
-      kind: { type: 'string', enum: ['bar', 'scatter'], description: 'Chart type.' },
+      kind: { type: 'string', enum: ['bar', 'scatter', 'line', 'histogram', 'box', 'violin', 'volcano', 'heatmap'], description: 'Chart type.' },
       output_path: requiredString('SVG file path in the workspace.'),
-      title: { type: 'string' },
-      x_label: { type: 'string' },
-      y_label: { type: 'string' },
-      labels: { type: 'array', items: { type: 'string' }, description: 'Bar labels.' },
-      values: { type: 'array', items: { type: 'number' }, description: 'Bar values.' },
-      errors: { type: 'array', items: { type: 'number' }, description: 'Optional error-bar half-widths (SD).' },
-      x: { type: 'array', items: { type: 'number' }, description: 'Scatter x values.' },
-      y: { type: 'array', items: { type: 'number' }, description: 'Scatter y values.' },
-      fit: { type: 'boolean', description: 'Scatter: draw the least-squares line (default false).' },
+      title: { type: 'string', description: 'Chart title.' },
+      x_label: { type: 'string', description: 'X axis label.' },
+      y_label: { type: 'string', description: 'Y axis label.' },
+      // ── data source ──────────────────────────────────────────────────────
+      data_path: { type: 'string', description: 'Workspace CSV/TSV file holding the data (every table kind).' },
+      data: { type: 'string', description: 'Inline CSV/TSV text, when the table is small enough to pass directly (alternative to data_path).' },
+      columns: {
+        type: 'object',
+        additionalProperties: false,
+        description: 'Which column feeds which role. Names must match the table header; when only one numeric column exists it may be omitted.',
+        properties: {
+          x: { type: 'string', description: 'line/histogram: the x (or sample) column. volcano: the log2 fold-change column.' },
+          y: { type: 'string', description: 'line: the y column. volcano: the p-value column.' },
+          group: { type: 'string', description: 'line/violin/box: split into one series (or box) per value.' },
+          value: { type: 'string', description: 'histogram/box/violin: the column of values to summarise. heatmap long form: the cell value.' },
+          label: { type: 'string', description: 'volcano: per-point label (e.g. a gene name); the top hits are annotated.' },
+          row: { type: 'string', description: 'heatmap long form: the row label column.' },
+          column: { type: 'string', description: 'heatmap long form: the column label column.' },
+        },
+      },
+      delimiter: { type: 'string', enum: ['auto', 'comma', 'tab', 'semicolon', 'pipe'], description: 'Field separator; default auto (detected from the header line).' },
+      header: { type: 'boolean', description: 'Whether the first row holds column names (default true).' },
+      // ── per-kind knobs ───────────────────────────────────────────────────
+      bins: { type: 'integer', description: 'histogram: number of bins; default the Freedman-Diaconis rule.' },
+      markers: { type: 'boolean', description: 'line: draw a dot at each point (default true).' },
+      bandwidth: { type: 'number', description: 'violin: kernel bandwidth; default Silverman rule of thumb.' },
+      fold_change_threshold: { type: 'number', description: 'volcano: |log2FC| at or above which a point counts as changed (default 1).' },
+      p_threshold: { type: 'number', description: 'volcano: p at or below which a point counts as significant (default 0.05).' },
+      label_top: { type: 'integer', description: 'volcano: annotate this many top hits by significance (default 0).' },
+      scale: { type: 'string', enum: ['none', 'row_zscore', 'log2'], description: 'heatmap: a DISPLAY transform applied before colouring (default none). row_zscore compares profiles whose levels differ; it is not a test.' },
+      color_scale: { type: 'string', enum: ['auto', 'divergingRedBlue', 'viridis', 'blues', 'greys'], description: 'heatmap: colour ramp; default auto (diverging when the data has negative values, sequential otherwise).' },
+      // ── inline forms (bar, scatter) ──────────────────────────────────────
+      labels: { type: 'array', items: { type: 'string' }, description: 'bar: category labels.' },
+      values: { type: 'array', items: { type: 'number' }, description: 'bar: values.' },
+      errors: { type: 'array', items: { type: 'number' }, description: 'bar: optional error-bar half-widths (SD).' },
+      x: { type: 'array', items: { type: 'number' }, description: 'scatter: x values.' },
+      y: { type: 'array', items: { type: 'number' }, description: 'scatter: y values.' },
+      fit: { type: 'boolean', description: 'scatter: draw the least-squares line (default false).' },
       auto_view: { type: 'boolean', description: 'Open the chart automatically with the OS default application (default true; set false to skip).' },
       ...ATTACH_IMAGE_PARAM,
     },
@@ -3740,11 +3877,14 @@ const plotTool = (ctx) => define({
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['plot_path', 'kind', 'points'],
+    required: ['plot_path', 'kind', 'stats'],
     properties: {
       plot_path: { type: 'string' },
-      kind: { type: 'string', enum: ['bar', 'scatter'] },
-      points: { type: 'integer' },
+      kind: { type: 'string', enum: ['bar', 'scatter', 'line', 'histogram', 'box', 'violin', 'volcano', 'heatmap'] },
+      // Whatever the chart computed: the five-number summary, the bin edges, the
+      // per-series extents. `additionalProperties: true` because the shape is
+      // kind-specific, and every value in it is lossless JSON.
+      stats: { type: 'object', additionalProperties: true },
       auto_viewed: { type: 'boolean' },
       image: ATTACHED_IMAGE_SCHEMA,
       image_note: { type: 'string' },
@@ -3752,50 +3892,264 @@ const plotTool = (ctx) => define({
   },
   render(value) {
     const viewNote = value.auto_viewed === true ? 'Opened automatically in your default viewer.' : 'Open the SVG file to view it.';
-    return `chart written to ${value.plot_path} (${value.kind}, ${value.points} points). ${viewNote}${imageNote(value)}`;
+    // Only the rendered projection reaches a live trace, so the numbers a chart
+    // actually computed are summarised HERE as well as returned in `stats`;
+    // otherwise the model has a picture it cannot read values off and no text
+    // to quote. Histograms are the exception: their bin edges are already in
+    // `stats`, and pasting 200 of them into the transcript is noise.
+    const round2 = (number) => (Number.isInteger(number) ? String(number) : String(Math.round(number * 100) / 100));
+    let detail;
+    if (value.kind === 'histogram') {
+      detail = `${value.stats.count} values in ${value.stats.bin_count} bins (${value.stats.rule}), range ${round2(value.stats.min)} to ${round2(value.stats.max)}`;
+    } else if (value.kind === 'box' || value.kind === 'violin') {
+      detail = `${value.stats.series.length} series, ${value.stats.total_values} values`;
+      for (const series of value.stats.series) {
+        const outliers = series.outliers === undefined
+          ? ''
+          : `, outliers ${series.outliers.length === 0 ? 'none' : series.outliers.map(round2).join(', ')}`;
+        detail += ` | ${series.label}: ${series.count} values, median ${round2(series.median)}, IQR ${round2(series.q1)}-${round2(series.q3)}, range ${round2(series.min)}-${round2(series.max)}${outliers}`;
+      }
+    } else if (value.kind === 'line') {
+      detail = `${value.stats.series.length} series, ${value.stats.point_count} points, x ${round2(value.stats.x_range[0])} to ${round2(value.stats.x_range[1])}, y ${round2(value.stats.y_range[0])} to ${round2(value.stats.y_range[1])}`;
+    } else if (value.kind === 'volcano') {
+      detail = `${value.stats.count} points, ${value.stats.significant_count} significant (|log2FC| >= ${round2(value.stats.fold_change_threshold)} and p <= ${round2(value.stats.p_threshold)}): ${value.stats.up_count} up, ${value.stats.down_count} down, max -log10 p ${round2(value.stats.max_significance)}`;
+    } else if (value.kind === 'heatmap') {
+      detail = `${value.stats.rows} rows x ${value.stats.columns} columns, ${value.stats.cells} cells, values ${round2(value.stats.min)} to ${round2(value.stats.max)}, scale ${value.stats.scale}, colour ${value.stats.color_scale}`;
+    } else {
+      detail = `${value.stats.points} points`;
+    }
+    return `chart written to ${value.plot_path} (${value.kind}): ${detail}. ${viewNote}${imageNote(value)}`;
   },
   async execute(args, exec) {
-    const fs = fsService(ctx);
-    const sandboxPolicyService = ctx.get('sandboxPolicy');
-    const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
-    const file = workspaceFilePath(args.output_path, exec, policy?.workspaceRoot);
+    const kind = args.kind;
     let svg;
-    let points;
-    if (args.kind === 'bar') {
+    let stats;
+    let defaultName;
+    if (kind === 'bar') {
       if (!Array.isArray(args.labels) || !Array.isArray(args.values) || args.labels.length !== args.values.length) {
         throw new MolbioInputError('kind=bar needs labels and values arrays of the same length');
       }
-      svg = renderBarChart({
-        title: args.title,
-        x_label: args.x_label,
-        y_label: args.y_label,
-        labels: args.labels,
-        values: args.values,
-        errors: args.errors,
-      });
-      points = args.values.length;
-    } else if (args.kind === 'scatter') {
+      svg = renderBarChart({ title: args.title, x_label: args.x_label, y_label: args.y_label, labels: args.labels, values: args.values, errors: args.errors });
+      stats = { points: args.values.length };
+      defaultName = 'bar-chart';
+    } else if (kind === 'scatter') {
       if (!Array.isArray(args.x) || !Array.isArray(args.y) || args.x.length !== args.y.length) {
         throw new MolbioInputError('kind=scatter needs x and y arrays of the same length');
       }
       const fit = args.fit === true ? linearFit(args.x, args.y) : undefined;
-      svg = renderScatterChart({
+      svg = renderScatterChart({ title: args.title, x_label: args.x_label, y_label: args.y_label, x: args.x, y: args.y, fit });
+      stats = { points: args.x.length, ...fit === undefined ? {} : { fit } };
+      defaultName = 'scatter';
+    } else if (kind === 'histogram') {
+      const table = await resolveChartTable(ctx, exec, args);
+      const values = singleValueSeries(table, args.columns?.value, 'a histogram');
+      const chart = renderHistogram({ title: args.title, x_label: args.x_label, y_label: args.y_label, values, bins: args.bins });
+      svg = chart.svg;
+      stats = { ...chart.stats, dropped_missing: table.row_count - chart.stats.count };
+      defaultName = 'histogram';
+    } else if (kind === 'box' || kind === 'violin') {
+      const table = await resolveChartTable(ctx, exec, args);
+      const kindLabel = kind === 'box' ? 'a box plot' : 'a violin plot';
+      let series;
+      if (args.columns?.group !== undefined) {
+        const groupColumn = findColumn(table, args.columns.group, 'columns.group');
+        const valueColumn = args.columns?.value !== undefined
+          ? findColumn(table, args.columns.value, 'columns.value')
+          : (() => {
+              const numeric = numericColumns(table).filter((column) => column !== groupColumn);
+              if (numeric.length !== 1) {
+                throw new MolbioInputError(`kind=${kind} must say which column holds the values: pass columns.value as one of ${numeric.map((column) => JSON.stringify(column.name)).join(', ')}`);
+              }
+              return numeric[0];
+            })();
+        series = groupValues(table, groupColumn).map((label) => ({
+          label,
+          values: valueColumn.values.filter((_, index) => {
+            const group = groupColumn.values[index];
+            return (group === null ? '(missing)' : String(group)) === label;
+          }).filter((value) => typeof value === 'number'),
+        })).filter((entry) => entry.values.length > 0);
+        if (series.length === 0) throw new MolbioInputError(`column ${JSON.stringify(valueColumn.name)} has no numeric values in any ${JSON.stringify(groupColumn.name)} group`);
+      } else if (args.columns?.value !== undefined) {
+        series = [{ label: args.columns.value, values: singleValueSeries(table, args.columns.value, kindLabel) }];
+      } else {
+        const numeric = numericColumns(table);
+        if (numeric.length === 0) {
+          throw new MolbioInputError(`the table has no numeric column for ${kindLabel}; columns are: ${table.column_names.map((name) => JSON.stringify(name)).join(', ')}`);
+        }
+        series = numeric.map((column) => ({ label: column.name, values: numericColumn(table, column) }));
+      }
+      const chart = kind === 'box'
+        ? renderBoxPlot({ title: args.title, x_label: args.x_label, y_label: args.y_label, series })
+        : renderViolinPlot({ title: args.title, x_label: args.x_label, y_label: args.y_label, series, bandwidth: args.bandwidth });
+      svg = chart.svg;
+      stats = { series: chart.stats, total_values: chart.marks, series_count: chart.stats.length };
+      defaultName = kind === 'box' ? 'box-plot' : 'violin-plot';
+    } else if (kind === 'line') {
+      const table = await resolveChartTable(ctx, exec, args);
+      const numeric = numericColumns(table);
+      if (numeric.length === 0) {
+        throw new MolbioInputError(`the table has no numeric column for a line chart; columns are: ${table.column_names.map((name) => JSON.stringify(name)).join(', ')}`);
+      }
+      const xColumn = args.columns?.x !== undefined ? findColumn(table, args.columns.x, 'columns.x') : numeric[0];
+      const yColumn = args.columns?.y !== undefined
+        ? findColumn(table, args.columns.y, 'columns.y')
+        : numeric.find((column) => column !== xColumn) ?? (() => {
+            throw new MolbioInputError(`kind=line must say which column holds the y values: pass columns.y as one of ${numeric.filter((column) => column !== xColumn).map((column) => JSON.stringify(column.name)).join(', ') || '(none — the table has only one numeric column)'}`);
+          })();
+      if (xColumn === yColumn) throw new MolbioInputError('kind=line needs two different columns for x and y');
+      // Text x values are read as their row order, and the tool says so rather
+      // than silently pretending a category is a number.
+      const categoricalX = !xColumn.numeric;
+      const axisLabel = categoricalX ? xColumn.values.map((value) => (value === null ? '' : String(value))) : undefined;
+      const buildSeries = (label, indices) => {
+        const pairs = indices
+          .map((index) => ({ x: categoricalX ? index : xColumn.values[index], y: yColumn.values[index] }))
+          .filter((pair) => typeof pair.y === 'number' && (categoricalX || typeof pair.x === 'number'))
+          .sort((a, b) => a.x - b.x);
+        return { label, x: pairs.map((pair) => pair.x), y: pairs.map((pair) => pair.y) };
+      };
+      let series;
+      if (args.columns?.group !== undefined) {
+        const groupColumn = findColumn(table, args.columns.group, 'columns.group');
+        series = groupValues(table, groupColumn)
+          .map((label) => buildSeries(label, groupColumn.values.map((value, index) => ((value === null ? '(missing)' : String(value)) === label ? index : -1)).filter((index) => index >= 0)))
+          .filter((entry) => entry.x.length >= 2);
+        if (series.length === 0) throw new MolbioInputError('no group in columns.group has at least 2 numeric points to draw');
+      } else {
+        const one = buildSeries(yColumn.name, xColumn.values.map((_, index) => index));
+        if (one.x.length < 2) throw new MolbioInputError(`kind=line needs at least 2 rows where both ${JSON.stringify(xColumn.name)} and ${JSON.stringify(yColumn.name)} are numbers`);
+        series = [one];
+      }
+      const xLabel = args.x_label !== undefined ? args.x_label : (categoricalX ? xColumn.name : undefined);
+      const chart = renderLineChart({ title: args.title, x_label: xLabel, y_label: args.y_label, series, markers: args.markers });
+      svg = chart.svg;
+      stats = { ...chart.stats, x_column: xColumn.name, y_column: yColumn.name, categorical_x: categoricalX };
+      if (categoricalX) stats.note = `column ${JSON.stringify(xColumn.name)} is not numeric, so rows are spaced evenly in their file order and labelled with their values`;
+      defaultName = 'line-chart';
+    } else if (kind === 'volcano') {
+      const table = await resolveChartTable(ctx, exec, args);
+      const numeric = numericColumns(table);
+      if (numeric.length < 2) {
+        throw new MolbioInputError(`kind=volcano needs two numeric columns (log2 fold change and p); this table has ${numeric.length}: columns are ${table.column_names.map((name) => JSON.stringify(name)).join(', ')}`);
+      }
+      const foldColumn = args.columns?.x !== undefined ? findColumn(table, args.columns.x, 'columns.x') : numeric[0];
+      const pColumn = args.columns?.y !== undefined
+        ? findColumn(table, args.columns.y, 'columns.y')
+        : numeric.find((column) => column !== foldColumn) ?? (() => {
+            throw new MolbioInputError(`kind=volcano must say which column holds the p-values: pass columns.y as one of ${numeric.filter((column) => column !== foldColumn).map((column) => JSON.stringify(column.name)).join(', ')}`);
+          })();
+      if (foldColumn === pColumn) throw new MolbioInputError('kind=volcano needs two different columns for the fold change and the p-value');
+      const labelColumn = args.columns?.label === undefined ? undefined : findColumn(table, args.columns.label, 'columns.label');
+      const points = [];
+      for (let index = 0; index < table.row_count; index++) {
+        const fold = foldColumn.values[index];
+        const p = pColumn.values[index];
+        // A row missing either number is skipped, and the count is reported:
+        // silently treating a missing p as 1 would invent "not significant".
+        if (typeof fold !== 'number' || typeof p !== 'number') continue;
+        points.push({
+          label: labelColumn === undefined ? '' : String(labelColumn.values[index] ?? ''),
+          log2fc: fold,
+          p,
+        });
+      }
+      if (points.length === 0) throw new MolbioInputError(`no row has both ${JSON.stringify(foldColumn.name)} and ${JSON.stringify(pColumn.name)} as numbers`);
+      const chart = renderVolcanoPlot({
         title: args.title,
         x_label: args.x_label,
         y_label: args.y_label,
-        x: args.x,
-        y: args.y,
-        fit,
+        points,
+        fold_change_threshold: args.fold_change_threshold,
+        p_threshold: args.p_threshold,
+        label_top: args.label_top,
       });
-      points = args.x.length;
+      svg = chart.svg;
+      stats = { ...chart.stats, fold_column: foldColumn.name, p_column: pColumn.name, skipped_rows: table.row_count - points.length };
+      if (labelColumn !== undefined) stats.label_column = labelColumn.name;
+      defaultName = 'volcano';
+    } else if (kind === 'heatmap') {
+      const table = await resolveChartTable(ctx, exec, args);
+      const rowName = args.columns?.row;
+      const columnName = args.columns?.column;
+      const valueName = args.columns?.value;
+      let rows;
+      let columns;
+      let matrix;
+      let layout;
+      if (rowName !== undefined || columnName !== undefined) {
+        // Long form: one row per (row, column) pair.
+        if (rowName === undefined || columnName === undefined || valueName === undefined) {
+          throw new MolbioInputError('the long heatmap form needs columns.row, columns.column AND columns.value together');
+        }
+        const rowColumn = findColumn(table, rowName, 'columns.row');
+        const columnColumn = findColumn(table, columnName, 'columns.column');
+        const cellColumn = findColumn(table, valueName, 'columns.value');
+        const rowLabels = groupValues(table, rowColumn);
+        const columnLabels = groupValues(table, columnColumn);
+        const lookup = new Map();
+        for (let index = 0; index < table.row_count; index++) {
+          const value = cellColumn.values[index];
+          if (typeof value !== 'number') continue;
+          const key = `${rowColumn.values[index] === null ? '(missing)' : String(rowColumn.values[index])}\u0000${columnColumn.values[index] === null ? '(missing)' : String(columnColumn.values[index])}`;
+          // A duplicated cell keeps the LAST reading and is reported, rather
+          // than silently summing or overwriting without a trace.
+          lookup.set(key, value);
+        }
+        rows = rowLabels;
+        columns = columnLabels;
+        matrix = rowLabels.map((row) => columnLabels.map((column) => {
+          const value = lookup.get(`${row}\u0000${column}`);
+          return value === undefined ? null : value;
+        }));
+        layout = 'long';
+      } else {
+        // Wide form: the first non-numeric column is the row labels (or none)
+        // and every numeric column is a matrix column.
+        const numeric = numericColumns(table);
+        if (numeric.length === 0) {
+          throw new MolbioInputError(`kind=heatmap needs numeric columns; this table has none: columns are ${table.column_names.map((name) => JSON.stringify(name)).join(', ')}`);
+        }
+        const labelColumn = table.columns.find((column) => !column.numeric);
+        let selected;
+        if (valueName === undefined) {
+          selected = numeric;
+        } else {
+          const chosen = findColumn(table, valueName, 'columns.value');
+          if (!chosen.numeric) throw new MolbioInputError(`columns.value ${JSON.stringify(valueName)} is not a numeric column`);
+          selected = [chosen];
+        }
+        rows = labelColumn === undefined
+          ? Array.from({ length: table.row_count }, (_, index) => `row ${index + 1}`)
+          : labelColumn.values.map((value) => (value === null ? '' : String(value)));
+        columns = selected.map((column) => column.name);
+        matrix = selected.map((column) => column.values).reduce((acc, values) => {
+          values.forEach((value, index) => {
+            if (acc[index] === undefined) acc[index] = [];
+            acc[index].push(value);
+          });
+          return acc;
+        }, []);
+        layout = 'wide';
+      }
+      const chart = renderHeatmap({
+        title: args.title,
+        x_label: args.x_label,
+        y_label: args.y_label,
+        rows,
+        columns,
+        matrix,
+        scale: args.scale,
+        color_scale: args.color_scale === 'auto' ? undefined : args.color_scale,
+      });
+      svg = chart.svg;
+      stats = { ...chart.stats, layout };
+      defaultName = 'heatmap';
     } else {
-      throw new MolbioInputError('kind must be "bar" or "scatter"');
+      throw new MolbioInputError(`kind must be one of ${['bar', 'scatter', 'line', 'histogram', 'box', 'violin', 'volcano', 'heatmap'].map((value) => JSON.stringify(value)).join(', ')}`);
     }
-    await writeWorkspaceFile(fs, file, svg, policy);
-    return mergeAttachedImage(
-      { plot_path: file, kind: args.kind, points, auto_viewed: await autoViewWritten(args, file) },
-      await withAttachedImage(ctx, exec, args, svg, 'chart'),
-    );
+    const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, defaultName);
+    return mergeAttachedImage({ plot_path: file, kind, stats, auto_viewed: viewed }, attached);
   },
 });
 
@@ -6478,7 +6832,8 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_golden_gate (type IIS multi-fragment assembly: the tool designs the 4 bp junctions and the fragments-to-order, and simulates the final plasmid — use it for BsaI-style Golden Gate instead of reasoning about overhangs by hand), molbio_enzyme_lookup (enzyme catalog: recognition/cut geometry/overhang, plus every cut of a sequence in both strand orientations), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers).
 - Verification: molbio_verify_sanger (read .ab1/.seq traces, align to the reference plasmid — circular-aware — and report mismatches/indels/amino-acid changes).
 - Proteins: molbio_protein_props (MW/pI/A280/GRAVY — estimates), molbio_peptide_digest (trypsin etc. for MS), molbio_codon_optimize (E. coli/yeast/human, can avoid restriction sites), molbio_helical_wheel (Schiffer-Edmundson wheel + Eisenberg hydrophobic moment, written as an SVG), molbio_hydropathy_plot (Kyte-Doolittle sliding-window profile with the 1.6 threshold peaks, written as an SVG).
-- Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (bar/scatter SVG charts written to files), molbio_virtual_gel (expected band pattern as an SVG gel image with a size ladder).
+- Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (experiment-data charts written to files), molbio_virtual_gel (expected band pattern as an SVG gel image with a size ladder).
+- molbio_plot kinds: bar (labelled values + optional SD error bars) and scatter (x/y + optional least-squares line) take their arrays directly in the call; the table kinds read a workspace CSV/TSV — pass data_path plus columns naming which column plays which role, or pass data with the table text inline. Use a table kind whenever the numbers are already in a file: do NOT retype a column into the call. line = one series per group_column; histogram = distribution of one column (bins default to Freedman-Diaconis unless you pass bins); box = Q1-Q3 box, median, 1.5xIQR whiskers, outliers as dots; violin = the same samples as a kernel-density silhouette with the box summary inside (use it when the SHAPE matters, not just the five numbers); volcano = effect size against significance from a log2-fold-change column and a p column, with dashed thresholds — it computes no statistics of its own, so the p-values must already be in the table; heatmap = a row x column matrix, one cell per value plus a colour bar, accepting either a wide table (first column = row labels, the rest = samples) or the long form (columns.row/column/value), with scale row_zscore|log2 as an explicitly-reported DISPLAY transform. The result carries the computed statistics (medians, quartiles, outliers, bin counts, axis ranges, significance counts, matrix extent), so quote THOSE instead of estimating values off the picture.
 - Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_sequence_logo (draws the same alignment as a sequence logo SVG — pass the molbio_msa_align output rows as the alignment argument; letters are sized by per-position information content), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
 - CRISPR: molbio_grna_design (SpCas9-style guide RNAs over a sequence or plasmid file: both strands scanned for the PAM, guides filtered on GC/poly-T/self-complementarity and ranked, with a mismatch-tolerant off-target search over the same sequence — reaching a whole genome simply means passing it as the target). Pass the top candidates on for ordering with save_path (CSV) or map_path (SVG map); the ranking is a heuristic and says so, so present it as candidate ranking, never as a validated efficiency prediction.
 - Map extras: pass gc_skew: true for the GC skew ring, show_unique_cutters: true to mark single-cutting enzymes on the map.

@@ -33,6 +33,17 @@ const WIDTH = 720;
 const HEIGHT = 440;
 const MARGIN = { top: 64, right: 30, bottom: 62, left: 72 };
 
+/**
+ * The figure font stack, duplicated from `svgio.mjs`'s `FIGURE_FONT` on purpose.
+ *
+ * This module is the pre-`svgio` generation (roadmap 3.4): it keeps its own
+ * `escapeXml`/`niceStep` and does not import the shared helpers, because doing so
+ * would change SVGs that existing pixel assertions and benchmark expectations
+ * are written against. The duplication is a known, deliberate debt — if you
+ * change the stack here, change it there too.
+ */
+const FIGURE_FONT = "'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif";
+
 function escapeXml(text) {
   return String(text)
     .replaceAll('&', '&amp;')
@@ -61,7 +72,7 @@ function validateNumbers(values, label) {
 
 function frameParts(title, xLabel, yLabel) {
   const parts = [];
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" font-family="system-ui, sans-serif" role="img">`);
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" font-family="${FIGURE_FONT}" role="img">`);
   parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
   if (title !== undefined && title !== '') {
     parts.push(`<text x="${WIDTH / 2}" y="28" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);
@@ -257,7 +268,7 @@ export function renderGel({ title = 'Agarose gel', lanes, ladder = '1kb', showLa
 
   const BAND_FILL = '#4a7dd8';
   const parts = [];
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" font-family="system-ui, sans-serif" role="img">`);
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" font-family="${FIGURE_FONT}" role="img">`);
   parts.push('<rect width="100%" height="100%" fill="#ffffff"/>');
   parts.push(`<text x="${(width / 2).toFixed(2)}" y="28" font-size="16" font-weight="700" fill="#1f2328" text-anchor="middle">${escapeXml(title)}</text>`);
 

@@ -169,7 +169,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_qpcr_analysis` | ΔΔCt 法：均值/SD、ΔCt、ΔΔCt、fold change（可设扩增效率） |
 | `molbio_qpcr_efficiency` | 稀释系列 → 标准曲线：斜率/截距/R²、效率 E = 10^(−1/slope) − 1，可出带拟合线的 SVG |
 | `molbio_lab_math` | 稀释计算、摩尔浓度、DNA 拷贝数 |
-| `molbio_plot` | 通用 SVG 图表：柱状图（均值±SD 误差棒）与散点图（可选拟合线） |
+| `molbio_plot` | **实验数据图表（8 种）**：柱状图（均值±SD 误差棒）、散点图（可选拟合线）、折线图（按分组列拆多条序列）、直方图（分箱默认 Freedman-Diaconis）、箱型图（Q1–Q3 箱 + 中位线 + 1.5×IQR 须 + 离群点）、**小提琴图**（高斯核密度轮廓 + 内部箱；看分布形状时用它）、**火山图**（log2FC × 显著性，带虚线阈值；**只画不检验**，p 值必须由表提供）、**热力图**（行×列矩阵，一格一色 + 色标；支持宽表与长表两种版式，`scale: row_zscore\|log2` 是**显式申报的展示变换**）。表类图表直接读工作区 **CSV/TSV**（`data_path` + `columns` 指名列），也可用 `data` 内联表格文本；结果里带回算好的统计量，**报数请引用它而不是照图估读** |
 | `molbio_virtual_gel` | **虚拟琼脂糖凝胶**：给出预期片段大小 → SVG 凝胶图 + 分子量 ladder，和真胶对照 |
 
 ### 6. 蛋白质（5）
@@ -267,7 +267,7 @@ SVG 文件**并在结果里返回路径：
 | `molbio_plasmid_map` / `molbio_plasmid_map_file` | `<名称>.svg`（默认） |
 | `molbio_clone_simulate` / `molbio_golden_gate` | `map_path`（图谱）、`save_path`（FASTA） |
 | `molbio_sequence_logo` / `molbio_grna_design` | logo SVG；订购 CSV 与带标记图谱 |
-| `molbio_qpcr_efficiency` / `molbio_plot` / `molbio_virtual_gel` | 曲线、柱状/散点图、凝胶图 |
+| `molbio_qpcr_efficiency` / `molbio_plot` / `molbio_virtual_gel` | 曲线；`molbio_plot` 的柱状/散点/折线/直方图/箱型/小提琴/火山/热力图（`output_path` 必填）；凝胶图 |
 | `molbio_helical_wheel` / `molbio_hydropathy_plot` | 螺旋轮、疏水性图 |
 | `molbio_fastq_qc` | `<名称>.qc.svg`（六面板质控报告） |
 | `molbio_phylogenetic_tree` | `<名称>.nwk`（Newick）+ `<名称>-tree.svg` |
@@ -305,6 +305,34 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 矢量描边、随字号缩放；可绘制 ASCII 与 `· ° ± — – … ≈ μ α ─`，**中文/其它非 ASCII 字符不会
 画出来**（图谱标题若是中文，PNG 里就缺这行字，SVG 里仍有）。渲染器不支持的 SVG 构造会被
 **计数上报**而不是悄悄丢弃（`unsupported`），相关测试盯着"真实渲染器的产物必须在支持子集内"。
+
+**字体（SVG 与 PNG 不同，这一点要知道）**：SVG 里**在根 `<svg>` 上声明一次**
+`'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif`（`svgio.mjs` 的
+`FIGURE_FONT`），所有 `<text>` 继承它——衬线、符合学术排版习惯，且后两个是 **Times 同度量**的
+替代字体，所以在 Linux/macOS 上换字体**不会让图形重排**。（`textRun`/`textSpanLines` 保留了
+`family` 参数作为逐次覆盖的逃生口，默认不再输出该属性。）而 **PNG 光栅化器完全忽略
+`font-family`**：它用内置折线字体绘制，不看系统字体。因此
+
+- 投稿、插进 Word/LaTeX、在 Illustrator 里改字的，用 **SVG**，字体是 Times New Roman；
+- 模型通过 `attach_image` 看到的那张 **PNG**，字形是内置的、无衬线单线体（这是"零依赖、
+  无字体文件"的必然代价）。想两者一致，得把 PNG 交给你自己的转换器重做。
+
+**产物的两条守卫（`test/contract.mjs`）**：一条断言**提交的产物 == 当前源码构建出来的产物**
+（拦住"改了源码忘记重跑 `npm run build:client`"）；另一条断言**产物里真的含有打包器声明的
+每一个模块**（拦住上一条看不见的情况——产物是**更早**的模块图构建的，某个模块从来没进去过，
+而这种缺失在上一条里两边都少、比较结果一样）。第二条是本仓库真实踩过的：`lib/client.js` 与
+面板产物曾长期缺少 `svgio.mjs` 和 `font-metrics.mjs`。
+
+**"光栅化器不进浏览器半"那条守卫是结构性的**：它把产物自己的模块注册表读回来，问"光栅化器
+在不在这个集合里"，**不做文本搜索**——所以注释里怎么写都不会误报（此前正是注释触发了它，
+详见 [docs/roadmap.md](docs/roadmap.md) 3.5）。打包器另有一道**构建期自检**：产物注册的模块
+必须等于本次模块图走到的集合。
+
+> **改注释时的坑（已被测试咬过一次）**：`test/svgpng.mjs` 用**子串搜索**检查产物里有没有
+> 光栅化器——搜它的**文件名**与它 import 的 **Node 模块名**。这两个字面量只要出现在**任何**
+> 被打进浏览器半的模块里（**包括注释**），守卫就会失败，而光栅化器其实根本不在依赖图里。
+> `svgio.mjs` / `font-metrics.mjs` 都在浏览器半，所以描述光栅化器时请用"光栅化器"这个角色
+> 称呼它，别写文件名。这条规则写在那两个文件的文件头注释里。
 
 ### 自动打开（auto-view）
 
@@ -566,7 +594,7 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 49 题（覆盖 57/57 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 55 题（覆盖 57/57 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
@@ -616,6 +644,7 @@ dsh-molbio-tools/
 ├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
 ├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证
 ├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶
+├── charts.mjs       # 实验数据图表：CSV/TSV 读取 + 折线/直方图/箱型/小提琴/火山/热力图（基于 svgio）
 ├── seqio.mjs        # FASTA/FASTQ 解析与统计
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储

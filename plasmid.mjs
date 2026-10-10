@@ -8,6 +8,7 @@
  */
 
 import { MolbioInputError } from './lib.mjs';
+import { FIGURE_FONT } from './svgio.mjs';
 
 const DEG = Math.PI / 180;
 
@@ -130,7 +131,7 @@ export function renderPlasmidMap(input) {
   // the PNG rasterizer) clips the right-hand end of a linear map.
   const canvasWidth = circular ? 840 : LINEAR_WIDTH;
   const canvasHeight = circular ? 840 : LINEAR_HEIGHT;
-  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" font-family="system-ui, sans-serif" role="img" aria-label="${escapeXml(title)}">`);
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" font-family="${FIGURE_FONT}" role="img" aria-label="${escapeXml(title)}">`);
   parts.push(`<title>${escapeXml(title)}</title>`);
   parts.push(`<rect width="${canvasWidth}" height="${canvasHeight}" fill="#ffffff"/>`);
 

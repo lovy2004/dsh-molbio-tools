@@ -3,8 +3,11 @@
  *
  * Minimal GenBank flatfile parser: LOCUS / DEFINITION / ACCESSION / FEATURES /
  * ORIGIN. Locations are reduced to a start/end span plus strand
- * (complement()/join()/order() handled for span purposes); qualifiers keep
- * /gene, /product, /label, /note. Pure text processing, no dependencies.
+ * (complement()/join()/order() handled for span purposes); a MULTI-PART
+ * location is reduced to its OUTER bounds and flagged `multi_part`, with the
+ * original string kept as `location`, so a caller can tell a spliced feature
+ * from a contiguous one. Qualifiers keep /gene, /product, /label, /note.
+ * Pure text processing, no dependencies.
  */
 
 import { MolbioInputError, normalizeSequence } from './lib.mjs';
@@ -24,10 +27,18 @@ function parseLocus(line) {
 /**
  * Parse a raw feature location into a numeric span and strand.
  * Handles: plain spans, complement(), join(), order(), one-of, single bases,
- * and partial markers (<, >, ?, ^).
+ * and partial markers (<, >, ?). A `^` junction (`123^124`, the point between
+ * two bases) is normalised to a range BEFORE the digits are read: deleting the
+ * caret instead glues the two numbers together (`123^124` -> `123124`), which
+ * is not a coordinate that exists on the sequence.
+ *
+ * `multiPart` is true when the location names more than one range, i.e. the
+ * returned `start`/`end` are OUTER bounds that also cover the gaps between the
+ * parts. `raw` always carries the location exactly as written.
  */
 function parseLocation(raw) {
-  const cleaned = raw.replace(/[<>\?^]/g, '');
+  const cleaned = raw.replace(/[<>\?]/g, '').replace(/\^/g, '..');
+  const parts = [...cleaned.matchAll(/\d+(?:\.\.\d+)?/g)];
   const numbers = [...cleaned.matchAll(/\d+/g)].map((match) => Number(match[0]));
   if (numbers.length === 0) return undefined;
   return {
@@ -35,6 +46,7 @@ function parseLocation(raw) {
     end: Math.max(...numbers),
     strand: /complement/i.test(raw) ? -1 : 1,
     raw: raw.trim(),
+    multiPart: parts.length > 1,
   };
 }
 
@@ -152,6 +164,8 @@ export function parseGenBank(text) {
       end: feature.location.end,
       strand: feature.location.strand,
       label,
+      location: feature.location.raw,
+      multi_part: feature.location.multiPart,
       ...q.gene !== undefined ? { gene: q.gene } : {},
       ...q.product !== undefined ? { product: q.product } : {},
       ...q.note !== undefined ? { note: q.note } : {},

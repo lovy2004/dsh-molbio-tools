@@ -5,19 +5,23 @@
  * tiny module so BOTH halves of the drawing path can agree on them:
  *
  *   - `svgpng.mjs` (the rasterizer) imports the grid values it draws glyphs
- *     with. It also imports `node:zlib`, so nothing that runs in the browser
- *     may import `svgpng.mjs`.
- *   - `svgio.mjs` (the SVG-emitting helpers, host side) needs the same numbers
- *     to estimate how wide a run will be, so a caller can decide where to break
- *     a long label BEFORE emitting it.
+ *     with. It also imports `node:zlib`, so nothing that runs in the browser may
+ *     import `svgpng.mjs`.
+ *   - `svgio.mjs` (the SVG-emitting helpers) needs the same numbers to estimate
+ *     how wide a run will be, so a caller can decide where to break a long label
+ *     BEFORE emitting it.
  *
  * A duplicated constant would be a silent failure mode: the layout would
  * reserve space using one metric and the rasterizer would draw with another,
  * and the only symptom would be a label that overlaps its neighbour. Importing
  * one definition is the whole point of this file.
  *
- * Host side only, like `svgpng.mjs` and `svgio.mjs` — it is not part of the
- * client bundle.
+ * This module IS part of the client bundle (the browser half draws plasmid maps
+ * and sequence logos through `svgio.mjs`). Naming `svgpng.mjs` here is fine: the
+ * guard that keeps the rasterizer out of the browser half reads the artifact's
+ * module REGISTRATIONS rather than searching its text, so a comment cannot trip
+ * it. It used to be a substring search — see `docs/roadmap.md` 3.5 for what that
+ * cost.
  */
 
 /**

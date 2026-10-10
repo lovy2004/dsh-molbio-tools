@@ -98,22 +98,34 @@ export function uniqueCutters(vectorSeq, insertSeq, region, circular) {
 
 // ── clone simulation ────────────────────────────────────────────────────────
 
-/** Remap 1-based feature coordinates across an insertion/deletion. */
+/**
+ * Remap 1-based feature coordinates across an insertion/deletion.
+ *
+ * The remapped entries describe the FINAL construct, so the source file's
+ * `location` string (and the `multi_part` flag that belongs to it) is stripped
+ * here: those fields say where the feature sat in the vector, and carrying them
+ * beside rewritten start/end would leave a location that disagrees with the
+ * coordinates next to it. `dropped` keeps whole original entries — those really
+ * are the source's features, coordinates and location included.
+ */
 function remapFeatures(features, a, b, delta, insertStart, insertLen, insertLabel) {
   const kept = [];
   const dropped = [];
   for (const feature of features) {
-    const { start: s, end: e } = feature;
+    // Strip the source-location fields; everything else (start/end included) rides through.
+    const { location: _location, multi_part: _multiPart, ...rest } = feature;
+    const s = rest.start;
+    const e = rest.end;
     if (e < a) {
-      kept.push({ ...feature });
+      kept.push({ ...rest });
     } else if (s > b) {
-      kept.push({ ...feature, start: s + delta, end: e + delta });
+      kept.push({ ...rest, start: s + delta, end: e + delta });
     } else if (s >= a && e <= b) {
       dropped.push(feature);
     } else {
       const ns = s < a ? s : insertStart;
       const ne = e > b ? e + delta : insertStart + insertLen - 1;
-      kept.push({ ...feature, start: ns, end: ne, spans_insertion: true });
+      kept.push({ ...rest, start: ns, end: ne, spans_insertion: true });
     }
   }
   kept.push({
