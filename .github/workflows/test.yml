@@ -51,12 +51,29 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global @deepseek-ai/dsh@0.1.7-rc.1
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.1.7-rc.1
 
-      # Printed before the suite so a failure is readable: most "could not locate
-      # an installed DSH harness" exits become self-explanatory from this line.
+      # Every guard that compares this repository against DSH resolves the harness
+      # through `benchmark/harness.mjs`. Say exactly what was installed rather
+      # than leaving each probe to guess: on a runner npm's global prefix is the
+      # Node toolchain's directory, NOT the `%APPDATA%\npm` a normal Windows user
+      # install lands in — and one probe (test/client-mount.mjs) hardcoded that
+      # path, so the first run of this workflow failed there.
+      - name: Point the guards at the harness they just installed
+        shell: pwsh
+        run: |
+          $prefix = npm prefix -g
+          $root = Join-Path $prefix 'node_modules\@deepseek-ai\dsh'
+          Write-Host "npm prefix -g : $prefix"
+          Write-Host "harness root  : $root"
+          Write-Host "installed     : $(Test-Path $root)"
+          if (-not (Test-Path $root)) { throw "the harness is not under the prefix npm reports ($root)" }
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "DSH_HARNESS_ROOT=$root`n", (New-Object System.Text.UTF8Encoding($false)))
+
+      # Printed before the suite so a red build is readable from the log alone:
+      # this distinguishes "the harness is missing" from "a guard found something".
       - name: Report the harness the guards resolved
-        run: node --input-type=module -e "import { findHarnessRoot } from './benchmark/harness.mjs'; const root = findHarnessRoot(); if (root === undefined) { console.error('no harness resolved'); process.exit(1); } console.log('harness:', root);"
+        run: node --input-type=module -e "import { findHarnessRoot } from './benchmark/harness.mjs'; console.log('DSH_HARNESS_ROOT:', process.env.DSH_HARNESS_ROOT); console.log('APPDATA:', process.env.APPDATA); const root = findHarnessRoot(); if (root === undefined) { console.error('no harness resolved'); process.exit(1); } console.log('harness:', root);"
 
       - name: Run the suite
         run: npm test

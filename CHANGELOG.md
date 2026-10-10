@@ -63,6 +63,25 @@ preset 撞号即失败。探针捕获的变异数从 **11 增至 14**。
 迹象。现在返回 `aa_changes_truncated`，渲染文本也写出"还有更多未列出"。测试刻意造出约 100
 处替换来钉住 `true` 这一侧，而不只是断言 `false`。
 
+### 6. CI 的 harness 解析（workflow 第一次运行就红在这里）
+
+**症状**：`.github/workflows/test.yml` 首次运行 —— GitHub 报告 **All jobs have failed**。
+
+**根因**：`test/client-mount.mjs` 把 harness 路径**写死**成
+`%APPDATA%\npm\node_modules\@deepseek-ai\dsh`，那只是普通 Windows 用户安装的位置；
+`npm install --global` 在 CI runner 上装到 **Node 工具链的 prefix** 下，于是这个文件在
+**第一条断言**（"the harness packages must be installed at …"）就死了，还没检查任何东西。
+本地复现：把 `APPDATA` 指到别处即得到同一条断言失败。
+
+**修法**：
+
+- `client-mount` 改用与其它套件相同的解析器（`benchmark/harness.mjs` 的 `findHarnessRoot`），
+  它先问 `npm prefix -g`、并尊重 `DSH_HARNESS_ROOT`；解析不到就以该项目既有的约定
+  `process.exit(2)` 明确报告"无法检查"，而不是抛一条令人费解的断言。
+- workflow 在安装后**显式导出** `DSH_HARNESS_ROOT`（来自 `npm prefix -g`），并打印
+  `npm prefix -g` / 解析结果 / 是否存在；harness 没装在 npm 自称的 prefix 下时直接抛错。
+  diagnostic 那一步现在能单独回答"是环境没装好"还是"守卫发现了问题"——下一次红灯不必翻日志猜。
+
 ## [0.18.1] — 2026-10-10（两个解析器不再把多段特征压平；修 `^` 交界点的坐标）
 
 **工具数不变（57），参数不变；`molbio_parse_genbank` / `molbio_parse_snapgene` 的输出各增两个字段。**

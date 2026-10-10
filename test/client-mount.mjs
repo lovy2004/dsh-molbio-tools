@@ -28,18 +28,31 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { findHarnessRoot } from '../benchmark/harness.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, '..');
 const dshHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? '', '.dsh');
-const npmRoot = process.env.APPDATA ?? '';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback) => {
   const index = argv.indexOf(name);
   return index === -1 ? fallback : argv[index + 1];
 };
-const harnessRoot = flag('--dsh', join(npmRoot, 'npm', 'node_modules', '@deepseek-ai', 'dsh'));
 const profileName = flag('--profile', 'web');
+// Locate the harness the same way every other suite locates it. This used to be
+// a literal `%APPDATA%\npm\node_modules\...`, which is only where a normal
+// Windows *user* install lands: `npm install --global` on a CI runner puts the
+// package under the Node toolchain's prefix instead, so this file died at its
+// first assertion ("the harness packages must be installed at ...") before
+// checking anything. `benchmark/harness.mjs` exists precisely to avoid that
+// probe — `findHarnessRoot` asks `npm prefix -g`, honours DSH_HARNESS_ROOT, and
+// is what smoke/contract/preset-health/map-card already use.
+const harnessRoot = findHarnessRoot(flag('--dsh', undefined));
+if (harnessRoot === undefined) {
+  console.error('client-mount: could not locate an installed DSH harness (pass --dsh <root> or set DSH_HARNESS_ROOT)');
+  process.exit(2);
+}
 const packagesDir = join(harnessRoot, 'node_modules', '@deepseek-ai');
 const profileDir = join(dshHome, 'profiles', profileName);
 
