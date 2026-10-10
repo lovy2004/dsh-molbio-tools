@@ -152,11 +152,14 @@ export function buildFixtures(makeTemplate) {
     SANGER_READ,
     SANGER_TEXT,
     /**
-     * The synthetic GenBank fixture committed at `test/fixtures/pUC118.gb`.
+     * The committed GenBank fixture, `test/fixtures/pUC118.gb`.
      *
-     * Written by `benchmark/_make-genbank.mjs` from the SnapGene fixture's own
-     * sequence, so the two files describe the SAME 3162 bp plasmid — which is
-     * what lets one task ask about both formats and compare them.
+     * Hand-authored to hold the SAME 3162 bp sequence as the SnapGene fixture, so
+     * one task can ask about both formats and compare them. (An earlier comment
+     * here credited `benchmark/_make-genbank.mjs`; no such generator exists, and
+     * the .gb carries fewer annotations than the .dna, so it is not a mechanical
+     * conversion of it.) `test/benchmark-coverage.mjs` asserts the two sequences
+     * still match — that agreement is the task's premise.
      */
     GENBANK_PATH: 'test/fixtures/pUC118.gb',
     /** A 14-residue amphipathic helix — the classic helical-wheel demonstrator. */

@@ -40,7 +40,7 @@ const checkOnly = process.argv.slice(2).includes('--check');
 /**
  * The bundles to emit. The SAME browser half ships through two channels:
  *
- * - `dsh-molbio-tools` — the plugin package: one install gives the 52 tools
+ * - `dsh-molbio-tools` — the plugin package: one install gives the 57 tools
  *   plus the panel (its host half also registers the tools).
  * - `dsh-molbio-panel` — a panel-only package: installing it adds the tab to a
  *   profile WITHOUT dragging the tools into every session of that profile,

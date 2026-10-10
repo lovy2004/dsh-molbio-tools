@@ -260,7 +260,7 @@ Nothing about the reconstruction is trusted:
 
 ## Anatomy of a task
 
-Tasks live in `tasks.json`. A task is a **natural-language request** — never a
+Tasks live in `tasks/*.json` (one file per domain, concatenated in file-name order). A task is a **natural-language request** — never a
 tool name — plus the assertions that grade it:
 
 ```jsonc

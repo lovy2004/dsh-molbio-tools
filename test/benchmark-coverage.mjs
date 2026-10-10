@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { loadTasks, tasksForTier } from '../benchmark/score.mjs';
 import { invocationsFor, usePlasmid, useWorkspaceRoot } from '../benchmark/verifications.mjs';
 import { FIXTURES, NAMED_SEQUENCES, expandInstruction } from '../benchmark/sequences.mjs';
+import { parseSnapGeneBytes } from '../snapgene.mjs';
 import { loadTools } from '../benchmark/tools.mjs';
 
 process.env.MOLBIO_AUTO_VIEW = '0';
@@ -152,6 +153,44 @@ assert.ok(
   'the mutagenesis fixture no longer admits a primer pair — its seed was searched for that property; re-search it',
 );
 console.log(`fixtures: mutagenesis seed still yields ${mutagenesisValue.pairs.length} pair(s); GG backbone BsaI-free`);
+
+// ── (4b) the two pUC118 fixtures still describe the same molecule ───────────
+// `genbank-parse` asks the model whether the .gb and the .dna are the same
+// plasmid, so their agreement IS that task's premise. They are authored
+// separately (the .gb is not machine-generated from the .dna — it carries fewer
+// annotations), so nothing but this check keeps them in step: edit one and the
+// task quietly becomes unanswerable.
+const genbankFixture = await harness.run('molbio_parse_genbank', {
+  genbank: await readFile(join(import.meta.dirname, '..', FIXTURES.GENBANK_PATH), 'utf8'),
+});
+const snapgeneFixture = parseSnapGeneBytes(new Uint8Array(await readFile(join(import.meta.dirname, 'fixtures', 'pUC118.dna'))));
+assert.equal(
+  genbankFixture.sequence,
+  snapgeneFixture.sequence,
+  'the committed pUC118.gb and pUC118.dna no longer hold the same sequence — `genbank-parse` asks the model to compare exactly that',
+);
+assert.equal(genbankFixture.length, snapgeneFixture.length, 'and they still agree on the length');
+
+// ── (4c) every offline builder still names a real task ──────────────────────
+// The grader only ever asks for a task that exists, so a builder left behind by a
+// task RENAME is never consulted and never fails — it just stops verifying
+// anything (two were found that way: `plasmid-map`, `restriction-map`). The ids
+// live in a function-local map, so they are read from the source; the count
+// assertion first is what keeps a reformat from turning this into a blind scan.
+const verifierSource = await readFile(join(import.meta.dirname, '..', 'benchmark', 'verifications.mjs'), 'utf8');
+const builderIds = [...verifierSource.matchAll(/^ {4}'([a-z0-9-]+)':\s*\(\)\s*=>/gm)].map((match) => match[1]);
+assert.ok(
+  builderIds.length >= 45,
+  `the builder scan found ${builderIds.length} id(s) — if the map was reformatted, fix this pattern rather than letting the check go blind`,
+);
+const taskIds = new Set(tasks.map((task) => task.id));
+const orphanedBuilders = builderIds.filter((id) => !taskIds.has(id)).sort();
+assert.deepEqual(
+  orphanedBuilders,
+  [],
+  `these offline builders name tasks that no longer exist: ${orphanedBuilders.join(', ')} — renamed or removed, so the builder verifies nothing`,
+);
+console.log(`fixtures: .gb and .dna agree on all ${genbankFixture.length} bases; builders: ${builderIds.length} declared, every one naming a real task`);
 
 // ── (5) every instruction expands ───────────────────────────────────────────
 

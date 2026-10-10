@@ -22,6 +22,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFile, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createSlotsStub } from './slots-stub.mjs';
@@ -84,7 +85,14 @@ const tool = registered.find((entry) => entry.name === 'molbio_plasmid_map');
 assert.ok(tool !== undefined, 'molbio_plasmid_map registers');
 assert.equal(typeof tool.output.presentationMeta, 'function', 'the map tool declares a presentationMeta projection');
 
-const exec = { agent: { session: { header: { cwd: 'C:/tmp' } } } };
+// Fixture paths are built through `join` on the HOST, so the tests state them
+// through one root instead of a literal Windows path: the same assertions then
+// hold on a Linux runner instead of failing on the separator, which is a
+// property of the runner and not of this repository.
+const CWD = process.platform === 'win32' ? 'C:/tmp' : '/tmp';
+const at = (name) => `${CWD}/${name}`;       // handed to a tool as a path
+const shown = (name) => join(CWD, name);     // what a tool returns after join()
+const exec = { agent: { session: { header: { cwd: CWD } } } };
 const args = {
   sequence: 'GAATTC' + 'ACGTACGTAC'.repeat(20),
   name: 'pCARD',
@@ -126,10 +134,10 @@ assert.equal(panelCore.mapCardView('nonsense').kind, 'notice');
 assert.equal(panelCore.mapCardView([1, 2]).kind, 'notice');
 
 // A map too large to carry: the file is still written, the markup is not sent.
-const oversized = panelCore.mapCardView({ kind: 'molbio-map', name: 'pBIG', svg_omitted: true, svg_bytes: 900_000, svg_path: 'C:/tmp/pBIG.svg', length: 5_000_000, circular: true, feature_count: 3, enzyme_count: 0 });
+const oversized = panelCore.mapCardView({ kind: 'molbio-map', name: 'pBIG', svg_omitted: true, svg_bytes: 900_000, svg_path: at('pBIG.svg'), length: 5_000_000, circular: true, feature_count: 3, enzyme_count: 0 });
 assert.equal(oversized.kind, 'notice');
 assert.match(oversized.message, /too large/i);
-assert.equal(oversized.svgPath, 'C:/tmp/pBIG.svg', 'the notice still names the written file');
+assert.equal(oversized.svgPath, at('pBIG.svg'), 'the notice still names the written file');
 assert.equal(panelCore.mapCardSummary(oversized), 'pBIG · 5000000 bp · circular · 3 feature(s)', 'the header still summarises the map');
 // Markup that is not the renderer's output is refused rather than injected.
 assert.equal(panelCore.mapCardView({ kind: 'molbio-map', name: 'x', svg: '<div>hi</div>' }).kind, 'notice');

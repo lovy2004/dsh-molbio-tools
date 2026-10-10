@@ -234,15 +234,6 @@ export function invocationsFor(task) {
       { tool: 'molbio_golden_gate', args: { vector: FIXTURES.GG_VECTOR, inserts: FIXTURES.GG_INSERTS, enzyme: 'BsaI', replace_region: FIXTURES.GG_REPLACE_REGION } },
     ],
 
-    // plasmids and maps
-    'plasmid-map': () => [
-      { tool: 'molbio_plasmid_map', args: { sequence: FIXTURES.CONSTRUCT, name: 'mini', circular: true, features: [{ type: 'FIXTURES.CDS', start: 10, end: 200, label: 'testCDS' }], enzymes: ['EcoRI'] } },
-    ],
-    'restriction-map': () => [
-      { tool: 'molbio_restriction_sites', args: { sequence: plasmid(), enzymes: ['EcoRI', 'HindIII', 'PvuII'], circular: true } },
-      { tool: 'molbio_enzyme_lookup', args: { enzymes: ['EcoRI', 'PvuII'], sequence: plasmid(), circular: true } },
-    ],
-
     // sequencing
     'sanger-verify': () => [
       { tool: 'molbio_verify_sanger', args: { trace_path: at('read.seq'), reference: FIXTURES.CONSTRUCT } },

@@ -11,7 +11,7 @@
  *
  * The two modes answer different questions and BOTH are needed:
  *
- *  - `--offline` proves the SUITE is true (the values in `tasks.json` are what
+ *  - `--offline` proves the SUITE is true (the values in `tasks/*.json` are what
  *    the tools actually return). It costs nothing and is the gate to run on
  *    every change.
  *  - `--model` measures the MODEL's use of the toolset. It costs tokens, so it
@@ -514,13 +514,17 @@ function parseArgs(argv) {
     else if (value === '--timeout') options.timeoutMs = Number(argv[++index]);
     else if (value === '--all' || value === '--tier') {
       // `--all` is the shorthand people reach for; `--tier full` is the explicit
-      // form. Both mean "every task".
+      // form. Both mean "every task". `tierExplicit` matters because the default
+      // is `core` for a MODEL run while `--offline` has always meant the whole
+      // suite: without the flag, funneling offline through selectTasks would
+      // silently drop it to the core sample.
       if (value === '--all') options.tier = 'full';
       else {
         const tier = argv[++index];
         if (tier !== 'core' && tier !== 'full') throw new Error(`benchmark: --tier takes "core" or "full" (got "${String(tier)}")`);
         options.tier = tier;
       }
+      options.tierExplicit = true;
     } else if (value === '--help' || value === '-h') options.mode = 'help';
     else throw new Error(`benchmark: unknown option "${value}"`);
   }
@@ -554,7 +558,24 @@ async function main() {
   }
 
   if (options.mode === 'offline') {
-    const result = await scoreSuiteOffline({ only: options.task });
+    // The same selection rules a model run uses, except that the tier defaults to
+    // FULL here: `--offline` means "check every expected value in the suite", and
+    // narrowing it to the core sample by default would quietly shrink the
+    // zero-cost gate. `--offline --tools X` (and --changed / --tier) used to be
+    // ignored entirely — the flags looked like they narrowed the check while the
+    // whole suite ran anyway.
+    const selection = selectTasks({
+      tasks,
+      tools: options.tools,
+      task: options.task,
+      changed: options.changed,
+      tier: options.tierExplicit === true ? options.tier : 'full',
+    });
+    if (selection.mode === 'none') {
+      console.log(`nothing to run — ${selection.reason}`);
+      return;
+    }
+    const result = await scoreSuiteOffline({ onlyIds: new Set(selection.selected.map((task) => task.id)) });
     for (const entry of result.tasks) {
       const status = entry.failures.length === 0 ? 'ok  ' : 'FAIL';
       console.log(`${status} ${entry.id} (${entry.checked} tool assertion(s))${entry.note === undefined ? '' : ` — ${entry.note}`}`);

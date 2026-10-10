@@ -1345,12 +1345,6 @@ export const ENZYME_BUFFERS = {
   FokI: ['r1.1', 'cutsmart'],
 };
 
-/** Every enzyme name the buffer table covers (including the universal ones). */
-export const BUFFER_TABLE_ENZYMES = [...new Set([...Object.keys(ENZYME_BUFFERS), ...ANY_BUFFER_ENZYMES])].sort();
-
-/** Every methylation mark the sensitivity table mentions. */
-export const METHYLATION_MARKS = [...new Set(Object.values(METHYLATION_SENSITIVITY).flatMap((entry) => [...(entry.blocked ?? []), ...(entry.sensitive ?? [])]))].sort();
-
 /** Buffers one enzyme is active in, or undefined when the table does not cover it. */
 export function enzymeBuffers(name) {
   if (!Object.hasOwn(ENZYMES, name)) {

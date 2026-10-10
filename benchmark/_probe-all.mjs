@@ -5,7 +5,7 @@
  * not touch, so their assertions can be written from measured output.
  *
  * `_probe.mjs` records the original suite's ground truth; this one covers the
- * rest of the catalog. Both exist because every expected value in `tasks.json`
+ * rest of the catalog. Both exist because every expected value in `tasks/*.json`
  * must come from the shipped tool rather than from memory.
  *
  * Run: node benchmark/_probe-all.mjs [substring]

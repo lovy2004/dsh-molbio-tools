@@ -10,8 +10,6 @@
 import { MolbioInputError } from './lib.mjs';
 import { workspaceFilePath, writeWorkspaceFile } from './papers.mjs';
 
-export const DEFAULT_PROTOCOLS_FILE = 'protocols.json';
-export const DEFAULT_EXPERIMENTS_FILE = 'experiments.json';
 
 /** Load a JSON record file; a missing file is an empty collection. */
 export async function loadRecords(fs, path, key) {

@@ -8,7 +8,7 @@
  * hydropathy, Ikai 1980 aliphatic index, monoisotopic residue masses).
  */
 
-import { MolbioInputError } from './lib.mjs';
+import { MolbioInputError, enzymePattern } from './lib.mjs';
 
 const AA_SET = new Set('ACDEFGHIKLMNPQRSTVWY');
 
@@ -328,35 +328,32 @@ export function codonOptimize(raw, { host = 'e_coli', avoidEnzymes = [] } = {}) 
   };
 }
 
+const AVOIDABLE_ENZYMES = [
+  'EcoRI', 'HindIII', 'BamHI', 'XhoI', 'XbaI', 'NotI', 'NcoI', 'NdeI', 'PstI', 'SacI', 'SalI',
+  'SpeI', 'SphI', 'KpnI', 'SmaI', 'XmaI', 'BglII', 'EcoRV', 'PvuII', 'ClaI', 'ApaI', 'NheI',
+  'MfeI', 'NsiI', 'PacI', 'SbfI', 'AscI', 'FseI', 'AgeI', 'AvrII', 'BclI', 'BstEII', 'Bsu36I',
+  'DraI', 'EagI', 'HpaI', 'MluI', 'NruI', 'PmeI', 'PmlI', 'PspOMI', 'RsrII', 'SacII', 'ScaI',
+  'SexAI', 'StuI', 'XmnI', 'AatII', 'Acc65I', 'AflII', 'AseI', 'BsrGI', 'BssHII', 'KasI',
+  'MscI', 'NaeI', 'NarI', 'NgoMIV', 'PciI', 'PvuI', 'SnaBI', 'SspI', 'SrfI', 'ZraI', 'HincII',
+  'PpuMI', 'BsaAI', 'BsaI', 'BsmBI', 'Esp3I', 'BbsI', 'BspQI', 'SapI', 'LguI', 'PaqCI', 'AarI',
+  'BfuAI', 'BveI', 'BtgZI', 'BsmFI', 'FokI',
+];
+
+/**
+ * The recognition site `avoid_enzymes` should be scanned for, taken from
+ * `lib.mjs`'s single enzyme table. This function used to carry a second copy of
+ * all 81 site strings — every one of them agreed with lib.mjs, which is what
+ * makes removing the copy safe, and why keeping it was not: a hand-copied
+ * reference table agrees right up until one copy gets edited, as the
+ * methylation table did in 0.16.0.
+ */
 function avoidSitePattern(name) {
-  // Avoid-site checks use the built-in enzyme table; unknown names error.
-  const sites = {
-    EcoRI: 'GAATTC', HindIII: 'AAGCTT', BamHI: 'GGATCC', XhoI: 'CTCGAG',
-    XbaI: 'TCTAGA', NotI: 'GCGGCCGC', NcoI: 'CCATGG', NdeI: 'CATATG',
-    PstI: 'CTGCAG', SacI: 'GAGCTC', SalI: 'GTCGAC', SpeI: 'ACTAGT',
-    SphI: 'GCATGC', KpnI: 'GGTACC', SmaI: 'CCCGGG', XmaI: 'CCCGGG',
-    BglII: 'AGATCT', EcoRV: 'GATATC', PvuII: 'CAGCTG', ClaI: 'ATCGAT',
-    ApaI: 'GGGCCC', NheI: 'GCTAGC', MfeI: 'CAATTG', NsiI: 'ATGCAT',
-    PacI: 'TTAATTAA', SbfI: 'CCTGCAGG', AscI: 'GGCGCGCC', FseI: 'GGCCGGCC',
-    AgeI: 'ACCGGT', AvrII: 'CCTAGG', BclI: 'TGATCA', BstEII: 'GGTNACC',
-    Bsu36I: 'CCTNAGG', DraI: 'TTTAAA', EagI: 'CGGCCG', HpaI: 'GTTAAC',
-    MluI: 'ACGCGT', NruI: 'TCGCGA', PmeI: 'GTTTAAAC', PmlI: 'CACGTG',
-    PspOMI: 'GGGCCC', RsrII: 'CGGWCCG', SacII: 'CCGCGG', ScaI: 'AGTACT',
-    SexAI: 'ACCWGGT', StuI: 'AGGCCT', XmnI: 'GAANNNNTTC',
-    AatII: 'GACGTC', Acc65I: 'GGTACC', AflII: 'CTTAAG', AseI: 'ATTAAT',
-    BsrGI: 'TGTACA', BssHII: 'GCGCGC', KasI: 'GGCGCC', MscI: 'TGGCCA',
-    NaeI: 'GCCGGC', NarI: 'GGCGCC', NgoMIV: 'GCCGGC', PciI: 'ACATGT',
-    PvuI: 'CGATCG', SnaBI: 'TACGTA', SspI: 'AATATT', SrfI: 'GCCCGGGC',
-    ZraI: 'GACGTC', HincII: 'GTYRAC', PpuMI: 'RGGWCCY', BsaAI: 'YACGTR',
-    BsaI: 'GGTCTC', BsmBI: 'CGTCTC', Esp3I: 'CGTCTC', BbsI: 'GAAGAC',
-    BspQI: 'GCTCTTC', SapI: 'GCTCTTC', LguI: 'GCTCTTC', PaqCI: 'CACCTGC',
-    AarI: 'CACCTGC', BfuAI: 'ACCTGC', BveI: 'ACCTGC', BtgZI: 'GCGATG',
-    BsmFI: 'GGGAC', FokI: 'GGATG',
-  };
-  if (!Object.hasOwn(sites, name)) {
+  if (!AVOIDABLE_ENZYMES.includes(name)) {
     throw new MolbioInputError(`avoid_enzymes contains an unknown enzyme ${JSON.stringify(name)}; use names from the built-in table (e.g. EcoRI, HindIII, NotI)`);
   }
-  return sites[name];
+  // `pattern` is the recognition site; a cut marker some entries carry is not
+  // part of what the optimiser scans for.
+  return enzymePattern(name).pattern.replace(/[^A-Za-z]/g, '');
 }
 
 const AMBIGUITY = {

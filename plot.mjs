@@ -226,16 +226,16 @@ export function renderGel({ title = 'Agarose gel', lanes, ladder = '1kb', showLa
     '100bp': [1500, 1000, 900, 800, 700, 600, 500, 400, 300, 200, 100],
   };
   const ladderSizes = LADDERS[ladder];
-  if (ladderSizes === undefined) throw new Error(`unknown ladder "${ladder}"`);
+  if (ladderSizes === undefined) throw new MolbioInputError(`unknown ladder "${ladder}"`);
   if (!Array.isArray(lanes) || lanes.length < 1 || lanes.length > 12) {
-    throw new Error('lanes must be an array of 1 to 12 lanes');
+    throw new MolbioInputError('lanes must be an array of 1 to 12 lanes');
   }
   for (const lane of lanes) {
     if (lane === null || typeof lane !== 'object' || !Array.isArray(lane.fragments)) {
-      throw new Error('each lane must be an object with a fragments array');
+      throw new MolbioInputError('each lane must be an object with a fragments array');
     }
     for (const size of lane.fragments) {
-      if (!Number.isFinite(size) || size <= 0) throw new Error(`invalid fragment size ${size}`);
+      if (!Number.isFinite(size) || size <= 0) throw new MolbioInputError(`invalid fragment size ${size}`);
     }
   }
 

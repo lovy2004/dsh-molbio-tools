@@ -326,6 +326,10 @@ export async function scoreSuiteOffline(options = {}) {
   const network = [];
   for (const task of tasks) {
     if (options.only !== undefined && options.only !== task.id) continue;
+    // A selection the caller computed (`benchmark/run.mjs` funnels --tools,
+    // --changed and --tier through selectTasks) narrows an offline run exactly
+    // the way it narrows a model run.
+    if (options.onlyIds !== undefined && !options.onlyIds.has(task.id)) continue;
     for (const [relative, text] of Object.entries(setupFor(task))) seedText(harness.memFs, relative, text);
 
     const toolAssertions = task.assertions.filter((assertion) => assertion.where === 'tool');

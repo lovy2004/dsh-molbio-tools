@@ -17,8 +17,8 @@ L = 需要新机制或外部资源）。
   （见 [benchmark/README.md](../benchmark/README.md)）。
 - 基线：DSH **0.1.7-rc.1**。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
-  **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。跑在 `windows-latest` 上，
-  原因见 3.6。
+  **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
+  `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
 - **benchmark 交出的前两条缺陷已在 0.16.0 修完**（引物朝向、甲基化参考表），
   见 [history.md](history.md) 的 v0.16.0 段与 [CHANGELOG](../CHANGELOG.md)。
 - **图表能力已完整交付**：0.17.0 落地折线/直方图/箱型图与 CSV/TSV 读取层，
@@ -131,7 +131,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 52 条任务覆盖 **57/57 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 55 条任务覆盖 **57/57 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。
@@ -165,30 +165,6 @@ benchmark"的那一类；等下一次不得不动 `plot.mjs` 时一并做，不�
 就能验证，不必改任何像素断言。绘图助手没有这种证明（旧输出被 `test/svgpng.mjs` 与 benchmark
 期望值钉着），所以仍等上面那句话说的时机。
 
-### 3.6 套件的宿主路径是写死的（CI 因此只能跑 Windows）
-
-`test/smoke.mjs` 有 **184** 处、`test/map-card.mjs` 有 3 处直接写 `C:/tmp/...`（其中 3 处写成
-`'C:\\tmp\\...'` 作为期望值）。夹具的会话 cwd 是 `C:/tmp`，而工具用 `node:path` 拼路径，所以在
-Linux runner 上这些断言会因**分隔符**而失败——那是在报告宿主的路径语义，不是在报告本仓库的
-缺陷。`test/client-mount.mjs` 还有一处同类问题（写死 `%APPDATA%\npm`），**0.18.2 已修**，那也
-正是 workflow 第一次运行全红的原因。
-
-**改法（已设计，未做）**：在每个受影响的测试文件顶部加三个助手，把"输入路径"和"期望值"都从
-同一个根推导出来：
-
-```js
-const CWD = process.platform === 'win32' ? 'C:/tmp' : '/tmp';
-const at = (name) => `${CWD}/${name}`;      // 作为工具参数
-const shown = (name) => join(CWD, name);    // 工具 `join` 之后返回的形态
-```
-
-然后把 `'C:/tmp/X'` 换成 `at('X')`、`'C:\\tmp\\X'` 换成 `shown('X')`（模板字面量同理，`at()`
-接受插值）。
-
-**为什么不在没有 Linux runner 的情况下做**：本机只能证明"Windows 上无回归"，证明不了"Linux 上
-正确"，而 187 处改动的风险恰恰落在后面那一半。正确顺序是先在 CI 里加一个 ubuntu job（或手动跑
-一次），看到它绿了，再把 `windows-latest` 换成 `ubuntu-latest`——那时这次重写也就有了它的验证。
-
 ### 3.5 ✅ 已修（0.18.0）`svgpng.mjs` 的"浏览器半"守卫曾靠子串嗅探
 
 `test/svgpng.mjs` 原用 `bundle.includes('svgpng')` / `includes('node:zlib')` 断言客户端产物里
@@ -218,6 +194,33 @@ const shown = (name) => join(CWD, name);    // 工具 `join` 之后返回的形�
 > `svgpng.mjs` 了，"措辞规则"已从 README 移除。
 
 ---
+
+### 3.6 ✅ 已修（0.18.4）套件的宿主路径曾是写死的（CI 因此只能跑 Windows）
+
+`test/smoke.mjs` 有 **184** 处、`test/map-card.mjs` 有 3 处直接写 `C:/tmp/...`（其中 3 处写成
+`'C:\\tmp\\...'` 作为期望值）。夹具的会话 cwd 是 `C:/tmp`，而工具用 `node:path` 拼路径，所以在
+Linux runner 上这些断言会因**分隔符**而失败——那是在报告宿主的路径语义，不是在报告本仓库的
+缺陷。`test/client-mount.mjs` 还有一处同类问题（写死 `%APPDATA%\npm`），**0.18.2 已修**，那也
+正是 workflow 第一次运行全红的原因。
+
+**改法（已设计，未做）**：在每个受影响的测试文件顶部加三个助手，把"输入路径"和"期望值"都从
+同一个根推导出来：
+
+```js
+const CWD = process.platform === 'win32' ? 'C:/tmp' : '/tmp';
+const at = (name) => `${CWD}/${name}`;      // 作为工具参数
+const shown = (name) => join(CWD, name);    // 工具 `join` 之后返回的形态
+```
+
+然后把 `'C:/tmp/X'` 换成 `at('X')`、`'C:\\tmp\\X'` 换成 `shown('X')`（模板字面量同理，`at()`
+接受插值）。
+
+**当时为什么不盲目改**：本机只能证明"Windows 上无回归"，证明不了"Linux 上正确"，而 187 处改动的
+风险恰恰落在后面那一半。所以先让 CI 绿（0.18.2 修好 harness 解析），再改这 187 处，并且用一次
+**可执行的验证**代替"应该没问题"：把根临时强制成 `/tmp` 跑一遍，两个套件仍然全绿——断言从此与
+分隔符无关。CI 也随之同时跑 `ubuntu-latest` 与 `windows-latest`：`DSH_HARNESS_ROOT` 的推导改由
+Node 做路径运算（Windows 是 `<prefix>/node_modules`，POSIX 是 `<prefix>/lib/node_modules`），
+同一个步骤在两个平台都成立。
 
 ## 4. 明确不做（避免重复勘察）
 

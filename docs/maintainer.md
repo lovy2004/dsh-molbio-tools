@@ -77,7 +77,7 @@ dsh-molbio-tools/
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
 │                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
-├── benchmark/       # 可用性评估：tasks.json + 判分器 + headless profile 推导
+├── benchmark/       # 可用性评估：tasks/*.json + 判分器 + headless profile 推导
 │                    #   （README.md 是入口；reports/ 与 scratch 工作区不进 git）
 ├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查 + preset 漂移守卫 + benchmark profile 守卫
 ├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
@@ -90,4 +90,4 @@ dsh-molbio-tools/
 
 本插件受"零依赖、随 preset 分发"约束，注册**裸工具定义**（无法 import `defineTool`），
 因此自行实现了官方约定中的等价行为的逐项对照，以及三处**已标注的合理偏差**——
-见 [rules.md](rules.md) 第 6 节。
+见 [rules.md](rules.md) 第 7 节。

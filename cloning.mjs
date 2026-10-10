@@ -818,8 +818,3 @@ function dimerScore(p1, p2) {
   return { score: best, maxConsecutive: best };
 }
 
-/** Minimal validity check for a primer string (unambiguous bases only). */
-export function isUnambiguous(seq) {
-  for (const base of seq) if (!DNA_BASES.has(base)) return false;
-  return true;
-}

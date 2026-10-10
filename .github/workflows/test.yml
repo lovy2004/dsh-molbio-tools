@@ -6,16 +6,16 @@ name: tests
 # remembered to type it, which is how two released versions once lived only in a
 # working tree.
 #
-# ── Why windows-latest ──────────────────────────────────────────────────────
+# ── Why both platforms ─────────────────────────────────────────────────────
 #
-# The fixtures drive the tools through a mock filesystem whose session cwd is
-# `C:/tmp`, and several assertions compare the path a tool RETURNS after
-# `node:path.join` has run on it (`'C:\\tmp\\pTEST.svg'` in test/smoke.mjs). On a
-# Linux runner those comparisons fail on the separator alone, reporting the
-# host's path semantics instead of anything this repository owns. Windows is
-# also the platform this package is developed and verified on. Making the suite
-# platform-neutral (normalise before comparing) is worth doing, but it is a
-# change to the suite, not a prerequisite for CI.
+# The matrix runs the suite on Windows AND Linux. It used to be Windows only,
+# because the fixtures' session cwd was the literal `C:/tmp` and the tools build
+# paths with `node:path`, so on Linux those assertions failed on the separator —
+# reporting the runner's path semantics instead of anything this repository owns.
+# That is fixed: the tests derive every path from one root (`const CWD = …` plus
+# `at()`/`shown()` helpers), so both platforms now assert the same thing. Linux is
+# also the cheaper runner and has no MAX_PATH limit, which `npm install --global`
+# of a deeply nested package can hit on Windows.
 #
 # ── Why the harness is installed, and why it is PINNED ──────────────────────
 #
@@ -39,11 +39,14 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        node: ['22', '24']
+        os: [ubuntu-latest, windows-latest]
+        # The engine floor `package.json` declares. A newer Node is what local
+        # development runs; add it here when a version-specific change lands.
+        node: ['22']
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,27 +56,28 @@ jobs:
       - name: Install the DSH baseline the guards compare against
         run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.1.7-rc.1
 
-      # Every guard that compares this repository against DSH resolves the harness
-      # through `benchmark/harness.mjs`. Say exactly what was installed rather
-      # than leaving each probe to guess: on a runner npm's global prefix is the
-      # Node toolchain's directory, NOT the `%APPDATA%\npm` a normal Windows user
-      # install lands in — and one probe (test/client-mount.mjs) hardcoded that
-      # path, so the first run of this workflow failed there.
+      # Every guard resolves the harness through `benchmark/harness.mjs`. Say
+      # exactly what was installed rather than leaving each probe to guess: on a
+      # runner npm's global prefix is the Node toolchain's directory, NOT the
+      # `%APPDATA%\npm` a normal Windows user install lands in — and one probe
+      # (test/client-mount.mjs) hardcoded that path, which is how the first run of
+      # this workflow failed every job. Node does the path arithmetic so the same
+      # step works whichever shell the runner uses.
       - name: Point the guards at the harness they just installed
-        shell: pwsh
-        run: |
-          $prefix = npm prefix -g
-          $root = Join-Path $prefix 'node_modules\@deepseek-ai\dsh'
-          Write-Host "npm prefix -g : $prefix"
-          Write-Host "harness root  : $root"
-          Write-Host "installed     : $(Test-Path $root)"
-          if (-not (Test-Path $root)) { throw "the harness is not under the prefix npm reports ($root)" }
-          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "DSH_HARNESS_ROOT=$root`n", (New-Object System.Text.UTF8Encoding($false)))
+        run: >-
+          node --input-type=module -e "import { execFileSync } from 'node:child_process';
+          import { existsSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const prefix = execFileSync('npm', ['prefix', '-g'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
+          const root = [join(prefix, 'node_modules', '@deepseek-ai', 'dsh'), join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh')].find((c) => existsSync(join(c, 'package.json')));
+          if (root === undefined) { console.error('the harness is not under the prefix npm reports:', prefix); process.exit(1); }
+          appendFileSync(process.env.GITHUB_ENV, 'DSH_HARNESS_ROOT=' + root + '\n');
+          console.log('DSH_HARNESS_ROOT =', root);"
 
       # Printed before the suite so a red build is readable from the log alone:
       # this distinguishes "the harness is missing" from "a guard found something".
       - name: Report the harness the guards resolved
-        run: node --input-type=module -e "import { findHarnessRoot } from './benchmark/harness.mjs'; console.log('DSH_HARNESS_ROOT:', process.env.DSH_HARNESS_ROOT); console.log('APPDATA:', process.env.APPDATA); const root = findHarnessRoot(); if (root === undefined) { console.error('no harness resolved'); process.exit(1); } console.log('harness:', root);"
+        run: node --input-type=module -e "import { findHarnessRoot } from './benchmark/harness.mjs'; console.log('platform:', process.platform, 'node:', process.version); console.log('DSH_HARNESS_ROOT:', process.env.DSH_HARNESS_ROOT); const root = findHarnessRoot(); if (root === undefined) { console.error('no harness resolved'); process.exit(1); } console.log('harness:', root);"
 
       - name: Run the suite
         run: npm test

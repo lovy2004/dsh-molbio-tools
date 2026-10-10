@@ -10,6 +10,59 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.18.4] — 2026-10-10（清掉余下的债：文档漂移、benchmark 层的死角、套件与平台）
+
+**工具数不变（57）。** 这一版收尾：没有新的工具缺陷，全是"记录与事实不符"和"守卫够不着"。
+
+### 文档漂移（每一处都曾把错的路径或错的数字递给读者）
+
+- README 里那段"改注释的措辞规则"**删掉**：它描述的 `test/svgpng.mjs` 子串搜索早已不存在
+  （0.18.0 改成结构性断言），roadmap 3.5 也早就写着"该规则已从 README 移除"——只有 README 自己
+  还留着它，而且与它上面三段的说法相反。
+- `benchmark/tasks.json` 自 0.15.x 起就是 `benchmark/tasks/*.json`：**七处**引用（benchmark/README、
+  workflow、maintainer、README、`.gitignore`、`run.mjs`、两个 `_probe`）已改正。
+- 任务数 `52 条` → `55`（roadmap 3.2）；`52 个工具` → `57`（client-panel 两处、`client-bundle.mjs`
+  的注释）；maintainer 的"rules.md 第 6 节" → 第 7 节（v0.14.0 拆文档时的错位）。
+- `docs/workflow.md` 的测试清单补上 `test/charts.mjs`（它从 0.17.0 起就在 `npm test` 里）。
+- 历史文档（CHANGELOG、v20-plan、route-b）**保持原样**：它们记录的是当时的事实，改掉就是伪造记录。
+
+### benchmark / 测试层的死角
+
+- **`bench:profile:check` 进了 `npm test`**。workflow.md 自己写着"这一项不在 npm test 里，别忘"
+  ——一条要求人记住的守卫等于没有守卫。
+- **两个孤儿 builder 删掉**（`plasmid-map`、`restriction-map`：任务改名后留下的，永远不会被调用，
+  也就永远不再验证任何东西；其中一个还带 `type: 'FIXTURES.CDS'` 这个字面量笔误）。新增**反向检查**：
+  从源码读出 builder id，断言每一个都对应真实任务。
+- **夹具前提有了守卫**：`genbank-parse` 让模型比较 `pUC118.gb` 与 `pUC118.dna`，而这两个文件是各自
+  手写的（旧注释声称由 `benchmark/_make-genbank.mjs` 生成——**该文件根本不存在**）。现在断言两者的
+  序列逐碱基相同（实测 3162/3162），前提被破坏时会红。
+- **`--offline` 现在真的听 `--tools` / `--changed` / `--tier`**：以前这些标志被完全忽略——看起来
+  缩小了检查范围，实际整套照跑。默认仍是**全量**（`--offline` 的语义是"校验全套期望值"），
+  显式 `--tier core` 才是 14 题。
+
+### 代码
+
+- `protein.mjs` 的避让酶表是 `lib.mjs` 酶表的**第二份副本**（81 条识别位点，逐条比对全部一致）
+  ——现在只留**酶名清单**，位点从 `lib.mjs` 推导。与 IUPAC 那次同理：能收敛是因为先证明了等价。
+- `plot.mjs` 四处对用户输入的校验抛的是**裸 `Error`**（rules.md 第 7 节要求 `MolbioInputError`），
+  已统一。
+- 删掉五处**死导出**（`BUFFER_TABLE_ENZYMES`、`METHYLATION_MARKS`、`DEFAULT_PROTOCOLS_FILE`、
+  `DEFAULT_EXPERIMENTS_FILE`、`isUnambiguous`）：定义之后全仓无任何引用，连自身文件都不用。
+- `test/smoke.mjs` 的 MSA 不变式（"每一行去掉 gap 等于输入"）此前只断言**一行一个夹具**，
+  现在对三组夹具的**每一行**断言，并补了长度差更大的输入。
+
+### 套件与平台
+
+- **套件不再依赖宿主分隔符**：`test/smoke.mjs` 184 处、`test/map-card.mjs` 3 处宿主路径字面量收敛为
+  两个助手（`at()` 造工具参数、`shown()` 造工具 `join` 之后的形态），根由 `process.platform` 决定。
+  验证方式（本机不是 Linux）：把根临时强制为 `/tmp` 后两个套件**仍然全绿**——断言现在与分隔符无关，
+  而不是"在 Windows 上碰巧对"。
+- **CI 同时跑 `ubuntu-latest` 与 `windows-latest`**（此前只有 Windows，原因就是上面那条）。
+  `DSH_HARNESS_ROOT` 的推导改由 **Node 做路径运算**（Windows 是 `<prefix>/node_modules`，POSIX 是
+  `<prefix>/lib/node_modules`），所以同一个步骤在两个平台都成立。
+- `lib.mjs` / `crispr.mjs` 的工作区副本本来就是 CRLF（仓库行尾混杂），已统一为 LF，与
+  `.gitattributes` 的 `eol=lf` 一致。
+
 ## [0.18.3] — 2026-10-10（余下的静默错误；IUPAC 字母表收敛为一处）
 
 **工具数不变（57）。** 三条解析路径不再"数字看着对、含义对不上"，一个坐标约定被写清，

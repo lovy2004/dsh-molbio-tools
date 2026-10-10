@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { findHarnessRoot, importPackage } from '../benchmark/harness.mjs';
 
@@ -129,16 +130,23 @@ for (const tool of registered) {
   }
 }
 
-const fakeExec = { agent: { session: { header: { cwd: 'C:/tmp' } } } };
+// Fixture paths are built through `join` on the HOST, so the tests state them
+// through one root instead of a literal Windows path: the same assertions then
+// hold on a Linux runner instead of failing on the separator, which is a
+// property of the runner and not of this repository.
+const CWD = process.platform === 'win32' ? 'C:/tmp' : '/tmp';
+const at = (name) => `${CWD}/${name}`;       // handed to a tool as a path
+const shown = (name) => join(CWD, name);     // what a tool returns after join()
+const fakeExec = { agent: { session: { header: { cwd: CWD } } } };
 
 // Load the real pUC118 SnapGene fixture into the mock fs up front.
 const puc118Bytes = new Uint8Array(await readFile(new URL('./fixtures/pUC118.dna', import.meta.url)));
-memFs.files.set('C:/tmp/pUC118.dna', puc118Bytes);
+memFs.files.set(at('pUC118.dna'), puc118Bytes);
 
 const sangerSampleRef = makeTemplate(300, 29);
-memFs.files.set('C:/tmp/good.seq', `>good\n${sangerSampleRef}\n`);
-memFs.files.set('C:/tmp/seqs.fa', '>a1 desc\nATGCATGC\n>b2\nGGGGCCCC\n');
-memFs.files.set('C:/tmp/reads.fq', '@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nHHHH\n');
+memFs.files.set(at('good.seq'), `>good\n${sangerSampleRef}\n`);
+memFs.files.set(at('seqs.fa'), '>a1 desc\nATGCATGC\n>b2\nGGGGCCCC\n');
+memFs.files.set(at('reads.fq'), '@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nHHHH\n');
 
 /** Run one tool with args and validate its output value against its schema. */
 async function run(toolName, args) {
@@ -176,10 +184,10 @@ function makeTemplate(n, seed = 42) {
     calls.push({ cmd, args });
     return undefined;
   };
-  await view.openDefaultViewer('C:/tmp/map.svg', { platform: 'win32', env: {}, run: fakeRun });
+  await view.openDefaultViewer(at('map.svg'), { platform: 'win32', env: {}, run: fakeRun });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cmd, 'powershell.exe');
-  assert.ok(calls[0].args.join(' ').includes('Invoke-Item -LiteralPath') && calls[0].args.join(' ').includes('C:/tmp/map.svg'));
+  assert.ok(calls[0].args.join(' ').includes('Invoke-Item -LiteralPath') && calls[0].args.join(' ').includes(at('map.svg')));
   calls.length = 0;
   await view.openDefaultViewer('/tmp/map.svg', { platform: 'linux', env: { BROWSER: 'firefox', DISPLAY: ':0' }, run: fakeRun });
   assert.equal(calls.length, 1);
@@ -322,35 +330,35 @@ function makeTemplate(n, seed = 42) {
     ['molbio_parse_genbank', { genbank: 'LOCUS       X                10 bp    DNA     circular 01-JAN-2024\nFEATURES             Location/Qualifiers\nORIGIN\n        1 aaaaaaaaaa\n//' }],
     ['molbio_plasmid_map', { sequence: makeTemplate(500, 1), name: 'pX', features: [{ label: 'ori', start: 10, end: 100 }], enzymes: ['EcoRI'] }],
     ['molbio_pubmed_search', { query: 'plasmid' }],
-    ['molbio_paper_add', { file: 'C:/tmp/papers.json', papers: [{ title: 'Render paper' }] }],
-    ['molbio_paper_list', { file: 'C:/tmp/papers.json' }],
-    ['molbio_paper_update', { file: 'C:/tmp/papers.json', id: 'title:Render paper:', note: 'n' }],
-    ['molbio_paper_remove', { file: 'C:/tmp/papers.json', id: 'title:Render paper:' }],
-    ['molbio_unique_cutters', { vector_path: 'C:/tmp/pUC118.dna', insert: 'GATC' }],
-    ['molbio_clone_simulate', { vector: 'A'.repeat(20) + 'GAATTC' + 'T'.repeat(40) + 'AAGCTT' + 'C'.repeat(20), insert: 'GAATTCGGGGAAGCTT', method: 'restriction', enzymes: ['EcoRI', 'HindIII'], save_path: 'C:/tmp/clone.fa' }],
+    ['molbio_paper_add', { file: at('papers.json'), papers: [{ title: 'Render paper' }] }],
+    ['molbio_paper_list', { file: at('papers.json') }],
+    ['molbio_paper_update', { file: at('papers.json'), id: 'title:Render paper:', note: 'n' }],
+    ['molbio_paper_remove', { file: at('papers.json'), id: 'title:Render paper:' }],
+    ['molbio_unique_cutters', { vector_path: at('pUC118.dna'), insert: 'GATC' }],
+    ['molbio_clone_simulate', { vector: 'A'.repeat(20) + 'GAATTC' + 'T'.repeat(40) + 'AAGCTT' + 'C'.repeat(20), insert: 'GAATTCGGGGAAGCTT', method: 'restriction', enzymes: ['EcoRI', 'HindIII'], save_path: at('clone.fa') }],
     ['molbio_clone_primers', { template: 'ATGCGTACGTAGCTAGCTAGCATGCGATCGA', mode: 'restriction', enzymes: ['EcoRI'] }],
     ['molbio_mutagenesis_primers', { template: (() => { const t = makeTemplate(200, 23); return t.slice(0, 99) + 'A' + t.slice(100); })(), mutations: ['A100G'], tm_min: 60, tm_max: 95 }],
-    ['molbio_verify_sanger', { trace_path: 'C:/tmp/good.seq', reference: sangerSampleRef }],
+    ['molbio_verify_sanger', { trace_path: at('good.seq'), reference: sangerSampleRef }],
     ['molbio_protein_props', { sequence: 'MKWVTFISLL' }],
     ['molbio_peptide_digest', { sequence: 'MKWVTFISLL', enzyme: 'trypsin', missed: 1 }],
     ['molbio_codon_optimize', { sequence: 'MKWVTFISLL', host: 'yeast' }],
-    ['molbio_qpcr_efficiency', { dilution_factors: [1, 10, 100], ct_values: [20, 23.3, 26.6], plot_path: 'C:/tmp/std_curve.svg' }],
-    ['molbio_plot', { kind: 'bar', output_path: 'C:/tmp/bar.svg', labels: ['A', 'B'], values: [1, 2] }],
+    ['molbio_qpcr_efficiency', { dilution_factors: [1, 10, 100], ct_values: [20, 23.3, 26.6], plot_path: at('std_curve.svg') }],
+    ['molbio_plot', { kind: 'bar', output_path: at('bar.svg'), labels: ['A', 'B'], values: [1, 2] }],
     ['molbio_virtual_gel', { lanes: [{ label: 'EcoRI', fragments: [3000, 800] }] }],
     ['molbio_enzyme_lookup', { sequence: 'GAATTC', enzymes: ['EcoRI', 'BsaI'] }],
     ['molbio_golden_gate', { vector: 'A'.repeat(60) + 'C'.repeat(40) + 'T'.repeat(60), replace_region: { start: 61, end: 100 }, inserts: ['G'.repeat(30) + 'AATT' + 'C'.repeat(30)] }],
     ['molbio_align', { sequence1: 'ATGCATGCAT', sequence2: 'ATGCGTGCAT' }],
     ['molbio_msa_align', { sequences: ['ACGTACGT', 'ACGTTCGT'] }],
     ['molbio_conservation', { alignment: ['ACGT', 'ACGA'] }],
-    ['molbio_fasta_fastq', { path: 'C:/tmp/seqs.fa', action: 'stats' }],
-    ['molbio_extract_region', { source_path: 'C:/tmp/pUC118.dna', feature: 'ori' }],
+    ['molbio_fasta_fastq', { path: at('seqs.fa'), action: 'stats' }],
+    ['molbio_extract_region', { source_path: at('pUC118.dna'), feature: 'ori' }],
     ['molbio_pubmed_abstract', { pmids: ['12345678'] }],
-    ['molbio_paper_export_bibtex', { file: 'C:/tmp/bib.json', output_path: 'C:/tmp/papers.bib' }],
-    ['molbio_protocol_add', { file: 'C:/tmp/protocols.json', name: 'PCR' }],
-    ['molbio_protocol_list', { file: 'C:/tmp/protocols.json' }],
-    ['molbio_protocol_update', { file: 'C:/tmp/protocols.json', id: 'rec1', name: 'PCR v2' }],
-    ['molbio_experiment_log', { file: 'C:/tmp/experiments.json', title: 't' }],
-    ['molbio_experiment_list', { file: 'C:/tmp/experiments.json' }],
+    ['molbio_paper_export_bibtex', { file: at('bib.json'), output_path: at('papers.bib') }],
+    ['molbio_protocol_add', { file: at('protocols.json'), name: 'PCR' }],
+    ['molbio_protocol_list', { file: at('protocols.json') }],
+    ['molbio_protocol_update', { file: at('protocols.json'), id: 'rec1', name: 'PCR v2' }],
+    ['molbio_experiment_log', { file: at('experiments.json'), title: 't' }],
+    ['molbio_experiment_list', { file: at('experiments.json') }],
   ];
   for (const [toolName, args] of samples) {
     const tool = registered.find((t) => t.name === toolName);
@@ -502,7 +510,7 @@ function makeTemplate(n, seed = 42) {
   assert.equal(out.length, 1000);
   assert.equal(out.feature_count, 3);
   assert.equal(out.enzyme_count, 1);
-  assert.equal(out.svg_path, 'C:\\tmp\\pTEST.svg');
+  assert.equal(out.svg_path, shown('pTEST.svg'));
   const svg = memFs.files.get(out.svg_path).toString('utf8');
   assert.ok(svg.includes('<svg'));
   assert.ok(svg.includes('pTEST'));
@@ -511,9 +519,9 @@ function makeTemplate(n, seed = 42) {
   assert.ok(svg.includes('A&amp;B tag'), 'labels must be XML-escaped');
   assert.ok(svg.includes('EcoRI'));
   assert.ok(!svg.includes('rotate(180'), 'labels must not be rotated upside down');
-  const linear = await run('molbio_plasmid_map', { sequence, circular: false, features, enzymes: ['EcoRI'], output_path: 'C:/tmp/linear.svg' });
+  const linear = await run('molbio_plasmid_map', { sequence, circular: false, features, enzymes: ['EcoRI'], output_path: at('linear.svg') });
   assert.equal(linear.circular, false);
-  assert.equal(linear.svg_path, 'C:/tmp/linear.svg');
+  assert.equal(linear.svg_path, at('linear.svg'));
   const linearSvg = memFs.files.get(linear.svg_path).toString('utf8');
   assert.ok(linearSvg.includes('<line'));
 
@@ -526,7 +534,7 @@ function makeTemplate(n, seed = 42) {
 // ── SnapGene .dna (real pUC118 fixture from snapgene.com) ───────────────────
 
 {
-  const out = await run('molbio_parse_snapgene', { path: 'C:/tmp/pUC118.dna' });
+  const out = await run('molbio_parse_snapgene', { path: at('pUC118.dna') });
   assert.equal(out.name, 'pUC118');
   assert.equal(out.length, 3162);
   assert.equal(out.topology, 'circular');
@@ -548,13 +556,13 @@ function makeTemplate(n, seed = 42) {
   assert.match(renderBlocks[0].text, /\[multi-part 2102-2893,2894-2962\]/);
   assert.equal(out.features_skipped, undefined, 'every pUC118 feature parsed, so nothing is reported as skipped');
 
-  const map = await run('molbio_plasmid_map_file', { path: 'C:/tmp/pUC118.dna', enzymes: ['EcoRI', 'HindIII', 'PstI'] });
+  const map = await run('molbio_plasmid_map_file', { path: at('pUC118.dna'), enzymes: ['EcoRI', 'HindIII', 'PstI'] });
   assert.equal(map.name, 'pUC118');
   assert.equal(map.length, 3162);
   assert.equal(map.circular, true);
   assert.equal(map.feature_count, out.features.length);
   assert.equal(map.enzyme_count, 3);
-  assert.equal(map.svg_path, 'C:\\tmp\\pUC118.svg');
+  assert.equal(map.svg_path, shown('pUC118.svg'));
   const mapSvg = memFs.files.get(map.svg_path).toString('utf8');
   assert.ok(mapSvg.includes('AmpR'));
   assert.ok(mapSvg.includes('lacZ'));
@@ -562,7 +570,7 @@ function makeTemplate(n, seed = 42) {
   assert.ok(!mapSvg.includes('rotate(180'), 'labels must not be rotated upside down');
 
   // unsupported extension
-  await assert.rejects(() => run('molbio_plasmid_map_file', { path: 'C:/tmp/x.fasta' }), /unsupported file type/);
+  await assert.rejects(() => run('molbio_plasmid_map_file', { path: at('x.fasta') }), /unsupported file type/);
 }
 
 // ── a dropped SnapGene annotation is counted, not lost ──────────────────────
@@ -610,7 +618,7 @@ function makeTemplate(n, seed = 42) {
 
 {
   // unique cutters against the real pUC118 file
-  const out = await run('molbio_unique_cutters', { vector_path: 'C:/tmp/pUC118.dna', insert: 'GATC', region_start: 850, region_end: 950 });
+  const out = await run('molbio_unique_cutters', { vector_path: at('pUC118.dna'), insert: 'GATC', region_start: 850, region_end: 950 });
   const eco = out.ideal.find((entry) => entry.name === 'EcoRI');
   assert.ok(eco !== undefined, 'EcoRI should be an ideal single cutter');
   assert.equal(eco.cut_position, 927);
@@ -618,7 +626,7 @@ function makeTemplate(n, seed = 42) {
   assert.ok(out.ideal.length > 5);
 
   // insert containing an EcoRI site excludes EcoRI
-  const excluded = await run('molbio_unique_cutters', { vector_path: 'C:/tmp/pUC118.dna', insert: 'GAATTC' });
+  const excluded = await run('molbio_unique_cutters', { vector_path: at('pUC118.dna'), insert: 'GAATTC' });
   assert.ok(!excluded.ideal.some((entry) => entry.name === 'EcoRI'));
   assert.ok(excluded.insert_cutters.includes('EcoRI'));
 }
@@ -633,7 +641,7 @@ function makeTemplate(n, seed = 42) {
     insert,
     method: 'restriction',
     enzymes: ['EcoRI', 'HindIII'],
-    save_path: 'C:/tmp/clone.fa',
+    save_path: at('clone.fa'),
   });
   assert.equal(out.final_sequence, expected);
   assert.equal(out.length, 84);
@@ -642,7 +650,7 @@ function makeTemplate(n, seed = 42) {
   assert.equal(out.features[0].label, 'Insert');
   assert.equal(out.features[0].start, 32);
   assert.ok(out.verify.length > 0);
-  assert.equal(out.save_path, 'C:/tmp/clone.fa');
+  assert.equal(out.save_path, at('clone.fa'));
   const fasta = memFs.files.get(out.save_path).toString('utf8');
   assert.ok(fasta.startsWith('>'));
   assert.ok(fasta.includes(expected));
@@ -682,8 +690,8 @@ function makeTemplate(n, seed = 42) {
   assert.ok(internal.notes.some((note) => note.includes('INSIDE')));
 
   // map_path writes the new plasmid map in the same call
-  const mapped = await run('molbio_clone_simulate', { vector: vector2, insert: invertedInsert, method: 'restriction', enzymes: ['EcoRI', 'HindIII'], map_path: 'C:/tmp/clone_map.svg' });
-  assert.equal(mapped.map_path, 'C:/tmp/clone_map.svg');
+  const mapped = await run('molbio_clone_simulate', { vector: vector2, insert: invertedInsert, method: 'restriction', enzymes: ['EcoRI', 'HindIII'], map_path: at('clone_map.svg') });
+  assert.equal(mapped.map_path, at('clone_map.svg'));
   const cloneSvg = memFs.files.get(mapped.map_path).toString('utf8');
   assert.ok(cloneSvg.includes('vector_clone'));
   assert.ok(cloneSvg.includes('Insert'));
@@ -761,8 +769,8 @@ function makeTemplate(n, seed = 42) {
   trace = trace.slice(0, 199) + alt(trace[199]) + trace.slice(200);
   trace = trace.slice(0, 299) + trace.slice(300);
   trace = trace.slice(0, 400) + 'A' + trace.slice(400);
-  memFs.files.set('C:/tmp/mut.seq', `>mut\n${trace}\n`);
-  const out = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/mut.seq', reference });
+  memFs.files.set(at('mut.seq'), `>mut\n${trace}\n`);
+  const out = await run('molbio_verify_sanger', { trace_path: at('mut.seq'), reference });
   assert.equal(out.verdict, 'differences_found');
   const mismatches = out.differences.filter((d) => d.kind === 'mismatch');
   assert.equal(mismatches.length, 2);
@@ -773,8 +781,8 @@ function makeTemplate(n, seed = 42) {
   assert.ok(out.identity_percent < 100);
 
   // perfect trace → match
-  memFs.files.set('C:/tmp/good.seq', `>good\n${reference}\n`);
-  const good = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/good.seq', reference });
+  memFs.files.set(at('good.seq'), `>good\n${reference}\n`);
+  const good = await run('molbio_verify_sanger', { trace_path: at('good.seq'), reference });
   assert.equal(good.verdict, 'match');
   assert.equal(good.differences.length, 0);
 }
@@ -814,8 +822,8 @@ function makeTemplate(n, seed = 42) {
   };
   const reference = makeTemplate(400, 13);
   const ab1 = makeAbif(reference.slice(0, 250), new Array(250).fill(40));
-  memFs.files.set('C:/tmp/trace.ab1', ab1);
-  const out = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/trace.ab1', reference });
+  memFs.files.set(at('trace.ab1'), ab1);
+  const out = await run('molbio_verify_sanger', { trace_path: at('trace.ab1'), reference });
   assert.equal(out.verdict, 'match');
   assert.equal(out.trace_length, 250);
   assert.equal(out.quality_mean, 40);
@@ -823,8 +831,8 @@ function makeTemplate(n, seed = 42) {
 
   // circular reference: a trace spanning the origin aligns cleanly
   const span = reference.slice(-50) + reference.slice(0, 60);
-  memFs.files.set('C:/tmp/span.seq', `>span\n${span}\n`);
-  const circular = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/span.seq', reference });
+  memFs.files.set(at('span.seq'), `>span\n${span}\n`);
+  const circular = await run('molbio_verify_sanger', { trace_path: at('span.seq'), reference });
   assert.equal(circular.verdict, 'match');
   assert.ok(circular.differences.length === 0);
 
@@ -833,16 +841,16 @@ function makeTemplate(n, seed = 42) {
   // quality filter and the verdict are computed from exactly those numbers. The
   // padding's own quality (5) must leave with the padding, not land on base 1.
   const padded = makeAbif(` ${reference.slice(0, 249)}`, [5, ...new Array(249).fill(40)]);
-  memFs.files.set('C:/tmp/padded.ab1', padded);
-  const paddedOut = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/padded.ab1', reference });
+  memFs.files.set(at('padded.ab1'), padded);
+  const paddedOut = await run('molbio_verify_sanger', { trace_path: at('padded.ab1'), reference });
   assert.equal(paddedOut.trace_length, 249, 'the padding is dropped from the trace');
   assert.equal(paddedOut.quality_mean, 40, 'and its quality left with it (a shift would read 39.9)');
 
   // Two FASTA records in one "trace": concatenating them would silently fuse two
   // reads into one.
-  memFs.files.set('C:/tmp/two.fasta', `>a\n${reference.slice(0, 120)}\n>b\n${reference.slice(120, 240)}\n`);
+  memFs.files.set(at('two.fasta'), `>a\n${reference.slice(0, 120)}\n>b\n${reference.slice(120, 240)}\n`);
   await assert.rejects(
-    () => run('molbio_verify_sanger', { trace_path: 'C:/tmp/two.fasta', reference }),
+    () => run('molbio_verify_sanger', { trace_path: at('two.fasta'), reference }),
     /2 FASTA records; a trace is a single read/,
   );
 }
@@ -951,8 +959,8 @@ function makeTemplate(n, seed = 42) {
   // regression: Sanger amino-acid consequences — codon-local substitution
   // slicing (mutations past the first codon), in-frame vs frameshift deletions
   const reference = 'ATGTTTGGGCCCTAA' + 'A'.repeat(30);
-  const writeTrace = (label, trace) => memFs.files.set(`C:/tmp/${label}.seq`, `>${label}\n${trace}\n`);
-  const verify = (label) => run('molbio_verify_sanger', { trace_path: `C:/tmp/${label}.seq`, reference, cds_start: 1, cds_end: 12 });
+  const writeTrace = (label, trace) => memFs.files.set(at(`${label}.seq`), `>${label}\n${trace}\n`);
+  const verify = (label) => run('molbio_verify_sanger', { trace_path: at(`${label}.seq`), reference, cds_start: 1, cds_end: 12 });
 
   // substitution at CDS base 5 (second codon TTT, second position): F→Y
   writeTrace('aa_sub', reference.slice(0, 4) + 'A' + reference.slice(5));
@@ -989,8 +997,8 @@ function makeTemplate(n, seed = 42) {
   // capped list that does not SAY it is capped reads as "these are all the
   // changes". So the flag has to exist — and it has to be able to be true.
   const reference = makeTemplate(300, 71);
-  const writeTrace = (label, trace) => memFs.files.set(`C:/tmp/${label}.seq`, `>${label}\n${trace}\n`);
-  const verify = (label) => run('molbio_verify_sanger', { trace_path: `C:/tmp/${label}.seq`, reference, cds_start: 1, cds_end: 300 });
+  const writeTrace = (label, trace) => memFs.files.set(at(`${label}.seq`), `>${label}\n${trace}\n`);
+  const verify = (label) => run('molbio_verify_sanger', { trace_path: at(`${label}.seq`), reference, cds_start: 1, cds_end: 300 });
   const swapped = (base) => (base === 'A' ? 'C' : 'A');
 
   writeTrace('aa_few', reference.slice(0, 2) + swapped(reference[2]) + reference.slice(3));
@@ -1054,21 +1062,21 @@ function makeTemplate(n, seed = 42) {
   const slope = -3.321928;
   const factors = [1, 10, 100, 1000];
   const cts = [0, -1, -2, -3].map((x) => 20 + slope * x);
-  const out = await run('molbio_qpcr_efficiency', { dilution_factors: factors, ct_values: cts, plot_path: 'C:/tmp/std_curve.svg' });
+  const out = await run('molbio_qpcr_efficiency', { dilution_factors: factors, ct_values: cts, plot_path: at('std_curve.svg') });
   assert.ok(Math.abs(out.slope - slope) < 1e-3, `slope ${out.slope}`);
   assert.equal(out.efficiency_percent, 100);
   assert.equal(out.r_squared, 1);
-  assert.equal(out.plot_path, 'C:/tmp/std_curve.svg');
+  assert.equal(out.plot_path, at('std_curve.svg'));
   assert.ok(memFs.files.get(out.plot_path).toString('utf8').includes('<svg'));
 }
 
 {
   // generic plots
-  const bar = await run('molbio_plot', { kind: 'bar', output_path: 'C:/tmp/bar.svg', labels: ['A', 'B'], values: [1, 2], errors: [0.2, 0.3], title: 'test' });
+  const bar = await run('molbio_plot', { kind: 'bar', output_path: at('bar.svg'), labels: ['A', 'B'], values: [1, 2], errors: [0.2, 0.3], title: 'test' });
   const barSvg = memFs.files.get(bar.plot_path).toString('utf8');
   assert.ok(barSvg.includes('<rect'));
   assert.ok(barSvg.includes('A') && barSvg.includes('B'));
-  const scatter = await run('molbio_plot', { kind: 'scatter', output_path: 'C:/tmp/scatter.svg', x: [1, 2, 3], y: [2, 4, 6], fit: true });
+  const scatter = await run('molbio_plot', { kind: 'scatter', output_path: at('scatter.svg'), x: [1, 2, 3], y: [2, 4, 6], fit: true });
   const scatterSvg = memFs.files.get(scatter.plot_path).toString('utf8');
   assert.ok(scatterSvg.includes('<circle'));
   assert.ok(scatterSvg.includes('#c73a3a'));
@@ -1128,7 +1136,16 @@ function makeTemplate(n, seed = 42) {
   const three = await run('molbio_msa_align', { sequences: [s1, s2, s3] });
   assert.equal(three.aligned_columns, 12);
   assert.deepEqual(three.alignment.slice(0, 2), [s1, s2]);
-  assert.equal(three.alignment[2].replace(/-/g, ''), s3);
+  // The documented invariant is universal — EVERY output row, ungapped, equals
+  // its input — but it was asserted for a single row of a single fixture. The
+  // extra fixtures have larger length differences, which is exactly where free
+  // end gaps must be emitted as overhang columns instead of dropping residues.
+  for (const inputs of [[s1, s2, s3], ['ACGTACGTACGT', 'ACGTACGT', 'ACGTACGTACGTACGT'], ['A'.repeat(30), 'A'.repeat(12), 'A'.repeat(25)]]) {
+    const aligned = await run('molbio_msa_align', { sequences: inputs });
+    for (const [index, input] of inputs.entries()) {
+      assert.equal(aligned.alignment[index].replace(/-/g, ''), input, `row ${index} keeps every input residue`);
+    }
+  }
   assert.deepEqual(three.alignment[2], '----ACGTACGT'); // free terminal gaps placed at the start (deterministic tie-break)
   assert.equal(three.pairwise_identity_percent.mean, 72.22); // (11 + 8 + 7)/12 over 3 pairs
   assert.equal(three.pairwise_identity_percent.min, 58.33);
@@ -1177,15 +1194,15 @@ function makeTemplate(n, seed = 42) {
   assert.deepEqual(amb.per_column[0], { column: 1, consensus: 'V', identity: 0.333, conservation: 0.208 });
 
   // FASTA input + aligned-FASTA output
-  memFs.files.set('C:/tmp/msa.fa', '>a1\nACGTACGT\n>a2\nACGTTCGT\n');
-  const fasta = await run('molbio_msa_align', { fasta_path: 'C:/tmp/msa.fa', save_path: 'C:/tmp/msa_aln.fa' });
+  memFs.files.set(at('msa.fa'), '>a1\nACGTACGT\n>a2\nACGTTCGT\n');
+  const fasta = await run('molbio_msa_align', { fasta_path: at('msa.fa'), save_path: at('msa_aln.fa') });
   assert.deepEqual(fasta.ids, ['a1', 'a2']);
   assert.equal(fasta.pairwise_identity_percent.mean, 87.5);
-  assert.equal(fasta.saved_to, 'C:/tmp/msa_aln.fa');
+  assert.equal(fasta.saved_to, at('msa_aln.fa'));
   const written = memFs.files.get(fasta.saved_to).toString('utf8');
   assert.ok(written.startsWith('>a1\nACGTACGT\n') && written.includes('>a2\nACGTTCGT'));
 
-  const fastaCons = await run('molbio_conservation', { fasta_path: 'C:/tmp/msa.fa' });
+  const fastaCons = await run('molbio_conservation', { fasta_path: at('msa.fa') });
   assert.equal(fastaCons.source, 'msa');
   assert.equal(fastaCons.consensus, 'ACGTACGT'); // position 5: A vs T → A at 50%
   assert.equal(fastaCons.conserved_columns, 7);
@@ -1193,13 +1210,13 @@ function makeTemplate(n, seed = 42) {
 
   // error paths
   await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGT'] }), /at least 2/);
-  await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGT', 'ACGT'], fasta_path: 'C:/tmp/msa.fa' }), /exactly one/);
+  await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGT', 'ACGT'], fasta_path: at('msa.fa') }), /exactly one/);
   await assert.rejects(() => run('molbio_msa_align', {}), /exactly one/);
   await assert.rejects(() => run('molbio_msa_align', { sequences: ['ACGTX', 'ACGT'] }), /invalid character/);
   await assert.rejects(() => run('molbio_msa_align', { sequences: ['A'.repeat(3001), 'A'.repeat(2)] }), /limit 3000/);
   await assert.rejects(() => run('molbio_msa_align', { sequences: Array.from({ length: 51 }, (_, k) => 'A'.repeat(10)) }), /at most 50/);
-  memFs.files.set('C:/tmp/single.fa', '>only\nACGT\n');
-  await assert.rejects(() => run('molbio_msa_align', { fasta_path: 'C:/tmp/single.fa' }), /at least 2/);
+  memFs.files.set(at('single.fa'), '>only\nACGT\n');
+  await assert.rejects(() => run('molbio_msa_align', { fasta_path: at('single.fa') }), /at least 2/);
   await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT', 'ACGA', 'AC'] }), /same length/);
   await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT'] }), /at least 2/);
   await assert.rejects(() => run('molbio_conservation', { alignment: ['ACGT', 'ACGT'], sequences: ['ACGT', 'ACGT'] }), /exactly one/);
@@ -1210,37 +1227,37 @@ function makeTemplate(n, seed = 42) {
 
 {
   // FASTA/FASTQ processing
-  memFs.files.set('C:/tmp/seqs.fa', '>a1 desc\nATGCATGC\n>b2\nGGGGCCCC\n');
-  const stats = await run('molbio_fasta_fastq', { path: 'C:/tmp/seqs.fa', action: 'stats' });
+  memFs.files.set(at('seqs.fa'), '>a1 desc\nATGCATGC\n>b2\nGGGGCCCC\n');
+  const stats = await run('molbio_fasta_fastq', { path: at('seqs.fa'), action: 'stats' });
   assert.equal(stats.format, 'fasta');
   assert.equal(stats.stats.entries, 2);
   assert.equal(stats.stats.total_bases, 16);
   assert.equal(stats.stats.gc_percent, 75);
-  const extract = await run('molbio_fasta_fastq', { path: 'C:/tmp/seqs.fa', action: 'extract', id: 'a1', output_path: 'C:/tmp/a1.fa' });
+  const extract = await run('molbio_fasta_fastq', { path: at('seqs.fa'), action: 'extract', id: 'a1', output_path: at('a1.fa') });
   assert.equal(extract.entries.length, 1);
   assert.equal(extract.entries[0].sequence, 'ATGCATGC');
-  assert.ok(memFs.files.get('C:/tmp/a1.fa').toString('utf8').includes('>a1'));
+  assert.ok(memFs.files.get(at('a1.fa')).toString('utf8').includes('>a1'));
 
-  memFs.files.set('C:/tmp/reads.fq', '@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nHHHH\n');
-  const converted = await run('molbio_fasta_fastq', { path: 'C:/tmp/reads.fq', action: 'convert', output_path: 'C:/tmp/reads.fa' });
+  memFs.files.set(at('reads.fq'), '@r1\nACGT\n+\nIIII\n@r2\nTGCA\n+\nHHHH\n');
+  const converted = await run('molbio_fasta_fastq', { path: at('reads.fq'), action: 'convert', output_path: at('reads.fa') });
   assert.equal(converted.format, 'fastq');
-  assert.ok(memFs.files.get('C:/tmp/reads.fa').toString('utf8').includes('>r1\nACGT'));
-  const qc = await run('molbio_fasta_fastq', { path: 'C:/tmp/reads.fq', action: 'qc' });
+  assert.ok(memFs.files.get(at('reads.fa')).toString('utf8').includes('>r1\nACGT'));
+  const qc = await run('molbio_fasta_fastq', { path: at('reads.fq'), action: 'qc' });
   assert.equal(qc.stats.quality_mean, 39.5);
   assert.equal(qc.stats.low_quality_fraction, 0);
 }
 
 {
   // region extraction from the real pUC118 fixture
-  const byFeature = await run('molbio_extract_region', { source_path: 'C:/tmp/pUC118.dna', feature: 'AmpR' });
+  const byFeature = await run('molbio_extract_region', { source_path: at('pUC118.dna'), feature: 'AmpR' });
   assert.equal(byFeature.start, 2102);
   assert.equal(byFeature.end, 2962);
   assert.equal(byFeature.length, 861);
-  const rc = await run('molbio_extract_region', { source_path: 'C:/tmp/pUC118.dna', feature: 'AmpR', complement: true });
+  const rc = await run('molbio_extract_region', { source_path: at('pUC118.dna'), feature: 'AmpR', complement: true });
   assert.equal(rc.sequence, lib.reverseComplement(byFeature.sequence));
-  const byCoord = await run('molbio_extract_region', { source_path: 'C:/tmp/pUC118.dna', start: 1, end: 20, output_path: 'C:/tmp/first20.fa' });
+  const byCoord = await run('molbio_extract_region', { source_path: at('pUC118.dna'), start: 1, end: 20, output_path: at('first20.fa') });
   assert.equal(byCoord.sequence.length, 20);
-  assert.ok(memFs.files.get('C:/tmp/first20.fa').toString('utf8').includes('pUC118_1-20'));
+  assert.ok(memFs.files.get(at('first20.fa')).toString('utf8').includes('pUC118_1-20'));
 }
 
 {
@@ -1254,11 +1271,11 @@ function makeTemplate(n, seed = 42) {
 
 {
   // bibtex export
-  await run('molbio_paper_add', { file: 'C:/tmp/bib.json', papers: [{ title: 'Alpha', pmid: '111', year: '2020', authors: 'Doe J', journal: 'Nature' }, { title: 'Beta', url: 'https://x/b' }] });
-  const out = await run('molbio_paper_export_bibtex', { file: 'C:/tmp/bib.json', output_path: 'C:/tmp/papers.bib' });
+  await run('molbio_paper_add', { file: at('bib.json'), papers: [{ title: 'Alpha', pmid: '111', year: '2020', authors: 'Doe J', journal: 'Nature' }, { title: 'Beta', url: 'https://x/b' }] });
+  const out = await run('molbio_paper_export_bibtex', { file: at('bib.json'), output_path: at('papers.bib') });
   assert.equal(out.count, 2);
-  assert.equal(out.output_path, 'C:/tmp/papers.bib');
-  const bib = memFs.files.get('C:/tmp/papers.bib').toString('utf8');
+  assert.equal(out.output_path, at('papers.bib'));
+  const bib = memFs.files.get(at('papers.bib')).toString('utf8');
   assert.ok(bib.includes('@article{pmid111,'));
   assert.ok(bib.includes('title = {Alpha},'));
 }
@@ -1266,7 +1283,7 @@ function makeTemplate(n, seed = 42) {
 {
   // protocols and experiment log
   const added = await run('molbio_protocol_add', {
-    file: 'C:/tmp/protocols2.json',
+    file: at('protocols2.json'),
     name: 'Miniprep',
     category: 'DNA prep',
     steps: ['resuspend', 'lyse', 'neutralize'],
@@ -1274,20 +1291,20 @@ function makeTemplate(n, seed = 42) {
     source_paper_id: 'pmid:111',
   });
   assert.equal(added.total, 1);
-  const listed = await run('molbio_protocol_list', { file: 'C:/tmp/protocols2.json' });
+  const listed = await run('molbio_protocol_list', { file: at('protocols2.json') });
   assert.equal(listed.protocols[0].name, 'Miniprep');
   assert.deepEqual(listed.protocols[0].steps, ['resuspend', 'lyse', 'neutralize']);
-  const updated = await run('molbio_protocol_update', { file: 'C:/tmp/protocols2.json', id: listed.protocols[0].id, steps: ['resuspend', 'lyse'] });
+  const updated = await run('molbio_protocol_update', { file: at('protocols2.json'), id: listed.protocols[0].id, steps: ['resuspend', 'lyse'] });
   assert.equal(updated.protocol.steps.length, 2);
   const logged = await run('molbio_experiment_log', {
-    file: 'C:/tmp/experiments2.json',
+    file: at('experiments2.json'),
     title: 'Clone #12 miniprep',
     protocol_id: listed.protocols[0].id,
     paper_ids: ['pmid:111'],
     results: 'yield 80 ng/ul',
   });
   assert.equal(logged.total, 1);
-  const experiments = await run('molbio_experiment_list', { file: 'C:/tmp/experiments2.json' });
+  const experiments = await run('molbio_experiment_list', { file: at('experiments2.json') });
   assert.equal(experiments.experiments[0].title, 'Clone #12 miniprep');
   assert.equal(experiments.experiments[0].protocol_id, listed.protocols[0].id);
 }
@@ -1310,7 +1327,7 @@ function makeTemplate(n, seed = 42) {
   assert.equal(tool('molbio_plasmid_map').isConcurrencySafe({}), false);
   assert.equal(tool('molbio_plot').isConcurrencySafe({}), false);
   assert.equal(tool('molbio_clone_simulate').isConcurrencySafe({}), true);
-  assert.equal(tool('molbio_clone_simulate').isConcurrencySafe({ save_path: 'C:/tmp/x.fa' }), false);
+  assert.equal(tool('molbio_clone_simulate').isConcurrencySafe({ save_path: at('x.fa') }), false);
   assert.equal(tool('molbio_fasta_fastq').isConcurrencySafe({ action: 'stats' }), true);
   assert.equal(tool('molbio_fasta_fastq').isConcurrencySafe({ action: 'convert' }), false);
 }
@@ -1699,7 +1716,7 @@ function splicedToGenomic(splicedPos, exons) {
 // ── paper library (mocked fs service) ───────────────────────────────────────
 
 {
-  const file = 'C:/tmp/papers.json';
+  const file = at('papers.json');
   const added = await run('molbio_paper_add', {
     file,
     papers: [
@@ -1827,7 +1844,7 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(lib.enzymeCuts(g1, 'BsaI').length, 0);
   assert.equal(lib.enzymeCuts(g2, 'BsaI').length, 0);
   const gbSeq = vector;
-  memFs.files.set('C:/tmp/pGG.gb', [
+  memFs.files.set(at('pGG.gb'), [
     'LOCUS       pGG                 160 bp    DNA     circular SYN 01-JAN-2024',
     'FEATURES             Location/Qualifiers',
     '     rep_origin      1..60',
@@ -1841,11 +1858,11 @@ function splicedToGenomic(splicedPos, exons) {
     '//',
   ].join('\n'));
   const out = await run('molbio_golden_gate', {
-    vector_path: 'C:/tmp/pGG.gb',
+    vector_path: at('pGG.gb'),
     inserts: [g1, g2],
     replace_region: { start: 61, end: 100 },
-    save_path: 'C:/tmp/gg.fa',
-    map_path: 'C:/tmp/gg.svg',
+    save_path: at('gg.fa'),
+    map_path: at('gg.svg'),
   });
   assert.equal(out.method, 'golden_gate');
   assert.equal(out.enzyme, 'BsaI');
@@ -1876,8 +1893,8 @@ function splicedToGenomic(splicedPos, exons) {
   assert.deepEqual([ampR.start, ampR.end], [31, 71], 'AmpR shifts into the linearized backbone frame');
   assert.equal(out.delta, 82);
   assert.ok(out.verify.length > 0, 'verification digests are produced');
-  assert.equal(out.save_path, 'C:/tmp/gg.fa');
-  assert.equal(out.map_path, 'C:/tmp/gg.svg');
+  assert.equal(out.save_path, at('gg.fa'));
+  assert.equal(out.map_path, at('gg.svg'));
   assert.ok(memFs.files.get(out.save_path).toString('utf8').includes('golden_gate'));
   assert.ok(memFs.files.get(out.map_path).toString('utf8').includes('<svg'));
 
@@ -1918,14 +1935,14 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(gel.lane_count, 2);
   assert.equal(gel.band_count, 2);
   assert.equal(gel.ladder, '1kb');
-  assert.equal(gel.svg_path, 'C:\\tmp\\Clone_check.svg');
+  assert.equal(gel.svg_path, shown('Clone_check.svg'));
   const svg = memFs.files.get(gel.svg_path).toString('utf8');
   assert.ok(svg.includes('<svg'));
   assert.ok(svg.includes('EcoRI digest'));
   assert.ok(svg.includes('10 kb'));
   assert.ok(svg.includes('3 kb'));
-  const small = await run('molbio_virtual_gel', { lanes: [{ label: 'PCR', fragments: [150, 900] }], ladder: '100bp', output_path: 'C:/tmp/gel2.svg' });
-  assert.equal(small.svg_path, 'C:/tmp/gel2.svg');
+  const small = await run('molbio_virtual_gel', { lanes: [{ label: 'PCR', fragments: [150, 900] }], ladder: '100bp', output_path: at('gel2.svg') });
+  assert.equal(small.svg_path, at('gel2.svg'));
   const svg2 = memFs.files.get(small.svg_path).toString('utf8');
   assert.ok(svg2.includes('1.5 kb') && svg2.includes('0.9 kb'));
   await assert.rejects(() => run('molbio_virtual_gel', { lanes: [{ label: 'x', fragments: [1.5] }] }), /expected an integer/);
@@ -1974,16 +1991,16 @@ function splicedToGenomic(splicedPos, exons) {
   }
 
   // small_sample=false must reproduce the uncorrected bits exactly.
-  const exact = await run('molbio_sequence_logo', { alignment: rows, small_sample: false, output_path: 'C:/tmp/exact.svg' });
+  const exact = await run('molbio_sequence_logo', { alignment: rows, small_sample: false, output_path: at('exact.svg') });
   assert.equal(exact.small_sample, false);
   assert.equal(exact.total_bits, 4.19, 'uncorrected: 2 + 1 + 1.1887');
   assert.equal(exact.mean_bits, 1.4);
   // 2 sequences that disagree are 0 bits after correction, 1 bit without it.
   const corrected = await run('molbio_sequence_logo', { alignment: ['A', 'C'] });
   assert.equal(corrected.total_bits, 0);
-  const uncorrected = await run('molbio_sequence_logo', { alignment: ['A', 'C'], small_sample: false, score_type: 'frequency', output_path: 'C:/tmp/freq.svg' });
+  const uncorrected = await run('molbio_sequence_logo', { alignment: ['A', 'C'], small_sample: false, score_type: 'frequency', output_path: at('freq.svg') });
   assert.equal(uncorrected.score_type, 'frequency');
-  assert.ok(memFs.files.get('C:/tmp/freq.svg').toString('utf8').includes('frequency'));
+  assert.ok(memFs.files.get(at('freq.svg')).toString('utf8').includes('frequency'));
 
   // Gaps: frequencies use residues only, and the gap column is reported.
   const gapped = await run('molbio_sequence_logo', { alignment: ['AC-G', 'AC-G', 'ACGG', 'ACTG'] });
@@ -1999,15 +2016,15 @@ function splicedToGenomic(splicedPos, exons) {
   // Two identical sequences carry almost no evidence: each column is
   // 2 - 3/(4·ln2·2) = 0.918 bits instead of a nominal 2.
   assert.equal(fromSeq.total_bits, 7.34);
-  const fromSeqExact = await run('molbio_sequence_logo', { sequences: ['ACGTACGT', 'ACGTACGT'], small_sample: false, output_path: 'C:/tmp/uncorrected.svg' });
+  const fromSeqExact = await run('molbio_sequence_logo', { sequences: ['ACGTACGT', 'ACGTACGT'], small_sample: false, output_path: at('uncorrected.svg') });
   assert.equal(fromSeqExact.total_bits, 16, 'without the correction two identical sequences give 2 bits x 8 columns');
 
   // Ambiguity codes spread over their base set, so an ambiguity code is not a
   // fifth symbol: 'RR' is a 50/50 A/G column (1 bit) and 'RA' is 75/25 A/G
   // (1.189 bits) — a two-symbol consensus, not a fully conserved column.
-  const ambig = await run('molbio_sequence_logo', { alignment: ['RR', 'RA'], small_sample: false, output_path: 'C:/tmp/ambig.svg' });
+  const ambig = await run('molbio_sequence_logo', { alignment: ['RR', 'RA'], small_sample: false, output_path: at('ambig.svg') });
   assert.equal(ambig.total_bits, 2.19);
-  const plain = await run('molbio_sequence_logo', { alignment: ['RR', 'RR'], small_sample: false, output_path: 'C:/tmp/plain.svg' });
+  const plain = await run('molbio_sequence_logo', { alignment: ['RR', 'RR'], small_sample: false, output_path: at('plain.svg') });
   assert.equal(plain.total_bits, 2, 'two identical ambiguity codes are fully conserved');
 
   await assert.rejects(() => run('molbio_sequence_logo', {}), /exactly one of/);
@@ -2135,19 +2152,19 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(limited.guides.find((g) => g.start === 6).score, 100);
 
   // CSV + map outputs.
-  const files = await run('molbio_grna_design', { sequence: target, save_path: 'C:/tmp/guides.csv', map_path: 'C:/tmp/grna-map.svg' });
-  assert.equal(files.saved_to, 'C:/tmp/guides.csv');
-  assert.equal(files.map_path, 'C:/tmp/grna-map.svg');
-  const csv = memFs.files.get('C:/tmp/guides.csv').toString('utf8');
+  const files = await run('molbio_grna_design', { sequence: target, save_path: at('guides.csv'), map_path: at('grna-map.svg') });
+  assert.equal(files.saved_to, at('guides.csv'));
+  assert.equal(files.map_path, at('grna-map.svg'));
+  const csv = memFs.files.get(at('guides.csv')).toString('utf8');
   const csvLines = csv.trim().split('\n');
   assert.equal(csvLines[0], 'rank,sequence,pam,strand,start,end,gc_percent,tm_celsius,self_any,self_end,longest_t_run,off_target_count,score');
   assert.equal(csvLines.length, 5, 'header + four guides');
   assert.ok(csv.includes(guide));
-  const mapSvg = memFs.files.get('C:/tmp/grna-map.svg').toString('utf8');
+  const mapSvg = memFs.files.get(at('grna-map.svg')).toString('utf8');
   assert.ok(mapSvg.includes('gRNA 1'), 'the map labels every guide');
 
   // A .dna/.gb path is accepted as the target, same as a raw sequence.
-  const fromFile = await run('molbio_grna_design', { sequence_path: 'C:/tmp/pUC118.dna', max_guides: 3, check_off_target: false });
+  const fromFile = await run('molbio_grna_design', { sequence_path: at('pUC118.dna'), max_guides: 3, check_off_target: false });
   assert.equal(fromFile.target_name, 'pUC118');
   assert.equal(fromFile.target_length, 3162);
   assert.ok(fromFile.guides.length > 0, 'pUC118 has NGG sites');
@@ -2156,7 +2173,7 @@ function splicedToGenomic(splicedPos, exons) {
 
   // Error paths.
   await assert.rejects(() => run('molbio_grna_design', {}), /exactly one of/);
-  await assert.rejects(() => run('molbio_grna_design', { sequence: target, sequence_path: 'C:/tmp/pUC118.dna' }), /exactly one of/);
+  await assert.rejects(() => run('molbio_grna_design', { sequence: target, sequence_path: at('pUC118.dna') }), /exactly one of/);
   await assert.rejects(() => run('molbio_grna_design', { sequence: 'ACGT' }), /at least 23 bp/);
   await assert.rejects(() => run('molbio_grna_design', { sequence: target.replace('TTTTT', 'NNNNN') }), /ambiguous base N at position 1/);
   await assert.rejects(() => run('molbio_grna_design', { sequence: target, pam: 'GG' }), /must start with the degenerate position N/);
@@ -2169,7 +2186,7 @@ function splicedToGenomic(splicedPos, exons) {
 // ── v17: TaqMan probes, multiplex, protein plots, methylation digests ───────
 
 {
-  const puc118 = await run('molbio_parse_snapgene', { path: 'C:/tmp/pUC118.dna' });
+  const puc118 = await run('molbio_parse_snapgene', { path: at('pUC118.dna') });
   const slice = puc118.sequence.slice(1200, 1800); // 600 bp
 
   // ── TaqMan probe design ───────────────────────────────────────────────────
@@ -2554,7 +2571,7 @@ function splicedToGenomic(splicedPos, exons) {
   });
   const routedExec = {
     agent: {
-      session: { header: { cwd: 'C:/tmp' }, requestHeader: () => ({ config: { provider: 'deepseek-official', model: 'deepseek-flash' } }) },
+      session: { header: { cwd: CWD }, requestHeader: () => ({ config: { provider: 'deepseek-official', model: 'deepseek-flash' } }) },
       options: {},
     },
   };
@@ -2578,7 +2595,7 @@ function splicedToGenomic(splicedPos, exons) {
   const gel = await runWith('molbio_virtual_gel', {
     lanes: [{ label: '1', fragments: [3000, 1000] }, { label: '2', fragments: [1500] }],
     attach_image: true,
-    output_path: 'C:/tmp/gel.svg',
+    output_path: at('gel.svg'),
   }, routedExec);
   assert.equal(committed.length, 1, 'exactly one image was committed');
   const [png] = committed;
@@ -2595,7 +2612,7 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(gel.blocks[1].type, 'image');
   assert.deepEqual(gel.blocks[1].attachment, { attachmentId: 'att-1', mediaType: 'image/png', bytes: png.data.length, width: 42, height: 43, name: 'gel.png' });
   assert.ok(gel.blocks[0].text.includes('The rendered PNG is attached'), 'the text tells the model the picture is there');
-  assert.ok(memFs.files.get('C:/tmp/gel.svg').includes('<svg'), 'the SVG is still written');
+  assert.ok(memFs.files.get(at('gel.svg')).includes('<svg'), 'the SVG is still written');
 
   // 3. The direct map path (not writeSvgFile) is wired too.
   committed.length = 0;
@@ -2617,9 +2634,9 @@ function splicedToGenomic(splicedPos, exons) {
 
   // 5. No attachment service mounted (a bare composition).
   extraServices.delete('attachments');
-  const noStore = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [500] }], attach_image: true, output_path: 'C:/tmp/gel.svg' }, routedExec);
+  const noStore = await runWith('molbio_virtual_gel', { lanes: [{ label: '1', fragments: [500] }], attach_image: true, output_path: at('gel.svg') }, routedExec);
   assert.match(noStore.value.image_note, /mounts no attachment service/);
-  assert.equal(noStore.value.svg_path, 'C:/tmp/gel.svg', 'the SVG is still written and reported');
+  assert.equal(noStore.value.svg_path, at('gel.svg'), 'the SVG is still written and reported');
   extraServices.set('attachments', {
     async saveImage({ data, mediaType, name }) {
       committed.push({ data, mediaType, name });
@@ -2772,7 +2789,7 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(qc.adapter.reads_with_adapter, 1);
   assert.equal(qc.adapter.per_base_percent.length, 10, 'the adapter curve shares the plot cap');
   assert.equal(qc.adapter.per_base_percent[0], 0, 'and is zero before the fragment starts at position 13');
-  const adapterUncapped = await run('molbio_fastq_qc', { fastq: fastqText, max_plot_bases: 150, output_path: 'C:/tmp/qc-wide.svg' });
+  const adapterUncapped = await run('molbio_fastq_qc', { fastq: fastqText, max_plot_bases: 150, output_path: at('qc-wide.svg') });
   assert.equal(adapterUncapped.adapter.per_base_percent[12], 12.5, 'with no cap the fragment shows at 1-based position 13');
   assert.equal(adapterUncapped.adapter.per_base_percent[23], 12.5, 'through its last base at position 24');
   assert.equal(adapterUncapped.adapter.per_base_percent[24], 0, 'and stops there');
@@ -2791,7 +2808,7 @@ function splicedToGenomic(splicedPos, exons) {
     const sequence = index < 24 ? 'ACGTACGT' : `TTTTTTT${'ACGT'[index % 4]}`;
     return `@c${index}\n${sequence}\n+\n${'I'.repeat(8)}\n`;
   }).join('');
-  const clonalReport = await run('molbio_fastq_qc', { fastq: clonal, output_path: 'C:/tmp/clonal.qc.svg' });
+  const clonalReport = await run('molbio_fastq_qc', { fastq: clonal, output_path: at('clonal.qc.svg') });
   assert.equal(clonalReport.overrepresented.minimum_count, 20);
   assert.equal(clonalReport.overrepresented.rows.length, 1, 'only the 24-read sequence clears the floor');
   assert.deepEqual(
@@ -2815,15 +2832,15 @@ function splicedToGenomic(splicedPos, exons) {
 
   // 9. Error paths.
   await assert.rejects(() => run('molbio_fastq_qc', {}), /provide exactly one of path .* or fastq/);
-  await assert.rejects(() => run('molbio_fastq_qc', { path: 'C:/tmp/reads.fq', fastq: fastqText }), /provide exactly one of path .* or fastq/);
+  await assert.rejects(() => run('molbio_fastq_qc', { path: at('reads.fq'), fastq: fastqText }), /provide exactly one of path .* or fastq/);
   await assert.rejects(() => run('molbio_fastq_qc', { fastq: '>not-fastq\nACGT\n' }), /looks like FASTA/);
   await assert.rejects(() => run('molbio_fastq_qc', { fastq: '@r1\nACGT\n+\nIII\n' }), /quality shorter than sequence/);
   await assert.rejects(() => run('molbio_fastq_qc', { fastq: fastqText, max_reads: 500000 }), /exceeds the supported/);
   await assert.rejects(() => run('molbio_fastq_qc', { fastq: fastqText, max_reads: -1 }), /max_reads must be a positive integer/);
 
   // 10. Reading the same fixture from a file gives the identical report.
-  memFs.files.set('C:/tmp/qc.fastq', fastqText);
-  const fromFile = await run('molbio_fastq_qc', { path: 'C:/tmp/qc.fastq', max_plot_bases: 12 });
+  memFs.files.set(at('qc.fastq'), fastqText);
+  const fromFile = await run('molbio_fastq_qc', { path: at('qc.fastq'), max_plot_bases: 12 });
   assert.equal(fromFile.quality_mean, qc.quality_mean);
   assert.equal(fromFile.bases, qc.bases);
   assert.ok(fromFile.report_path.includes('qc'), 'the default report name follows the input file');
@@ -3015,8 +3032,8 @@ function splicedToGenomic(splicedPos, exons) {
     seed: 99,
     consensus: 'majority',
     layout: 'rectangular',
-    nwk_path: 'C:/tmp/fixture.nwk',
-    svg_path: 'C:/tmp/fixture-tree.svg',
+    nwk_path: at('fixture.nwk'),
+    svg_path: at('fixture-tree.svg'),
   });
   assert.equal(tree.method, 'nj');
   assert.equal(tree.distance_model, 'kimura-2p');
@@ -3069,9 +3086,9 @@ function splicedToGenomic(splicedPos, exons) {
   assert.ok(tree.consensus.newick.endsWith(';'));
   assert.ok(tree.notes.some((note) => note.includes('not a maximum-likelihood')));
   assert.ok(tree.notes.some((note) => note.includes('not a p-value')));
-  assert.equal(tree.svg_path, 'C:/tmp/fixture-tree.svg');
-  assert.ok(memFs.files.get('C:/tmp/fixture.nwk').startsWith('('), 'the Newick file reached the workspace');
-  assert.ok(memFs.files.get('C:/tmp/fixture-tree.svg').includes('<svg'));
+  assert.equal(tree.svg_path, at('fixture-tree.svg'));
+  assert.ok(memFs.files.get(at('fixture.nwk')).startsWith('('), 'the Newick file reached the workspace');
+  assert.ok(memFs.files.get(at('fixture-tree.svg')).includes('<svg'));
 
   // 6. The same seed reproduces the same support and the same file exactly.
   const again = await run('molbio_phylogenetic_tree', {
@@ -3081,12 +3098,12 @@ function splicedToGenomic(splicedPos, exons) {
     distance_model: 'kimura-2p',
     bootstrap: 20,
     seed: 99,
-    nwk_path: 'C:/tmp/fixture2.nwk',
-    svg_path: 'C:/tmp/fixture-tree2.svg',
+    nwk_path: at('fixture2.nwk'),
+    svg_path: at('fixture-tree2.svg'),
   });
   assert.equal(again.newick, tree.newick);
   assert.deepEqual(again.support, tree.support);
-  assert.equal(memFs.files.get('C:/tmp/fixture2.nwk'), memFs.files.get('C:/tmp/fixture.nwk'));
+  assert.equal(memFs.files.get(at('fixture2.nwk')), memFs.files.get(at('fixture.nwk')));
 
   // 7. UPGMA and NJ are different algorithms, not one renamed.
   const upgma = await run('molbio_phylogenetic_tree', {
@@ -3095,8 +3112,8 @@ function splicedToGenomic(splicedPos, exons) {
     method: 'upgma',
     distance_model: 'p-distance',
     bootstrap: 0,
-    nwk_path: 'C:/tmp/upgma.nwk',
-    svg_path: 'C:/tmp/upgma.svg',
+    nwk_path: at('upgma.nwk'),
+    svg_path: at('upgma.svg'),
   });
   assert.equal(upgma.bootstrap_replicates, 0);
   assert.deepEqual(upgma.support, []);
@@ -3124,8 +3141,8 @@ function splicedToGenomic(splicedPos, exons) {
     sequences: ['ACGTACGTAC', 'ACGTACGTACG', 'ACGTTCGTAC'],
     ids: ['u1', 'u2', 'u3'],
     bootstrap: 0,
-    nwk_path: 'C:/tmp/unaligned.nwk',
-    svg_path: 'C:/tmp/unaligned.svg',
+    nwk_path: at('unaligned.nwk'),
+    svg_path: at('unaligned.svg'),
   });
   assert.equal(unaligned.aligned_by_tool, true);
   // v20 FIXED THE ALIGNER HERE. This assertion used to read `alignment_columns
@@ -3162,8 +3179,8 @@ function splicedToGenomic(splicedPos, exons) {
     sequences: ['ACGTACGTAC', 'ACGTTCGTAC', 'ACGTTCGTAA'],
     ids: ['c1', 'c2', 'c3'],
     bootstrap: 0,
-    nwk_path: 'C:/tmp/clean.nwk',
-    svg_path: 'C:/tmp/clean.svg',
+    nwk_path: at('clean.nwk'),
+    svg_path: at('clean.svg'),
   });
   assert.ok(!clean.notes.some((note) => note.includes('WARNING: the alignment')), 'equal-length input needs no coverage warning');
   await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGTA'], aligned: false, bootstrap: 0 }), /not all the same length/);
@@ -3190,8 +3207,8 @@ function splicedToGenomic(splicedPos, exons) {
     sequences: fixture.map((entry) => entry.sequence),
     ids: ['A', 'B', 'C', 'D'],
     bootstrap: 0,
-    nwk_path: 'C:/tmp/kmer.nwk',
-    svg_path: 'C:/tmp/kmer.svg',
+    nwk_path: at('kmer.nwk'),
+    svg_path: at('kmer.svg'),
   });
   assert.ok(unalignedTree.newick.includes('A') && unalignedTree.newick.includes('B'));
 
@@ -3199,8 +3216,8 @@ function splicedToGenomic(splicedPos, exons) {
   const fromFasta = await run('molbio_phylogenetic_tree', {
     fasta: '>f1\nACGTACGTAC\n>f2\nACGTTCGTAC\n',
     bootstrap: 0,
-    nwk_path: 'C:/tmp/fasta.nwk',
-    svg_path: 'C:/tmp/fasta.svg',
+    nwk_path: at('fasta.nwk'),
+    svg_path: at('fasta.svg'),
   });
   assert.deepEqual(fromFasta.distance_labels, ['f1', 'f2']);
   await assert.rejects(() => run('molbio_phylogenetic_tree', { sequences: ['ACGT', 'ACGT'], ids: ['same', 'same'], bootstrap: 0 }), /names must be unique/);
@@ -3219,8 +3236,8 @@ function splicedToGenomic(splicedPos, exons) {
       ids: wide.map((entry) => entry.id),
       bootstrap: 1000,
       seed: 1,
-      nwk_path: 'C:/tmp/wide.nwk',
-      svg_path: 'C:/tmp/wide.svg',
+      nwk_path: at('wide.nwk'),
+      svg_path: at('wide.svg'),
     }),
     /bootstrap budget exceeded/,
   );
@@ -3244,7 +3261,7 @@ function splicedToGenomic(splicedPos, exons) {
     primer_pairs: [{ name: 'amp', forward, reverse }],
     min_size: 50,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-exact.svg',
+    gel_path: at('pcr-exact.svg'),
   });
   const amp = exact.pairs[0];
   assert.equal(amp.verdict, 'specific');
@@ -3260,7 +3277,7 @@ function splicedToGenomic(splicedPos, exons) {
   assert.deepEqual(exact.verdicts, ['specific']);
   assert.equal(exact.template_length, 200);
   assert.equal(exact.circular, false);
-  assert.ok(memFs.files.get('C:/tmp/pcr-exact.svg').includes('<svg'), 'the gel reached the workspace');
+  assert.ok(memFs.files.get(at('pcr-exact.svg')).includes('<svg'), 'the gel reached the workspace');
 
   // 2. A mismatch in the middle of a primer: refused at 0 mismatches, allowed
   //    at 1, and the site reports where the mismatch is.
@@ -3270,7 +3287,7 @@ function splicedToGenomic(splicedPos, exons) {
     primer_pairs: [{ name: 'mm', forward: internalBad, reverse }],
     min_size: 50,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-mm.svg',
+    gel_path: at('pcr-mm.svg'),
   });
   assert.equal(strict.pairs[0].verdict, 'no_product');
   assert.equal(strict.pairs[0].forward_sites.length, 0);
@@ -3280,7 +3297,7 @@ function splicedToGenomic(splicedPos, exons) {
     max_mismatches: 1,
     min_size: 50,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-mm.svg',
+    gel_path: at('pcr-mm.svg'),
   });
   assert.equal(relaxed.pairs[0].verdict, 'specific_with_mismatches');
   assert.deepEqual(relaxed.pairs[0].amplicons[0].forward_site.mismatch_positions, [10], '1-based position inside the primer');
@@ -3298,7 +3315,7 @@ function splicedToGenomic(splicedPos, exons) {
     max_mismatches: 1,
     min_size: 50,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-3p.svg',
+    gel_path: at('pcr-3p.svg'),
   });
   assert.equal(anchorHeld.pairs[0].verdict, 'no_product', "a 3' mismatch is refused with the default 3-base anchor");
   assert.equal(anchorHeld.settings.three_prime_exact, 3);
@@ -3309,7 +3326,7 @@ function splicedToGenomic(splicedPos, exons) {
     three_prime_exact: 0,
     min_size: 50,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-3p0.svg',
+    gel_path: at('pcr-3p0.svg'),
   });
   assert.equal(anchorOff.pairs[0].verdict, 'specific_with_mismatches', 'and accepted once the requirement is dropped');
   assert.deepEqual(anchorOff.pairs[0].forward_sites[0].mismatch_positions, [20], 'the mismatch is the primer 3\' base');
@@ -3320,7 +3337,7 @@ function splicedToGenomic(splicedPos, exons) {
     max_mismatches: 2,
     min_size: 50,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-2mm.svg',
+    gel_path: at('pcr-2mm.svg'),
   });
   assert.equal(twoMismatch.pairs[0].verdict, 'specific_with_mismatches');
 
@@ -3332,7 +3349,7 @@ function splicedToGenomic(splicedPos, exons) {
     primer_pairs: [{ name: 'multi', forward, reverse }],
     min_size: 20,
     max_size: 400,
-    gel_path: 'C:/tmp/pcr-multi.svg',
+    gel_path: at('pcr-multi.svg'),
   });
   assert.equal(multi.pairs[0].verdict, 'multiple_bands');
   assert.equal(multi.pairs[0].forward_sites.length, 2);
@@ -3346,7 +3363,7 @@ function splicedToGenomic(splicedPos, exons) {
     primer_pairs: [{ name: 'amp', forward, reverse }],
     min_size: 120,
     max_size: 130,
-    gel_path: 'C:/tmp/pcr-narrow.svg',
+    gel_path: at('pcr-narrow.svg'),
   });
   assert.equal(narrow.pairs[0].verdict, 'no_product');
   assert.equal(narrow.pairs[0].out_of_range, 1, 'the 100 bp product was found but filtered');
@@ -3360,7 +3377,7 @@ function splicedToGenomic(splicedPos, exons) {
     circular: true,
     min_size: 20,
     max_size: 300,
-    gel_path: 'C:/tmp/pcr-wrap.svg',
+    gel_path: at('pcr-wrap.svg'),
   });
   assert.equal(circular.circular, true);
   assert.equal(circular.pairs[0].amplicons.length, 1);
@@ -3376,7 +3393,7 @@ function splicedToGenomic(splicedPos, exons) {
     min_size: 20,
     max_size: 400,
     screen_templates: [{ name: 'vector', sequence: 'TTTTGGGGCCCCAAAATTTTGGGGCCCCAAAA' }],
-    gel_path: 'C:/tmp/pcr-screen.svg',
+    gel_path: at('pcr-screen.svg'),
   });
   assert.equal(screened.screens.length, 1);
   assert.equal(screened.screens[0].name, 'vector');
@@ -3384,29 +3401,29 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(screened.screens[0].products[0].verdict, 'no_product');
 
   // 8. Reading the template from a workspace FASTA, and include_sequence: false.
-  memFs.files.set('C:/tmp/template.fa', `>t\n${TEMPLATE}\n`);
+  memFs.files.set(at('template.fa'), `>t\n${TEMPLATE}\n`);
   const fromFile = await run('molbio_pcr_simulate', {
-    path: 'C:/tmp/template.fa',
+    path: at('template.fa'),
     primer_pairs: [{ name: 'amp', forward, reverse }],
     min_size: 20,
     max_size: 400,
     include_sequence: false,
-    gel_path: 'C:/tmp/pcr-file.svg',
+    gel_path: at('pcr-file.svg'),
   });
   assert.equal(fromFile.pairs[0].amplicons[0].size, 100);
   assert.equal(fromFile.pairs[0].amplicons[0].sequence, '', 'the sequence is omitted on request');
 
   // 9. Error paths.
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [], gel_path: 'C:/tmp/x.svg' }), /at least one primer pair/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { gel_path: 'C:/tmp/x.svg', primer_pairs: [{ forward, reverse }] }), /provide exactly one of template .* or path/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, path: 'C:/tmp/template.fa', primer_pairs: [{ forward, reverse }], gel_path: 'C:/tmp/x.svg' }), /provide exactly one of template .* or path/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ name: 'x', forward, reverse: '' }], gel_path: 'C:/tmp/x.svg' }), /has no reverse primer/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ name: 'x', forward: '', reverse }], gel_path: 'C:/tmp/x.svg' }), /has no forward primer/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: '   ', primer_pairs: [{ forward, reverse }], gel_path: 'C:/tmp/x.svg' }), /template sequence is empty/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ forward, reverse }], three_prime_exact: 21, gel_path: 'C:/tmp/x.svg' }), /longer than the primer/);
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ forward, reverse }], max_mismatches: -1, gel_path: 'C:/tmp/x.svg' }), /mismatches must be a non-negative integer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [], gel_path: at('x.svg') }), /at least one primer pair/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { gel_path: at('x.svg'), primer_pairs: [{ forward, reverse }] }), /provide exactly one of template .* or path/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, path: at('template.fa'), primer_pairs: [{ forward, reverse }], gel_path: at('x.svg') }), /provide exactly one of template .* or path/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ name: 'x', forward, reverse: '' }], gel_path: at('x.svg') }), /has no reverse primer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ name: 'x', forward: '', reverse }], gel_path: at('x.svg') }), /has no forward primer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: '   ', primer_pairs: [{ forward, reverse }], gel_path: at('x.svg') }), /template sequence is empty/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ forward, reverse }], three_prime_exact: 21, gel_path: at('x.svg') }), /longer than the primer/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: [{ forward, reverse }], max_mismatches: -1, gel_path: at('x.svg') }), /mismatches must be a non-negative integer/);
   const tooMany = Array.from({ length: 25 }, (_, index) => ({ name: `p${index}`, forward, reverse }));
-  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: tooMany, gel_path: 'C:/tmp/x.svg' }), /at most 24 primer pairs/);
+  await assert.rejects(() => run('molbio_pcr_simulate', { template: TEMPLATE, primer_pairs: tooMany, gel_path: at('x.svg') }), /at most 24 primer pairs/);
 }
 
 // ── v19: GC composition, CpG islands and skew ───────────────────────────────
@@ -3418,7 +3435,7 @@ function splicedToGenomic(splicedPos, exons) {
   const report = await run('molbio_gc_composition', {
     sequence,
     window: 100,
-    svg_path: 'C:/tmp/gc.svg',
+    svg_path: at('gc.svg'),
   });
   assert.equal(report.length, 400);
   assert.equal(report.gc_percent, 62.5);
@@ -3454,11 +3471,11 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(report.l50, 1);
   assert.equal(report.dinucleotides.find((row) => row.pair === 'CG').observed, 125);
   assert.equal(report.dinucleotides.find((row) => row.pair === 'CG').observed_expected, 3.2);
-  assert.ok(memFs.files.get('C:/tmp/gc.svg').includes('<svg'));
+  assert.ok(memFs.files.get(at('gc.svg')).includes('<svg'));
 
   // Takai & Jones criteria need 500 bp and 55% GC, so this 200 bp island is not
   // called — the criteria really are applied, not decorative.
-  const takai = await run('molbio_gc_composition', { sequence, criteria: 'takai', svg_path: 'C:/tmp/gc-takai.svg' });
+  const takai = await run('molbio_gc_composition', { sequence, criteria: 'takai', svg_path: at('gc-takai.svg') });
   assert.equal(takai.cpg_islands.length, 0);
   assert.equal(takai.criteria.name, 'takai');
   assert.equal(takai.criteria.min_length, 500);
@@ -3469,14 +3486,14 @@ function splicedToGenomic(splicedPos, exons) {
   const noCpG = 'GCTT'.repeat(75);
   assert.equal(noCpG.length, 300);
   assert.equal(noCpG.includes('CG'), false);
-  const depleted = await run('molbio_gc_composition', { sequence: noCpG, window: 100, svg_path: 'C:/tmp/gc-depleted.svg' });
+  const depleted = await run('molbio_gc_composition', { sequence: noCpG, window: 100, svg_path: at('gc-depleted.svg') });
   assert.equal(depleted.gc_percent, 50);
   assert.equal(depleted.observed_expected_cpg, 0);
   assert.deepEqual(depleted.cpg_islands, [], 'high GC alone does not make an island — the obs/exp CpG condition applies too');
 
   // A homopolymer: zero expected CpG must not divide by zero, and a single-base
   // sequence has zero entropy.
-  const polyA = await run('molbio_gc_composition', { sequence: 'A'.repeat(300), window: 100, svg_path: 'C:/tmp/gc-poly.svg' });
+  const polyA = await run('molbio_gc_composition', { sequence: 'A'.repeat(300), window: 100, svg_path: at('gc-poly.svg') });
   assert.equal(polyA.gc_percent, 0);
   assert.equal(polyA.observed_expected_cpg, 0);
   assert.deepEqual(polyA.cpg_islands, []);
@@ -3488,7 +3505,7 @@ function splicedToGenomic(splicedPos, exons) {
   // profile: every window's skew is exactly (3-1)/(3+1) = +0.5 for 'GGGC' and
   // -0.5 for 'GCCC'.
   const isochores = 'GGGC'.repeat(50) + 'GCCC'.repeat(50);
-  const biased = await run('molbio_gc_composition', { sequence: isochores, window: 100, svg_path: 'C:/tmp/gc-rich.svg' });
+  const biased = await run('molbio_gc_composition', { sequence: isochores, window: 100, svg_path: at('gc-rich.svg') });
   assert.equal(biased.gc_percent, 100);
   assert.deepEqual(biased.gc_skew_windows.map((window) => window.gc_skew), [0.5, 0.5, -0.5, -0.5]);
   assert.deepEqual(biased.cumulative_gc_skew, [0.5, 1, 0.5, 0]);
@@ -3496,22 +3513,22 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(biased.ter_hint.window, 2, 'and the maximum is where the G-rich half ends');
 
   // Custom thresholds and window/step, plus the ambiguous-base note.
-  const custom = await run('molbio_gc_composition', { sequence, window: 50, step: 25, min_length: 150, gc_threshold: 60, cpg_oe_threshold: 1.5, svg_path: 'C:/tmp/gc-custom.svg' });
+  const custom = await run('molbio_gc_composition', { sequence, window: 50, step: 25, min_length: 150, gc_threshold: 60, cpg_oe_threshold: 1.5, svg_path: at('gc-custom.svg') });
   assert.equal(custom.criteria.window, 50);
   assert.equal(custom.criteria.min_length, 150);
   assert.equal(custom.criteria.gc_threshold, 60);
   assert.equal(custom.criteria.cpg_oe_threshold, 1.5);
   assert.equal(custom.gc_windows.length, 15, '400 bp in 50 bp windows stepping by 25 gives floor((400-50)/25)+1 = 15 windows');
-  const ambiguous = await run('molbio_gc_composition', { sequence: `${'ACGT'.repeat(50)}NNNNNNNNNN`, window: 100, svg_path: 'C:/tmp/gc-n.svg' });
+  const ambiguous = await run('molbio_gc_composition', { sequence: `${'ACGT'.repeat(50)}NNNNNNNNNN`, window: 100, svg_path: at('gc-n.svg') });
   assert.ok(ambiguous.notes.some((note) => note.includes('ambiguous')));
   assert.ok(ambiguous.n_percent > 0);
-  const short = await run('molbio_gc_composition', { sequence: 'ACGTACGTACGTACGTACGT', window: 100, svg_path: 'C:/tmp/gc-short.svg' });
+  const short = await run('molbio_gc_composition', { sequence: 'ACGTACGTACGTACGTACGT', window: 100, svg_path: at('gc-short.svg') });
   assert.deepEqual(short.gc_windows, [], 'a sequence shorter than the window yields no windows');
   assert.ok(short.notes.some((note) => note.includes('no cumulative-skew origin')));
 
   // Errors.
-  await assert.rejects(() => run('molbio_gc_composition', { svg_path: 'C:/tmp/x.svg' }), /provide exactly one of sequence or path/);
-  await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGT', path: 'C:/tmp/x.fa', svg_path: 'C:/tmp/x.svg' }), /provide exactly one of sequence or path/);
+  await assert.rejects(() => run('molbio_gc_composition', { svg_path: at('x.svg') }), /provide exactly one of sequence or path/);
+  await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGT', path: at('x.fa'), svg_path: at('x.svg') }), /provide exactly one of sequence or path/);
   await assert.rejects(() => run('molbio_gc_composition', { sequence: '   ' }), /sequence is empty/);
   await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGTACGTAC', criteria: 'emboss' }), /must be one of gardiner, takai/);
   await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGTACGTAC', window: 5 }), /window must be an integer of at least 10/);

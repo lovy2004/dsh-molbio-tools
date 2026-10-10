@@ -6,7 +6,7 @@
  * A benchmark whose expected values were typed in by hand from memory stops
  * being true the moment a model or a table changes. Every value this script
  * prints is produced by the same `execute()` the model reaches, in memory, so
- * `tasks.json` records what the plugin actually answers — and a later change in
+ * `tasks/*.json` records what the plugin actually answers — and a later change in
  * a tool shows up as a failing task rather than as a silent pass.
  *
  * Run: node benchmark/_probe.mjs [probe-name]

@@ -15,7 +15,7 @@
 | 层 | 问题 | 谁回答 |
 | --- | --- | --- |
 | 插件 | 工具算得对吗？ | `test/smoke.mjs` |
-| 画面 | 模型看到的图是对的吗？ | `test/svgpng.mjs` / `test/svgio.mjs` |
+| 画面 | 模型看到的图是对的吗？ | `test/svgpng.mjs` / `test/svgio.mjs` / `test/charts.mjs` |
 | 组合 | 这套东西挂得上吗？ | `test/contract.mjs` / `test/preset-health.mjs` / `test/client*.mjs` |
 | 使用 | 模型找得到、用得对吗？ | `benchmark/`（见 [benchmark/README.md](../benchmark/README.md)） |
 
@@ -23,6 +23,7 @@
 node test/smoke.mjs         # 插件：mock 注册表跑全部 57 个工具 + 输出 schema 校验
 node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
 node test/svgio.mjs         # 共享绘图助手：几何手算值 + 每种助手拼一张文档后光栅化必须干净
+node test/charts.mjs        # 图表：CSV/TSV 读取层 + 八种图表（含色带）的统计量与光栅化
 node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
 node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
 node test/map-card.mjs      # 图谱调用卡：跨界 meta 投影断言
@@ -505,5 +506,5 @@ npm publish --access public
    `toolCountDrift` 会替你看住 `preset.yml` 那处；
 5. 如果新工具同时属于浏览器半（`lib.mjs`/`msa.mjs` 这类被客户端产物 import 的模块），
    必须 `npm run build:client` 并提交产物；`contract.mjs` 的"产物新鲜度"检查会失败；
-6. 需要时在 `benchmark/tasks.json` 加一条任务（见 [benchmark/README.md](../benchmark/README.md)），
+6. 需要时在 `benchmark/tasks/` 下相应领域的文件里加一条任务（见 [benchmark/README.md](../benchmark/README.md)），
    并先跑 `node benchmark/run.mjs --offline` 证明期望值取自真实输出。

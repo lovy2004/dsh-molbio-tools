@@ -328,12 +328,6 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 详见 [docs/roadmap.md](docs/roadmap.md) 3.5）。打包器另有一道**构建期自检**：产物注册的模块
 必须等于本次模块图走到的集合。
 
-> **改注释时的坑（已被测试咬过一次）**：`test/svgpng.mjs` 用**子串搜索**检查产物里有没有
-> 光栅化器——搜它的**文件名**与它 import 的 **Node 模块名**。这两个字面量只要出现在**任何**
-> 被打进浏览器半的模块里（**包括注释**），守卫就会失败，而光栅化器其实根本不在依赖图里。
-> `svgio.mjs` / `font-metrics.mjs` 都在浏览器半，所以描述光栅化器时请用"光栅化器"这个角色
-> 称呼它，别写文件名。这条规则写在那两个文件的文件头注释里。
-
 ### 自动打开（auto-view）
 
 **所有生成 SVG 的工具写完文件后会自动用系统默认应用打开**（Windows `Invoke-Item`、macOS `open`、
@@ -657,7 +651,7 @@ dsh-molbio-tools/
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
 │                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
-├── benchmark/       # 可用性评估：tasks.json + 判分器 + headless profile 推导（见其 README）
+├── benchmark/       # 可用性评估：tasks/*.json + 判分器 + headless profile 推导（见其 README）
 ├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查（含 preset 漂移与 benchmark profile 守卫）
 ├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
 └── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
