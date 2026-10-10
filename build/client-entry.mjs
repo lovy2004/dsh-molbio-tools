@@ -193,7 +193,16 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     if (host === null) return;
     host.replaceChildren();
     if (record === null || status.kind !== 'ready') return;
-    const markup = record.kind === 'plasmid' ? plasmidSvg(record) : logoSvg(record);
+    // The renderer refuses what it cannot draw (renderPlasmidMap caps a map at
+    // 200 features). Letting that throw out of the effect leaves the pane empty
+    // with no explanation, so it becomes the pane's error state instead.
+    let markup;
+    try {
+      markup = record.kind === 'plasmid' ? plasmidSvg(record) : logoSvg(record);
+    } catch (error) {
+      setStatus({ kind: 'error', message: String(error?.message ?? error) });
+      return;
+    }
     const parsed = new DOMParser().parseFromString(markup, 'image/svg+xml');
     if (parsed.querySelector('parsererror') !== null) {
       setStatus({ kind: 'error', message: 'the generated SVG could not be parsed' });
@@ -243,6 +252,9 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
       h('span', null, `${record.features.length} feature(s)`)));
     body.push(h('div', { key: 'svg', ref: svgHost, style: styles.svg }));
     if (record.features.length > 0) {
+      // The slice cannot bite: renderPlasmidMap refuses more than 200 features,
+      // so a record that reaches here has at most that many. It stays as the
+      // table's own bound (the map's cap is a renderer rule, not a display one).
       body.push(h('table', { key: 'table', style: styles.table },
         h('thead', null, h('tr', null,
           h('th', { style: styles.th }, 'Feature'),

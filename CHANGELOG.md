@@ -10,6 +10,59 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.18.2] — 2026-10-10（面板把渲染器的拒绝显示出来；补齐失效的守卫与缺失的截断标志）
+
+**工具数不变（57），参数不变。** 这一版来自对**守卫层自身**的复核：规则第 9 条说"没人见过
+失败的守卫不算守卫"，而其中几条**永远不可能失败**，另有两条**声称**有突变实验却没有任何
+探针能驱动它们。
+
+### 1. 面板：渲染器拒绝的东西以前是一片空白，现在是消息
+
+**症状**：选一个标注超过 200 个特征的文件，面板区域**什么都不显示**。`renderPlasmidMap`
+对超过 200 个特征抛 `too many features (limit 200)`，而异常从 `useEffect` 里逃了出去——
+既不进面板的错误态，也没有任何解释。
+
+**修法**：`build/client-entry.mjs` 的 SVG 副作用把渲染器调用包进 try/catch，异常文本交给
+面板错误态显示；`test/panel-render.mjs` 新增用例用一份 201 特征的 GenBank 记录钉住它。
+（顺带查明：同一处的特征表 `slice(0, 200)` **永远不会生效**——地图上限 200 会先抛错。
+它保留，并注明这是表格自己的边界，不是渲染器的规则。）
+
+### 2. 四条不可能失败的守卫
+
+- `test/client-mount.mjs`：`const before = 0; assert.equal(before, 0)` 是常量与自身比较。
+  改为**统计注册次数**并断言为 0。突变实验（让面板宿主半去注册一个工具）现在以
+  `the panel host half registers no tool` 失败。
+- 同一文件：profile 缺 `package.json` 时**静默降级**成不含本包的 bundle 列表，于是 v0.15.2
+  "两个侧边栏 tab 消失"的复现守卫整段不跑，摘要仍打印 "checks passed"。现在摘要明确写出
+  `EXCEPT the profile selection … did NOT run`。
+- `test/benchmark-changed.mjs`：无 git 时把 POSIX 路径断言整段跳过、仍打印 passed。现在该
+  分支明确报告"这条断言没有跑"，摘要也带上这句。
+- `test/contract.mjs`："负向对照"断言的是产物里不含 `function thisDeclarationDoesNotExist`
+  ——一个不可能出现的字面量。改用**真实存在**的声明做对照：光栅化器（`svgpng.mjs`）不在
+  浏览器模块图里，它的最长声明必须**缺席**于产物。
+
+### 3. 两处手工维护的计数改为推导
+
+`test/benchmark-changed.mjs` 的 `57`、`test/contract.mjs` 的 `2` 改为从源推导（声明的工具名、
+bundle 自己声明的卡片键列表）。突变实验：让两个工具同名 → `every declared tool must be
+attributed to its modules` 失败，并指出是哪个工具。`contract.mjs` 里"15 个图片工具"**保持
+硬编码**——它没有可推导的独立真相来源（"是不是图片工具"没有在任何地方申报），那里的注释
+已写明这是刻意的。
+
+### 4. 规则第 9 条点名的两项，现在真的有突变实验
+
+`preset-health.mjs` 的 specifier 检查与 order 撞号检查此前**无法被任何探针驱动**
+（`drift-probe.mjs` 只导入 `compositionDrift`/`toolCountDrift`），而 rules.md 第 9 条声称它们
+"已用突变实验验证"。两个判定被提取为纯函数并导出，`drift-probe` 现在驱动它们：相对
+specifier 被报出、`config:` 下的 order 被正确读取（而非声明行的 `preset-<id>`）、与已发布
+preset 撞号即失败。探针捕获的变异数从 **11 增至 14**。
+
+### 5. 缺失的截断标志
+
+`molbio_verify_sanger` 的氨基酸后果列表一直**静默截断在 50 条**：上限存在，输出里没有任何
+迹象。现在返回 `aa_changes_truncated`，渲染文本也写出"还有更多未列出"。测试刻意造出约 100
+处替换来钉住 `true` 这一侧，而不只是断言 `false`。
+
 ## [0.18.1] — 2026-10-10（两个解析器不再把多段特征压平；修 `^` 交界点的坐标）
 
 **工具数不变（57），参数不变；`molbio_parse_genbank` / `molbio_parse_snapgene` 的输出各增两个字段。**

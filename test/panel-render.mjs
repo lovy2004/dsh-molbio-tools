@@ -383,6 +383,45 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   harness.unmount();
 }
 
+// ── Molbio panel: a record the renderer refuses is reported, not blank ──────
+
+{
+  // renderPlasmidMap caps a map at 200 features and THROWS above that. Thrown
+  // out of the panel's effect it left an empty pane with no explanation, so the
+  // effect turns it into the pane's error state — the message the renderer
+  // already writes is what the user must be able to read.
+  const manyFeatures = Array.from({ length: 201 }, (_, index) => [
+    `     misc_feature    ${index + 1}..${index + 1}`,
+    `                     /label="f${index + 1}"`,
+  ].join('\n')).join('\n');
+  const genbankMany = [
+    'LOCUS       pMANY                 400 bp    DNA     circular',
+    'FEATURES             Location/Qualifiers',
+    manyFeatures,
+    'ORIGIN',
+    `        1 ${'acgt'.repeat(100)}`,
+    '//',
+  ].join('\n');
+
+  const files = remote({
+    [CWD]: [{ name: 'pMANY.gb', type: 'file' }],
+    [`${CWD}/pMANY.gb`]: genbankMany,
+  });
+  globalThis.__molbioTestHooks = mount(MolbioPanel);
+  const harness = globalThis.__molbioTestHooks;
+  harness.setProps({ sessionId: SESSION, remote: files, useSessions });
+  await harness.render();
+  elements(harness.tree, 'div').find((node) => node.props?.title?.startsWith('pMANY.gb')).props.onClick();
+  await harness.render();
+  // The effect catches the renderer's refusal and sets the error state, which is
+  // a second pass.
+  await harness.render();
+  const rendered = markup(harness.tree);
+  assert.ok(rendered.includes('too many features'), 'the renderer\'s refusal reaches the pane');
+  assert.ok(rendered.includes('limit 200'), 'with the limit it refused at');
+  harness.unmount();
+}
+
 // ── Molbio panel: read failure is shown, not swallowed ─────────────────────
 
 {

@@ -877,6 +877,29 @@ function makeTemplate(n, seed = 42) {
   assert.equal(frameShift.aa_changes.some((c) => c.kind === 'in_frame_deletion'), false);
 }
 
+{
+  // The amino-acid consequence list is capped (AA_CHANGE_LIMIT = 50), and a
+  // capped list that does not SAY it is capped reads as "these are all the
+  // changes". So the flag has to exist — and it has to be able to be true.
+  const reference = makeTemplate(300, 71);
+  const writeTrace = (label, trace) => memFs.files.set(`C:/tmp/${label}.seq`, `>${label}\n${trace}\n`);
+  const verify = (label) => run('molbio_verify_sanger', { trace_path: `C:/tmp/${label}.seq`, reference, cds_start: 1, cds_end: 300 });
+  const swapped = (base) => (base === 'A' ? 'C' : 'A');
+
+  writeTrace('aa_few', reference.slice(0, 2) + swapped(reference[2]) + reference.slice(3));
+  const few = await verify('aa_few');
+  assert.ok(few.aa_changes.length > 0, 'the window saw the substitution');
+  assert.equal(few.aa_changes_truncated, false, 'an under-cap list is not reported as truncated');
+
+  // One substitution every third base: ~100 consequences, so the cap bites.
+  writeTrace('aa_many', [...reference].map((base, index) => (index % 3 === 1 ? swapped(base) : base)).join(''));
+  const many = await verify('aa_many');
+  assert.equal(many.aa_changes.length, 50, 'the list is capped at 50');
+  assert.equal(many.aa_changes_truncated, true, 'and the result says the list was cut short');
+  const [aaBlocks] = registered.find((t) => t.name === 'molbio_verify_sanger').output.render({}, many);
+  assert.match(aaBlocks.text, /more consequences exist than the 50 listed above/, 'the rendered text says so too');
+}
+
 // ── protein and quantitative tools (batch 2) ────────────────────────────────
 
 {

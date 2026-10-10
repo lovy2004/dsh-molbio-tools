@@ -128,18 +128,25 @@ function translateWindow(seq) {
   return protein;
 }
 
+/** Cap on reported amino-acid consequences. The count of the rest is reported. */
+const AA_CHANGE_LIMIT = 50;
+
 /**
  * Report amino-acid consequences of trace differences inside a CDS window
  * (frame 1 relative to cdsStart, top strand). Consecutive single-base
  * deletions in the difference list are merged into one event: a deletion
  * whose length is NOT a multiple of 3 shifts the reading frame, while an
  * in-frame deletion removes whole codons and is reported as such.
+ *
+ * @returns {{changes: object[], truncated: boolean}} the changes, and whether
+ *   the cap cut the list short — a capped list that does not say so reads as
+ *   "these are all the consequences".
  */
 function aaConsequences(reference, differences, cdsStart, cdsEnd) {
   const out = [];
   const inside = differences.filter((d) => d.kind !== 'insertion' && d.ref_pos >= cdsStart && d.ref_pos <= cdsEnd);
   let i = 0;
-  while (i < inside.length && out.length < 50) {
+  while (i < inside.length && out.length < AA_CHANGE_LIMIT) {
     const d = inside[i];
     if (d.kind === 'deletion') {
       // Merge consecutive single-base deletions into one deletion event.
@@ -198,7 +205,8 @@ function aaConsequences(reference, differences, cdsStart, cdsEnd) {
     });
     i++;
   }
-  return out;
+  // `i < inside.length` means the loop stopped on the cap, not on the data.
+  return { changes: out, truncated: i < inside.length };
 }
 
 function codonToAa(codon) {
@@ -241,6 +249,6 @@ export function verifySanger({ traceBases, traceQualities, reference, circular =
     identity_percent: alignment.identity_percent,
     differences,
     ...qualityMean !== undefined ? { quality_mean: qualityMean } : {},
-    ...aaChanges !== undefined ? { aa_changes: aaChanges } : {},
+    ...aaChanges !== undefined ? { aa_changes: aaChanges.changes, aa_changes_truncated: aaChanges.truncated } : {},
   };
 }

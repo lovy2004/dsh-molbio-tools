@@ -90,9 +90,11 @@ async function rowsOf(patchPath) {
 
 const profileManifestPath = join(profileDir, 'package.json');
 let bundles = [];
+let profileVerified = true;
 if (existsSync(profileManifestPath)) {
   bundles = JSON.parse(readFileSync(profileManifestPath, 'utf8')).dsh?.profile?.bundles ?? [];
 } else {
+  profileVerified = false;
   console.warn(`note: profile ${profileName} has no package.json here; falling back to the shipped web bundle`);
   bundles = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
 }
@@ -344,14 +346,23 @@ if (existsSync(panelRoot)) {
   // make the browser half discoverable, not to add tools to every session.
   const hostHalf = await import(pathToFileURL(join(panelRoot, 'index.mjs')).href);
   assert.deepEqual([...hostHalf.inject], ['tools'], 'the panel host half injects the tool registry only for row ordering');
-  const before = 0;
-  hostHalf.apply({ tools: { register: () => { throw new Error('the panel host half must register no tool'); } } });
-  assert.equal(before, 0);
-  assert.equal(typeof hostHalf.apply, 'function', 'the host half exposes apply');
+  // Count the registrations rather than comparing a constant to itself: the
+  // previous `const before = 0; assert.equal(before, 0)` could not fail, so it
+  // guarded nothing. Calling apply() with a counting registry can.
+  let registered = 0;
+  hostHalf.apply({ tools: { register: () => { registered += 1; } } });
+  assert.equal(registered, 0, 'the panel host half registers no tool');
 } else {
   console.warn('note: packages/molbio-panel is absent; only the combined bundle was checked');
 }
 
 console.log(`graph   : ${graphEntries.size} client row(s) among ${rows.length} scanned rows`);
 console.log(`bundle  : ${toolsPackage.clientPath.replace(packageRoot, '.')} (${(toolsPackage.bundle.length / 1024).toFixed(1)} KB)`);
-console.log('client mount checks passed');
+// The summary must not claim more than actually ran. With no profile manifest
+// this file cannot know which packages the profile selects, so the reachability
+// guard for THIS package (rules.md 4.4 — the check that would have caught the two
+// sidebar tabs vanishing in 0.15.2) never executes. Saying "passed" there is the
+// silent green that guard exists to prevent.
+console.log(profileVerified
+  ? 'client mount checks passed'
+  : `client mount checks passed EXCEPT the profile selection: no manifest at ${profileManifestPath}, so the reachability guard for this package did NOT run`);

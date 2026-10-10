@@ -3272,6 +3272,7 @@ const verifySangerTool = (ctx) => define({
           },
         },
       },
+      aa_changes_truncated: { type: 'boolean' },
     },
   },
   render(value) {
@@ -3293,6 +3294,7 @@ const verifySangerTool = (ctx) => define({
         else if (change.kind === 'in_frame_deletion') lines.push(`  @${change.ref_pos}: in-frame deletion of ${change.length} bp (${change.deleted_bases ?? ''} removed; aa ${change.aa_before ?? ''} deleted)`);
         else lines.push(`  @${change.ref_pos}: ${change.kind} ${change.aa_before}${change.aa_before === change.aa_after ? '' : '→' + change.aa_after} (${change.codon_before}→${change.codon_after})`);
       }
+      if (value.aa_changes_truncated === true) lines.push(`  … more consequences exist than the ${value.aa_changes.length} listed above (the list is capped)`);
     }
     return lines.join('\n');
   },

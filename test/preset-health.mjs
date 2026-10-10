@@ -380,10 +380,10 @@ async function main() {
   // Node resolves it from the profile's node_modules, so there is no copy left
   // to drift. Assert the rule instead of the copy — a relative specifier here is
   // the silent failure this file exists to catch.
-  const relativeRow = /name:\s*'?(\.\/plugins\/[^']+)'?/.exec(compositionText);
-  if (relativeRow !== null) {
+  const relativeRows = relativeSpecifiers(compositionText);
+  if (relativeRows.length > 0) {
     console.error('specifier check (the preset tool row):');
-    console.error(`  FAIL the tool-molbio row names ${relativeRow[1]}, a relative path`);
+    console.error(`  FAIL the tool-molbio row names ${relativeRows[0]}, a relative path`);
     console.error('');
     console.error('  A relative specifier does NOT resolve inside a preset on dsh 0.1.7-alpha.1:');
     console.error('  the preset mounts, but the entry is never imported and the mode loads zero');
@@ -427,31 +427,24 @@ async function main() {
   const orderDrift = [];
   if (Number.isFinite(ownOrder)) {
     const presetsDir = join(packages, 'dsh-web-app', 'presets');
-    let shipped = [];
+    let shippedFiles = [];
     try {
-      shipped = (await readdir(presetsDir)).filter((name) => name.endsWith('.patch.yml'));
+      shippedFiles = (await readdir(presetsDir)).filter((name) => name.endsWith('.patch.yml'));
     } catch {
       /* a harness whose Web app ships presets elsewhere: fall through to a note */
     }
-    for (const file of shipped) {
-      const text = await readFile(join(presetsDir, file), 'utf8');
-      // Only rows that DECLARE a preset: this package's own patch layer carries
-      // plugin rows too, and those must not be mistaken for presets.
-      const at = text.indexOf('@deepseek-ai/dsh-agent-preset');
-      if (at === -1) continue;
-      // Read the preset's OWN identity and order — the ones under `config:` —
-      // not the declaration row's `id` (which is `preset-<id>` by convention).
-      const body = text.slice(at);
-      const id = /^\s*id:\s*([a-z0-9][\w-]*)\s*$/m.exec(body)?.[1];
-      const order = Number(/^\s*order:\s*(\d+)\s*$/m.exec(body)?.[1]);
-      if (Number.isFinite(order) && order === ownOrder) orderDrift.push(`order ${order} is already taken by the shipped preset "${id}" (${file})`);
+    const shipped = [];
+    for (const file of shippedFiles) {
+      const declared = presetOrderDeclared(await readFile(join(presetsDir, file), 'utf8'));
+      if (declared !== undefined) shipped.push({ ...declared, file });
     }
-    if (shipped.length === 0) {
+    orderDrift.push(...orderCollisions(ownOrder, shipped));
+    if (shippedFiles.length === 0) {
       console.error(`warning: no shipped preset files under ${presetsDir} — the order-collision check did not run`);
     }
   }
 
-  if (failures.length > 0 || drift.length > 0 || relativeRow !== null || countDrift.length > 0 || orderDrift.length > 0) {
+  if (failures.length > 0 || drift.length > 0 || relativeRows.length > 0 || countDrift.length > 0 || orderDrift.length > 0) {
     if (failures.length > 0) {
       console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
       for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
@@ -459,7 +452,7 @@ async function main() {
     if (drift.length > 0) {
       console.error(`preset-health FAILED: ${drift.length} structural drift(s) from the shipped standard preset`);
     }
-    if (relativeRow !== null) {
+    if (relativeRows.length > 0) {
       console.error('preset-health FAILED: the preset tool row uses a relative specifier, which never resolves in a preset');
     }
     if (countDrift.length > 0) {
@@ -476,11 +469,64 @@ async function main() {
   console.log(`order OK: ${ownOrder} collides with no shipped preset`);
 }
 
-// `compositionDrift` is exported for `test/drift-probe.mjs`, which drives it
-// against deliberately mutated compositions: the two defects this guard exists
-// for (a phantom provider row, a dropped upstream `disabled`) must FAIL, and a
-// guard nobody has seen fail is not a guard. `import.meta.main` (Node >= 22)
-// keeps `node test/preset-health.mjs` behaving exactly as before.
+/**
+ * Relative plugin specifiers in a composition.
+ *
+ * A relative specifier does NOT resolve inside a preset on 0.1.7-alpha.1: the
+ * preset mounts, the entry is never imported, and the mode loads zero tools.
+ * Exported so `test/drift-probe.mjs` can drive it against a mutated composition
+ * — rules.md rule 9: a guard nobody has seen fail is not a guard.
+ *
+ * @param {string} compositionText one patch layer's source.
+ * @returns {string[]} every `./plugins/...` specifier it names, in file order.
+ */
+function relativeSpecifiers(compositionText) {
+  return [...compositionText.matchAll(/name:\s*'?(\.\/plugins\/[^']+)'?/g)].map((match) => match[1]);
+}
+
+/**
+ * The preset one patch layer declares, or undefined when it declares none.
+ *
+ * Reads the identity and order under `config:` — not the declaration row's own
+ * `id`, which is `preset-<id>` by convention. Only a layer naming
+ * `dsh-agent-preset` declares a preset at all: this package's own patch layer
+ * carries plugin rows too, and those must not be mistaken for one.
+ *
+ * @param {string} text one patch layer's source.
+ * @returns {{id: string|undefined, order: number}|undefined}
+ */
+function presetOrderDeclared(text) {
+  const at = text.indexOf('@deepseek-ai/dsh-agent-preset');
+  if (at === -1) return undefined;
+  const body = text.slice(at);
+  const id = /^\s*id:\s*([a-z0-9][\w-]*)\s*$/m.exec(body)?.[1];
+  const order = Number(/^\s*order:\s*(\d+)\s*$/m.exec(body)?.[1]);
+  return Number.isFinite(order) ? { id, order } : undefined;
+}
+
+/**
+ * Order collisions between our preset and the shipped ones.
+ *
+ * The picker sorts by `order ?? Infinity` and breaks ties with `id.localeCompare`,
+ * so a shared number turns the displayed order into alphabetical accident —
+ * which is how `order: 2` (colliding with the shipped `ptc`) sorted us LAST.
+ *
+ * @param {number} ownOrder our declared order.
+ * @param {Array<{id: string, order: number, file: string}>} shipped the shipped presets.
+ * @returns {string[]} one message per collision.
+ */
+function orderCollisions(ownOrder, shipped) {
+  return shipped
+    .filter((entry) => entry.order === ownOrder)
+    .map((entry) => `order ${entry.order} is already taken by the shipped preset "${entry.id}" (${entry.file})`);
+}
+
+// These are exported for `test/drift-probe.mjs`, which drives them against
+// deliberately mutated compositions and patch layers: every defect this file
+// exists for (a phantom provider row, a dropped upstream `disabled`, a relative
+// specifier, an order collision) must FAIL — a guard nobody has seen fail is not
+// a guard. `import.meta.main` (Node >= 22) keeps `node test/preset-health.mjs`
+// behaving exactly as before.
 if (import.meta.main) await main();
 
-export { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch };
+export { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch, relativeSpecifiers, presetOrderDeclared, orderCollisions };

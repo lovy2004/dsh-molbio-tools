@@ -331,20 +331,29 @@ check('the toolview card contract still holds (meta path + keyed seat)', () => {
   assert.ok(card !== undefined && card.text.includes('tool.call.toolview'), 'a shipped package still registers a toolview');
   assert.ok(/key:\s*"present"/.test(card.text), 'keyed by the tool name');
 
-  // This package's own side: the projection exists on both map tools, and the
-  // bundle claims both keys (through the loop over MAP_TOOL_KEYS, so assert the
-  // key list and the seat, not a literal registration).
+  // This package's own side: the projection exists on exactly the tools the
+  // bundle claims cards for (through the loop over MAP_TOOL_KEYS, so assert the
+  // key list and the seat, not a literal registration). Both counts are DERIVED
+  // from the bundle's own key list — a literal 2 would not notice a third card
+  // key whose tool forgot `presentationMeta`.
   const source = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
-  assert.equal((source.match(/presentationMeta\(_args, value\)/g) ?? []).length, 2, 'both map tools declare the projection');
-  assert.ok(source.includes('mapCardMeta'), 'and build it through the shared projection');
   const bundle = readFileSync(join(packageRoot, 'lib', 'client.js'), 'utf8');
   const keys = /const MAP_TOOL_KEYS = \[([^\]]*)\]/.exec(bundle);
   assert.ok(keys !== null, 'the bundle declares the tool keys whose cards it draws');
   const claimed = keys[1].split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, '')).filter((entry) => entry !== '');
+  assert.ok(claimed.length > 0, 'the bundle claims at least one card key');
+  assert.equal(
+    (source.match(/presentationMeta\(_args, value\)/g) ?? []).length,
+    claimed.length,
+    'every claimed card key belongs to a tool that declares the projection',
+  );
+  assert.ok(source.includes('mapCardMeta'), 'and build it through the shared projection');
+  for (const key of claimed) {
+    // The host half registers a tool under that exact name.
+    assert.ok(source.includes(`name: '${key}'`), `the host registers the tool ${key} whose card the bundle claims`);
+  }
   for (const key of ['molbio_plasmid_map', 'molbio_plasmid_map_file']) {
     assert.ok(claimed.includes(key), `${key} is among the claimed card keys`);
-    // The host half registers a tool under that exact name.
-    assert.ok(source.includes(`name: '${key}'`), `and the host registers the tool ${key}`);
   }
   assert.ok(bundle.includes('tool.call.toolview'), 'through the toolview seat');
 });
@@ -501,11 +510,22 @@ check('the committed client artifact really contains every module the bundler de
       `${rel} is in the module graph (the modules this guard exists for)`,
     );
   }
-  // Negative control: the search must be capable of reporting absence.
+  // Negative control with a declaration that really EXISTS: the rasterizer is
+  // deliberately not part of the browser graph, so its longest declaration must
+  // be absent from every artifact. The previous version asserted the absence of
+  // a literal string that could not appear anywhere, which made it unfalsifiable.
   assert.ok(
-    !readFileSync(join(packageRoot, artifacts[0]), 'utf8').includes('function thisDeclarationDoesNotExist'),
-    'the content search reports absence for a declaration that is not there',
+    !generator.order.some((path) => path.endsWith('svgpng.mjs')),
+    'the rasterizer is outside the module graph (the premise of the control)',
   );
+  const absent = declarationExemplar(readFileSync(join(packageRoot, 'svgpng.mjs'), 'utf8'));
+  assert.ok(absent !== undefined && absent !== '', 'the negative control has a real declaration to look for');
+  for (const rel of artifacts) {
+    assert.ok(
+      !readFileSync(join(packageRoot, rel), 'utf8').includes(absent),
+      `the content search reports absence for \`${absent}\` (svgpng.mjs, which the bundle must not carry)`,
+    );
+  }
 });
 
 // ── 11. the image hand-off contract (v18) ───────────────────────────────────

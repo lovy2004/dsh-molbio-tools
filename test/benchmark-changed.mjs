@@ -40,7 +40,16 @@ const { tasks } = await loadTasks();
 
 const plugin = readPluginMap();
 assert.ok(plugin !== undefined, 'the plugin map must be readable from index.mjs');
-assert.equal(plugin.toolModules.size, 57, 'every registered tool must be attributed to its modules');
+const sourceText = readFileSync(join(REPO_ROOT, 'index.mjs'), 'utf8');
+// The expected count is DERIVED, not hardcoded. What matters is "every tool the
+// source declares is attributed to a module"; a literal 57 has to be hand-bumped
+// on every added tool and, when it trips, says nothing about which tool the
+// parser missed. `preset-health.mjs` counts the same way for the same reason.
+const declaredTools = [...sourceText.matchAll(/name:\s*'(molbio_[a-z0-9_]+)'/g)].map((match) => match[1]);
+assert.equal(plugin.toolModules.size, declaredTools.length, 'every declared tool must be attributed to its modules');
+for (const tool of declaredTools) {
+  assert.ok(plugin.toolModules.has(tool), `${tool} is declared in index.mjs but the module map does not attribute it`);
+}
 
 // ── (1) every tool's modules are real files ─────────────────────────────────
 
@@ -54,7 +63,7 @@ for (const [tool, modules] of plugin.toolModules) {
 // ── (2) the map agrees with the plugin's own import list ────────────────────
 
 const declaredModules = new Set([...plugin.toolModules.values()].flat());
-const source = readFileSync(join(REPO_ROOT, 'index.mjs'), 'utf8');
+const source = sourceText;
 for (const match of source.matchAll(/from\s*'(\.\/[^']+)'/g)) {
   const module = match[1].replace('./', '');
   // A module `index.mjs` imports is either used by a tool's execute() or it is a
@@ -164,14 +173,22 @@ for (const match of source.matchAll(/from\s*'(\.\/[^']+)'/g)) {
 
 // ── (8) the git reader agrees with reality ─────────────────────────────────
 
+let posixPathsChecked = true;
 {
   const files = changedFiles();
-  if (files !== undefined) {
+  if (files === undefined) {
+    // No git here (a tarball, a CI job without a checkout). "I cannot read the
+    // diff" is already asserted to force a FULL run (section 5); what cannot run
+    // is the POSIX-path assertion below. Say so, rather than leaving the file
+    // looking as if it verified everything — the whole point of section 8.
+    posixPathsChecked = false;
+    console.log('git     : changedFiles() unavailable (no git) — the POSIX-path assertion did NOT run');
+  } else {
     assert.ok(Array.isArray(files), 'changedFiles must return an array when git works');
     for (const file of files) assert.ok(!file.includes('\\'), `changedFiles must return POSIX paths (got ${file})`);
+    console.log(`git     : changedFiles() returned ${files.length} path(s)`);
   }
-  console.log(`git     : changedFiles() returned ${files === undefined ? 'undefined (fallback path)' : `${files.length} path(s)`}`);
 }
 
 console.log(`map     : ${plugin.toolModules.size} tools across ${declaredModules.size} modules`);
-console.log('benchmark-changed checks passed: map, dependency reach, fallback-on-uncertainty, inert outcome, and the two operators');
+console.log(`benchmark-changed checks passed: map, dependency reach, fallback-on-uncertainty, inert outcome, and the two operators${posixPathsChecked ? '' : ' (the POSIX-path assertion did NOT run: no git)'}`);

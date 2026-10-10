@@ -27,7 +27,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch } from './preset-health.mjs';
+import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch, relativeSpecifiers, presetOrderDeclared, orderCollisions } from './preset-health.mjs';
 // The three helpers this probe used to carry its own copies of. Duplicating
 // `findHarnessRoot` was the worst of them: the probe could resolve a DIFFERENT
 // harness than `preset-health` validated against, so a mutation experiment could
@@ -190,6 +190,44 @@ check('a stale tool count in the description is caught (v19: 52 while 57 shipped
 
 check('a description with no tool count is not forced to carry one', () => {
   assert.deepEqual(toolCountDrift('分子生物学专属模式：标准编码能力 + molbio 工具集。', 57), []);
+});
+
+// ── the two composition checks that had no mutation proof ───────────────────
+// rules.md rule 9 called the specifier check and the order check mutation-proven
+// while this probe imported nothing but compositionDrift/toolCountDrift, so the
+// claim was unbacked. They are exported now, and driven here.
+
+check('the specifier guard is quiet on a package name and catches a relative path', () => {
+  assert.deepEqual(relativeSpecifiers("      - id: tool-molbio\n        name: 'dsh-molbio-tools'\n"), []);
+  assert.deepEqual(
+    relativeSpecifiers("      - id: tool-molbio\n        name: './plugins/dsh-molbio-tools-v20/index.mjs'\n"),
+    ['./plugins/dsh-molbio-tools-v20/index.mjs'],
+    'a relative specifier is reported',
+  );
+});
+
+check('the order guard reads the order under config, not the declaration row id', () => {
+  const layer = [
+    '  - id: preset-mine',
+    "    name: '@deepseek-ai/dsh-agent-preset'",
+    '    config:',
+    '      id: mine',
+    '      order: 5',
+  ].join('\n');
+  assert.deepEqual(presetOrderDeclared(layer), { id: 'mine', order: 5 }, 'the config identity, not `preset-mine`');
+  // A layer that only carries plugin rows declares no preset at all.
+  assert.equal(presetOrderDeclared("  - id: tool-molbio\n    name: 'dsh-molbio-tools'\n"), undefined);
+});
+
+check('an order collision with a shipped preset is caught, a free number is not', () => {
+  const shipped = [
+    { id: 'standard', order: 1, file: 'standard.patch.yml' },
+    { id: 'ptc', order: 2, file: 'ptc.patch.yml' },
+  ];
+  assert.deepEqual(orderCollisions(5, shipped), [], 'a free number is quiet');
+  const collision = orderCollisions(2, shipped);
+  assert.equal(collision.length, 1, 'the collision is reported');
+  assert.match(collision[0], /order 2 is already taken by the shipped preset "ptc" \(ptc\.patch\.yml\)/, collision[0]);
 });
 
 console.log('');
