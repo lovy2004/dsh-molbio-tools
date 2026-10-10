@@ -1861,6 +1861,8 @@ const parseGenbankTool = define({
       definition: { type: 'string' },
       topology: { type: 'string', enum: ['circular', 'linear'] },
       length: { type: 'integer' },
+      length_declared: { type: 'integer' },
+      features_skipped: { type: 'integer' },
       features: {
         type: 'array',
         items: {
@@ -1894,6 +1896,8 @@ const parseGenbankTool = define({
     }
     const note = multiPartNote(value.features);
     if (note !== undefined) lines.push(note);
+    if (value.features_skipped !== undefined) lines.push(`note: ${value.features_skipped} feature(s) were dropped because their location could not be read.`);
+    if (value.length_declared !== undefined) lines.push(`note: the LOCUS line declares ${value.length_declared} bp but ORIGIN holds ${value.length} bp; the sequence is what the tools use.`);
     return lines.join('\n');
   },
   execute(args) {
@@ -2895,7 +2899,7 @@ const goldenGateTool = (ctx) => define({
       vector: { type: 'string', description: 'Vector sequence (alternative to vector_path).' },
       vector_path: { type: 'string', description: 'Path to a .dna/.gb vector file (alternative to vector).' },
       inserts: { type: 'array', items: { type: 'string' }, description: 'BARE fragment sequences in assembly order (1-24 fragments, unambiguous ACGT, >= 12 bp each). The tool adds the enzyme flanks itself.' },
-      enzyme: { type: 'string', description: 'Type IIS enzyme from the built-in table; default "BsaI" (also: BsmBI, Esp3I, BbsI, BspQI, SapI, LguI, PaqCI, AarI, BfuAI, BveI, BtgZI, BsmFI, FokI).' },
+      enzyme: { type: 'string', description: 'Type IIS enzyme from the built-in table; default "BsaI" (also: BsmBI, Esp3I, BbsI, PaqCI, AarI, BfuAI, BveI, BtgZI, BsmFI, FokI — this simulator builds the standard 4 bp junctions, so 3 bp-overhang enzymes such as SapI, BspQI and LguI are refused).' },
       replace_region: {
         type: 'object',
         additionalProperties: false,
@@ -4234,7 +4238,7 @@ const virtualGelTool = (ctx) => define({
 
 const alignTool = define({
   name: 'molbio_align',
-  description: 'Locally align two sequences (Smith-Waterman). Returns the aligned strings, aligned spans (1-based), identity %, and a list of mismatches/gaps. Use it to compare two sequences, check a primer against a template, or verify an edited region.',
+  description: 'Locally align two sequences (Smith-Waterman). Returns the aligned strings, the aligned span, identity %, and a list of mismatches/gaps. NOTE the span fields: a_start/b_start are 0-BASED offsets and a_end/b_end are 0-based EXCLUSIVE ends — the 1-based inclusive span is a_start+1..a_end, which is what the rendered text prints. Use it to compare two sequences, check a primer against a template, or verify an edited region.',
   parameters: {
     type: 'object',
     required: ['sequence1', 'sequence2'],
@@ -4250,10 +4254,10 @@ const alignTool = define({
     properties: {
       a_aligned: { type: 'string' },
       b_aligned: { type: 'string' },
-      a_start: { type: 'integer' },
-      b_start: { type: 'integer' },
-      a_end: { type: 'integer' },
-      b_end: { type: 'integer' },
+      a_start: { type: 'integer', description: '0-based offset where the aligned region starts in sequence1.' },
+      b_start: { type: 'integer', description: '0-based offset where the aligned region starts in sequence2.' },
+      a_end: { type: 'integer', description: '0-based EXCLUSIVE end in sequence1, so the 1-based inclusive span is a_start+1..a_end.' },
+      b_end: { type: 'integer', description: '0-based EXCLUSIVE end in sequence2, so the 1-based inclusive span is b_start+1..b_end.' },
       score: { type: 'integer' },
       identity_percent: { type: 'number' },
       aligned_columns: { type: 'integer' },
@@ -4299,7 +4303,11 @@ const alignTool = define({
     const result = smithWaterman(a, b);
     const differences = result.differences.map((d) => ({
       kind: d.kind,
-      pos1: d.trace_pos ?? (d.kind === 'deletion' ? d.trace_pos + 1 : d.trace_pos),
+      // Every difference kind smithWaterman emits records trace_pos (align.mjs).
+      // The old `?? (d.kind === 'deletion' ? d.trace_pos + 1 : d.trace_pos)`
+      // fallback could only ever produce NaN, because it re-read the very value
+      // that was undefined.
+      pos1: d.trace_pos,
       pos2: d.ref_pos,
       base1: d.trace_base,
       base2: d.ref_base,

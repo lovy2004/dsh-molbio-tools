@@ -427,7 +427,7 @@ export function simulateGoldenGate({ vectorSeq, vectorFeatures, inserts, enzyme 
   const notes = [];
   const resolved = enzymePattern(enzyme);
   if (resolved === undefined || !resolved.iis) {
-    throw new MolbioInputError(`${enzyme} is not a type IIS enzyme in the built-in table; Golden Gate needs an IIS enzyme (e.g. BsaI, BsmBI, Esp3I, BbsI, BspQI, SapI, PaqCI, BtgZI)`);
+    throw new MolbioInputError(`${enzyme} is not a type IIS enzyme in the built-in table; Golden Gate needs an IIS enzyme with a 4 bp overhang (e.g. BsaI, BsmBI, Esp3I, BbsI, PaqCI, BtgZI). 3 bp-overhang enzymes such as SapI, BspQI and LguI are not supported by this simulator.`);
   }
   const { pattern: site, cutOffset: cut, bottom } = resolved;
   const siteLength = site.length;

@@ -310,6 +310,11 @@ function MolbioMapCard({ block, inspect }) {
   const view = mapCardView(settled ? block.meta : undefined);
   const host = useRef(null);
   const svg = view.kind === 'map' ? view.svg : '';
+  // The markup can pass `mapCardView`'s boundary check and still not be
+  // parseable — it is a string that travelled through the session log. Failing to
+  // parse used to leave the header claiming "N feature(s)" above an empty body,
+  // with nothing to explain it.
+  const [drawError, setDrawError] = useState(null);
 
   // The markup is parsed and inserted as real DOM, exactly as in the panels:
   // the SVG stays selectable and inherits the page's font stack.
@@ -319,7 +324,11 @@ function MolbioMapCard({ block, inspect }) {
     node.replaceChildren();
     if (svg === '') return;
     const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
-    if (parsed.querySelector('parsererror') !== null) return;
+    if (parsed.querySelector('parsererror') !== null) {
+      setDrawError('the map markup could not be parsed as SVG');
+      return;
+    }
+    setDrawError(null);
     const element = parsed.documentElement;
     element.setAttribute('style', 'width:100%;height:auto;max-width:520px');
     node.append(document.importNode(element, true));
@@ -330,6 +339,9 @@ function MolbioMapCard({ block, inspect }) {
     : 'Drawing the map…';
   const content = [h('div', { key: 'head', style: styles.cardHead }, head)];
   if (view.kind === 'map') {
+    // The host stays mounted whatever happens, so the ref is still valid when
+    // the markup changes; the notice sits above the (empty) drawing area.
+    if (drawError !== null) content.push(h('div', { key: 'drawerr', style: styles.cardNote }, drawError));
     content.push(h('div', { key: 'svg', ref: host, style: styles.cardSvg }));
   } else {
     content.push(h('div', { key: 'note', style: styles.cardNote }, view.message));

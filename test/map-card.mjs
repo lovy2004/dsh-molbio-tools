@@ -313,6 +313,27 @@ assert.ok(failedText.includes('feature span is invalid'), 'a failed call shows t
 assert.ok(failedText.includes('Inspect'), 'and offers the inspect action');
 failed.unmount();
 
+// Markup that passes the boundary check and still does not parse. The card used
+// to keep its "N feature(s)" header above an empty drawing area with nothing to
+// explain it; the reason has to reach the reader.
+globalThis.__molbioTestHooks = mount(MapCard);
+const unparseable = globalThis.__molbioTestHooks;
+unparseable.setProps({
+  block: {
+    ...settledBlock,
+    callId: 'c3',
+    meta: { ...meta, svg: '<svg xmlns="http://www.w3.org/2000/svg"><parsererror>boom</parsererror></svg>' },
+  },
+  inspect: undefined,
+});
+await unparseable.render();
+// The effect sets the draw error, which is a second pass.
+await unparseable.render();
+const unparseableText = texts(unparseable.tree).join('\n');
+assert.ok(unparseableText.includes('could not be parsed as SVG'), 'unparseable markup is explained, not left blank');
+assert.ok(unparseableText.includes('pCARD · 206 bp'), 'and the header is still there, above the explanation');
+unparseable.unmount();
+
 await rm(shimPath, { force: true });
 await rm(entryPath, { force: true });
 console.log('map card checks passed (host projection -> card view -> rendered SVG)');

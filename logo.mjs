@@ -28,15 +28,8 @@
  * Text renders identically in every browser and without external fonts.
  */
 
-import { MolbioInputError } from './lib.mjs';
+import { IUPAC_MASKS, MolbioInputError } from './lib.mjs';
 import { FIGURE_FONT } from './svgio.mjs';
-
-/** Bitmask of the ACGT set each IUPAC symbol expands to (A=1, C=2, G=4, T=8). */
-const EXPANDED_BASES = {
-  A: 1, C: 2, G: 4, T: 8,
-  R: 5, Y: 10, S: 6, W: 9, K: 12, M: 3,
-  B: 14, D: 13, H: 11, V: 7, N: 15,
-};
 
 /** Classic sequence-logo letter colours. */
 export const LOGO_COLORS = {
@@ -88,7 +81,7 @@ export function columnComposition(rows, options = {}) {
     for (const row of rows) {
       const ch = row[c];
       if (ch === '-') continue;
-      const mask = EXPANDED_BASES[ch];
+      const mask = IUPAC_MASKS[ch];
       if (mask === undefined) continue; // unreachable for normalized rows
       let cardinality = 0;
       for (let b = 0; b < 4; b++) if ((mask & (1 << b)) !== 0) cardinality++;

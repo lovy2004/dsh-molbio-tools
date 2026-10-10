@@ -60,40 +60,50 @@ export function parseAbif(bytes) {
 
   const basesEntry = entries['PBAS.2'] ?? entries['PBAS.1'];
   if (basesEntry === undefined) throw new MolbioInputError('no base calls found (PBAS1/PBAS2 missing)');
-  const bases = readBases(bytes, basesEntry);
-
   const qualityEntry = entries['PCON.2'] ?? entries['PCON.1'];
-  const qualities = qualityEntry === undefined ? undefined : readQualities(bytes, qualityEntry);
+  const { bases, qualities } = readCalls(bytes, basesEntry, qualityEntry);
 
+  if (bases.length < 20 || bases.length > 20000) throw new MolbioInputError('ABIF base calls look invalid (unexpected length)');
+  for (const base of bases) {
+    if (!'ACGTNRYKMSWBDHV'.includes(base)) throw new MolbioInputError('ABIF base calls contain unexpected characters');
+  }
   return { bases, qualities };
 }
 
-function readBases(bytes, entry) {
-  const { elementSize, elementCount, dataOffset } = entry;
-  if (elementSize !== 1 && elementSize !== 2) throw new MolbioInputError('unsupported base-call element size');
-  let out = '';
-  for (let i = 0; i < elementCount; i++) {
-    const code = elementSize === 1 ? bytes[dataOffset + i] : (bytes[dataOffset + i * 2] | bytes[dataOffset + i * 2 + 1] << 8);
-    if (code === 0) break;
-    out += String.fromCharCode(code);
+/**
+ * Read PBAS and PCON in ONE pass, so every quality value stays attached to the
+ * base it was recorded with.
+ *
+ * Reading them separately and then trimming the base string — which is what this
+ * used to do — shifts every quality after the first character it removes (PBAS2
+ * can carry leading padding, and `.trim()` deleted it). The quality would then
+ * land on the wrong position, and `verdict` is computed from exactly those
+ * numbers. Padding is skipped on both sides of the pair instead.
+ *
+ * @returns {{bases: string, qualities: number[]|undefined}} qualities come back
+ *   only when one was read for EVERY base: a shorter or longer list cannot be
+ *   attributed, and "no quality" is honest where a shifted one is not.
+ */
+function readCalls(bytes, basesEntry, qualityEntry) {
+  if (basesEntry.elementSize !== 1 && basesEntry.elementSize !== 2) throw new MolbioInputError('unsupported base-call element size');
+  const qualityUsable = qualityEntry !== undefined && (qualityEntry.elementSize === 1 || qualityEntry.elementSize === 2);
+  const decodeAt = (entry, index) => (entry.elementSize === 1
+    ? bytes[entry.dataOffset + index]
+    : bytes[entry.dataOffset + index * 2] | bytes[entry.dataOffset + index * 2 + 1] << 8);
+  const bases = [];
+  const qualities = [];
+  for (let i = 0; i < basesEntry.elementCount; i++) {
+    const code = decodeAt(basesEntry, i);
+    if (code === 0) break; // the writer's end marker
+    const base = String.fromCharCode(code).toUpperCase();
+    if (/\s/.test(base)) continue; // padding travels with its quality
+    bases.push(base);
+    if (qualityUsable && i < qualityEntry.elementCount) qualities.push(decodeAt(qualityEntry, i));
   }
-  const cleaned = out.toUpperCase().replace(/[\s\0]+$/g, '').trim();
-  if (cleaned.length < 20 || cleaned.length > 20000) throw new MolbioInputError('ABIF base calls look invalid (unexpected length)');
-  for (const base of cleaned) {
-    if (!'ACGTNRYKMSWBDHV'.includes(base)) throw new MolbioInputError('ABIF base calls contain unexpected characters');
-  }
-  return cleaned;
-}
-
-function readQualities(bytes, entry) {
-  const { elementSize, elementCount, dataOffset } = entry;
-  const out = [];
-  for (let i = 0; i < elementCount; i++) {
-    if (elementSize === 1) out.push(bytes[dataOffset + i]);
-    else if (elementSize === 2) out.push(bytes[dataOffset + i * 2] | bytes[dataOffset + i * 2 + 1] << 8);
-    else return undefined;
-  }
-  return out.length > 0 ? out : undefined;
+  return {
+    bases: bases.join(''),
+    qualities: qualityUsable && qualities.length === bases.length && qualities.length > 0 ? qualities : undefined,
+  };
 }
 
 // ── trace reading ───────────────────────────────────────────────────────────
@@ -111,10 +121,15 @@ export function readTraceFromBytes(bytes, path) {
   }
   if (lower.endsWith('.seq') || lower.endsWith('.txt') || lower.endsWith('.fasta') || lower.endsWith('.fa')) {
     const text = new TextDecoder().decode(bytes);
-    let bases = text.replace(/^>.*$/gm, '').replace(/[\s\d]+/g, '').toUpperCase();
-    if (bases === '') throw new MolbioInputError('the trace file contains no sequence');
-    bases = normalizeSequence(bases, 'trace');
-    return { bases, qualities: undefined };
+    const headers = text.match(/^>.*$/gm) ?? [];
+    if (headers.length > 1) {
+      // Stripping every header line and concatenating the rest would silently
+      // fuse several reads into one trace.
+      throw new MolbioInputError(`the trace file holds ${headers.length} FASTA records; a trace is a single read`);
+    }
+    const stripped = text.replace(/^>.*$/gm, '').replace(/[\s\d]+/g, '');
+    if (stripped === '') throw new MolbioInputError('the trace file contains no sequence');
+    return { bases: normalizeSequence(stripped, 'trace'), qualities: undefined };
   }
   throw new MolbioInputError(`unsupported trace format ${JSON.stringify(lower)}; expected .ab1, .abif, .seq, .txt, .fasta`);
 }

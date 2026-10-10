@@ -10,12 +10,15 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.18.0）
+## 1. 当前状态（0.18.3）
 
 - 57 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
 - 基线：DSH **0.1.7-rc.1**。
+- **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
+  **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。跑在 `windows-latest` 上，
+  原因见 3.6。
 - **benchmark 交出的前两条缺陷已在 0.16.0 修完**（引物朝向、甲基化参考表），
   见 [history.md](history.md) 的 v0.16.0 段与 [CHANGELOG](../CHANGELOG.md)。
 - **图表能力已完整交付**：0.17.0 落地折线/直方图/箱型图与 CSV/TSV 读取层，
@@ -155,6 +158,36 @@ benchmark"的那一类；等下一次不得不动 `plot.mjs` 时一并做，不�
 0.18.0 的字体改动又加了**一条同类的重复**：`FIGURE_FONT` 在 `svgio.mjs` 里是导出常量，
 而 `plot.mjs` 本地复制了一份（它不 import svgio）。两处注释都写明"改一处要改两处"。
 这同样等上面那次统一一起消掉——那时 `plot.mjs` 会直接 import `FIGURE_FONT`。
+
+**0.18.3 的对照（为什么 IUPAC 表收敛了、这两个没有）**：IUPAC 字母表原本有**七份**编码
+（数组/字符串/Set/位掩码/索引映射），属于同类的重复，但它有一个这里没有的东西——**等价性证明**：
+逐符号核对六份副本取值完全一致，于是"收敛"只靠"输出零变化 + 全套测试与 `bench --offline` 全绿"
+就能验证，不必改任何像素断言。绘图助手没有这种证明（旧输出被 `test/svgpng.mjs` 与 benchmark
+期望值钉着），所以仍等上面那句话说的时机。
+
+### 3.6 套件的宿主路径是写死的（CI 因此只能跑 Windows）
+
+`test/smoke.mjs` 有 **184** 处、`test/map-card.mjs` 有 3 处直接写 `C:/tmp/...`（其中 3 处写成
+`'C:\\tmp\\...'` 作为期望值）。夹具的会话 cwd 是 `C:/tmp`，而工具用 `node:path` 拼路径，所以在
+Linux runner 上这些断言会因**分隔符**而失败——那是在报告宿主的路径语义，不是在报告本仓库的
+缺陷。`test/client-mount.mjs` 还有一处同类问题（写死 `%APPDATA%\npm`），**0.18.2 已修**，那也
+正是 workflow 第一次运行全红的原因。
+
+**改法（已设计，未做）**：在每个受影响的测试文件顶部加三个助手，把"输入路径"和"期望值"都从
+同一个根推导出来：
+
+```js
+const CWD = process.platform === 'win32' ? 'C:/tmp' : '/tmp';
+const at = (name) => `${CWD}/${name}`;      // 作为工具参数
+const shown = (name) => join(CWD, name);    // 工具 `join` 之后返回的形态
+```
+
+然后把 `'C:/tmp/X'` 换成 `at('X')`、`'C:\\tmp\\X'` 换成 `shown('X')`（模板字面量同理，`at()`
+接受插值）。
+
+**为什么不在没有 Linux runner 的情况下做**：本机只能证明"Windows 上无回归"，证明不了"Linux 上
+正确"，而 187 处改动的风险恰恰落在后面那一半。正确顺序是先在 CI 里加一个 ubuntu job（或手动跑
+一次），看到它绿了，再把 `windows-latest` 换成 `ubuntu-latest`——那时这次重写也就有了它的验证。
 
 ### 3.5 ✅ 已修（0.18.0）`svgpng.mjs` 的"浏览器半"守卫曾靠子串嗅探
 

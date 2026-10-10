@@ -11,13 +11,45 @@
 
 export const DNA_BASES = new Set(['A', 'C', 'G', 'T']);
 
-const IUPAC_EXPAND = {
+/**
+ * The four bases a bitmask is built from, in bit order (A=1, C=2, G=4, T=8).
+ * The order is load-bearing: `BASE_INDEX` and every `1 << …` derive from it.
+ */
+export const BASE_ORDER = ['A', 'C', 'G', 'T'];
+
+/** The bit position of each base: `1 << BASE_INDEX[base]`. */
+export const BASE_INDEX = Object.fromEntries(BASE_ORDER.map((base, index) => [base, index]));
+
+/**
+ * Symbol → the bases it matches. THE single source of the IUPAC alphabet.
+ *
+ * `pcr`, `crispr`, `logo` and `msa` each used to carry their own copy of this
+ * table (seven encodings in all: arrays, strings, Sets, bitmasks, index maps).
+ * They happened to agree — which is how a hand-copied reference table passes
+ * review right up to the day one copy is edited and the toolset reads a symbol
+ * two ways. The methylation table did exactly that in 0.16.0.
+ */
+export const IUPAC_EXPAND = {
   A: ['A'], C: ['C'], G: ['G'], T: ['T'],
   R: ['A', 'G'], Y: ['C', 'T'], S: ['C', 'G'], W: ['A', 'T'],
   K: ['G', 'T'], M: ['A', 'C'],
   B: ['C', 'G', 'T'], D: ['A', 'G', 'T'], H: ['A', 'C', 'T'],
   V: ['A', 'C', 'G'], N: ['A', 'C', 'G', 'T'],
 };
+
+/** One base set as a bitmask: `['A', 'G']` → 5. */
+const maskOf = (bases) => bases.reduce((mask, base) => mask | (1 << BASE_INDEX[base]), 0);
+
+/** `IUPAC_EXPAND` as a bitmask per symbol. U reads as T, the way `complement` does. */
+export const IUPAC_MASKS = Object.fromEntries(
+  Object.entries(IUPAC_EXPAND).map(([symbol, bases]) => [symbol, maskOf(bases)]),
+);
+IUPAC_MASKS.U = IUPAC_MASKS.T;
+
+/** The inverse: bitmask → symbol (8 is 'T', never 'U'). */
+export const MASK_SYMBOLS = Object.fromEntries(
+  Object.entries(IUPAC_EXPAND).map(([symbol, bases]) => [maskOf(bases), symbol]),
+);
 
 // Self-inverse IUPAC complement; U is accepted in input and treated as T.
 const COMPLEMENT = {

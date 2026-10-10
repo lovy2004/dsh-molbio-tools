@@ -27,7 +27,7 @@
  * validated prediction of cutting efficiency or of true off-target activity.
  */
 
-import { DNA_BASES, MolbioInputError, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore } from './lib.mjs';
+import { DNA_BASES, IUPAC_MASKS, MolbioInputError, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore } from './lib.mjs';
 
 /** Default SpCas9 PAM. */
 export const DEFAULT_PAM = 'NGG';
@@ -78,8 +78,8 @@ export function findProtospacers(seq, options = {}) {
       let matched = true;
       for (let i = 0; i < pattern.length; i++) {
         const base = seq[start + i];
-        const allowed = IUPAC_ALLOWED[pattern[i]];
-        if (allowed === undefined || !allowed.has(base)) {
+        const allowed = IUPAC_MASKS[pattern[i]];
+        if (allowed === undefined || (allowed & IUPAC_MASKS[base]) === 0) {
           matched = false;
           break;
         }
@@ -122,14 +122,7 @@ export function findProtospacers(seq, options = {}) {
   return hits;
 }
 
-/** IUPAC symbol → the DNA bases it matches (only ACGT are consulted). */
-const IUPAC_ALLOWED = {
-  A: new Set(['A']), C: new Set(['C']), G: new Set(['G']), T: new Set(['T']),
-  R: new Set(['A', 'G']), Y: new Set(['C', 'T']), S: new Set(['C', 'G']), W: new Set(['A', 'T']),
-  K: new Set(['G', 'T']), M: new Set(['A', 'C']),
-  B: new Set(['C', 'G', 'T']), D: new Set(['A', 'G', 'T']), H: new Set(['A', 'C', 'T']), V: new Set(['A', 'C', 'G']),
-  N: new Set(['A', 'C', 'G', 'T']),
-};
+/** IUPAC symbol → the DNA bases it matches (from `lib.mjs`'s single table). */
 
 /** Fraction of G+C over the guide (0-1). */
 export function gcFraction(seq) {
@@ -410,8 +403,8 @@ function finalizeSites(entries, options, requirePam, guideSequence) {
 export function pamMatches(triple, pattern) {
   if (triple.length !== pattern.length) return false;
   for (let i = 0; i < pattern.length; i++) {
-    const allowed = IUPAC_ALLOWED[pattern[i]];
-    if (allowed === undefined || !allowed.has(triple[i])) return false;
+    const allowed = IUPAC_MASKS[pattern[i]];
+    if (allowed === undefined || (allowed & IUPAC_MASKS[triple[i]]) === 0) return false;
   }
   return true;
 }

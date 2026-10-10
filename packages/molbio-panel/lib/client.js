@@ -32,6 +32,24 @@ window.__ModuleLoader__.load({
 
 			const DNA_BASES = new Set(['A', 'C', 'G', 'T']);
 
+			/**
+			 * The four bases a bitmask is built from, in bit order (A=1, C=2, G=4, T=8).
+			 * The order is load-bearing: `BASE_INDEX` and every `1 << …` derive from it.
+			 */
+			const BASE_ORDER = ['A', 'C', 'G', 'T'];
+
+			/** The bit position of each base: `1 << BASE_INDEX[base]`. */
+			const BASE_INDEX = Object.fromEntries(BASE_ORDER.map((base, index) => [base, index]));
+
+			/**
+			 * Symbol → the bases it matches. THE single source of the IUPAC alphabet.
+			 *
+			 * `pcr`, `crispr`, `logo` and `msa` each used to carry their own copy of this
+			 * table (seven encodings in all: arrays, strings, Sets, bitmasks, index maps).
+			 * They happened to agree — which is how a hand-copied reference table passes
+			 * review right up to the day one copy is edited and the toolset reads a symbol
+			 * two ways. The methylation table did exactly that in 0.16.0.
+			 */
 			const IUPAC_EXPAND = {
 			  A: ['A'], C: ['C'], G: ['G'], T: ['T'],
 			  R: ['A', 'G'], Y: ['C', 'T'], S: ['C', 'G'], W: ['A', 'T'],
@@ -39,6 +57,20 @@ window.__ModuleLoader__.load({
 			  B: ['C', 'G', 'T'], D: ['A', 'G', 'T'], H: ['A', 'C', 'T'],
 			  V: ['A', 'C', 'G'], N: ['A', 'C', 'G', 'T'],
 			};
+
+			/** One base set as a bitmask: `['A', 'G']` → 5. */
+			const maskOf = (bases) => bases.reduce((mask, base) => mask | (1 << BASE_INDEX[base]), 0);
+
+			/** `IUPAC_EXPAND` as a bitmask per symbol. U reads as T, the way `complement` does. */
+			const IUPAC_MASKS = Object.fromEntries(
+			  Object.entries(IUPAC_EXPAND).map(([symbol, bases]) => [symbol, maskOf(bases)]),
+			);
+			IUPAC_MASKS.U = IUPAC_MASKS.T;
+
+			/** The inverse: bitmask → symbol (8 is 'T', never 'U'). */
+			const MASK_SYMBOLS = Object.fromEntries(
+			  Object.entries(IUPAC_EXPAND).map(([symbol, bases]) => [maskOf(bases), symbol]),
+			);
 
 			// Self-inverse IUPAC complement; U is accepted in input and treated as T.
 			const COMPLEMENT = {
@@ -1515,6 +1547,11 @@ window.__ModuleLoader__.load({
 			}
 
 			exports.DNA_BASES = DNA_BASES;
+			exports.BASE_ORDER = BASE_ORDER;
+			exports.BASE_INDEX = BASE_INDEX;
+			exports.IUPAC_EXPAND = IUPAC_EXPAND;
+			exports.IUPAC_MASKS = IUPAC_MASKS;
+			exports.MASK_SYMBOLS = MASK_SYMBOLS;
 			exports.MolbioInputError = MolbioInputError;
 			exports.normalizeSequence = normalizeSequence;
 			exports.complement = complement;
@@ -1641,6 +1678,7 @@ window.__ModuleLoader__.load({
 			  let definition = '';
 			  const features = [];
 			  const sequenceChunks = [];
+			  let skippedFeatures = 0;
 
 			  let inFeatures = false;
 			  let inOrigin = false;
@@ -1663,13 +1701,21 @@ window.__ModuleLoader__.load({
 			      if (/^\s{5}\S/.test(line)) {
 			        // New feature: 5 spaces, then type and location.
 			        const match = /^\s{5}(\S+)\s*(.*)$/.exec(line);
-			        if (match === null) continue;
+			        if (match === null) {
+			          skippedFeatures += 1;
+			          continue;
+			        }
 			        currentFeature = {
 			          type: match[1],
 			          location: parseLocation(match[2] ?? ''),
 			          qualifiers: {},
 			        };
-			        if (currentFeature.location === undefined) continue; // unparseable location: skip the feature
+			        if (currentFeature.location === undefined) {
+			          // No digits in the location: the feature cannot be placed. It is
+			          // dropped, and the caller reports the count.
+			          skippedFeatures += 1;
+			          continue;
+			        }
 			        features.push(currentFeature);
 			        continue;
 			      }
@@ -1742,8 +1788,13 @@ window.__ModuleLoader__.load({
 			    ...accession !== '' ? { accession } : {},
 			    ...definition !== '' ? { definition } : {},
 			    length: sequence !== '' ? sequence.length : locus.length,
+			    // The LOCUS line declares a length and ORIGIN carries the sequence; every
+			    // downstream calculation uses the sequence, so a disagreement is reported
+			    // rather than settled silently in favour of one of the two numbers.
+			    ...sequence !== '' && locus.length !== sequence.length ? { length_declared: locus.length } : {},
 			    ...locus.topology !== undefined ? { topology: locus.topology } : {},
 			    features: projected,
+			    ...skippedFeatures > 0 ? { features_skipped: skippedFeatures } : {},
 			    sequence,
 			  };
 			}
@@ -1888,6 +1939,13 @@ window.__ModuleLoader__.load({
 
 			  const dnaLength = view.getUint32(off + 1);
 			  const flags = bytes[off + 5];
+			  // The packet declares its own length (`dnaLength` counts the flags byte plus
+			  // the bases). A file that stops short of it used to yield a silently SHORTER
+			  // sequence — `slice` clamps — which is the one thing a sequence reader must
+			  // never do quietly.
+			  if (dnaLength < 1 || off + 5 + dnaLength > bytes.length) {
+			    throw new MolbioInputError('truncated SnapGene file (the DNA packet runs past the end of the file)');
+			  }
 			  const seqBytes = bytes.slice(off + 6, off + 6 + dnaLength - 1);
 			  const sequence = decodeSequence(seqBytes);
 			  off += 1 + 4 + dnaLength;
@@ -1898,7 +1956,10 @@ window.__ModuleLoader__.load({
 			  while (off + 5 <= bytes.length) {
 			    const type = bytes[off];
 			    const length = view.getUint32(off + 1);
-			    if (off + 5 + length > bytes.length) break; // truncated tail; keep what we have
+			    // A packet that does not fit is a truncated tail. Writers do leave trailing
+			    // padding, so this stays lenient — and it can only ever drop the OPTIONAL
+			    // XML packets, never the sequence (validated above).
+			    if (off + 5 + length > bytes.length) break;
 			    const data = bytes.slice(off + 5, off + 5 + length);
 			    if (type === PACKET_FEATURES) featuresXml = new TextDecoder().decode(data).replace(/^\uFEFF/, '');
 			    else if (type === PACKET_PRIMERS) primersXml = new TextDecoder().decode(data).replace(/^\uFEFF/, '');
@@ -1927,8 +1988,8 @@ window.__ModuleLoader__.load({
 
 			/**
 			 * Decode the DNA packet's sequence bytes. Modern files store ASCII bases;
-			 * legacy files store one byte per base (0=A, 1=C, 2=G, 3=T; high bit =
-			 * lowercase). The encoding is auto-detected.
+			 * legacy files store one byte per base (0=A, 1=C, 2=G, 3=T; the high bit marked
+			 * lowercase, which this parser normalises away). The encoding is auto-detected.
 			 */
 			function decodeSequence(seqBytes) {
 			  if (seqBytes.length === 0) return '';
@@ -1936,14 +1997,14 @@ window.__ModuleLoader__.load({
 			  if (ascii) return decodeAscii(seqBytes);
 			  let out = '';
 			  for (const byte of seqBytes) {
+			    // 2 bits per base; anything else is not a base. The high bit marked
+			    // "lowercase" in the legacy packing, but this parser normalises to upper
+			    // case — reading the bit and then uppercasing the result was dead work, and
+			    // the header comment claimed case was preserved.
 			    const base = 'ACGT'[byte & 0x7f];
-			    if (base === undefined) {
-			      out += 'N';
-			      continue;
-			    }
-			    out += (byte & 0x80) !== 0 ? base.toLowerCase() : base;
+			    out += base === undefined ? 'N' : base;
 			  }
-			  return out.toUpperCase();
+			  return out;
 			}
 
 			/**
@@ -3056,7 +3117,7 @@ window.__ModuleLoader__.load({
 			 * ground truth.
 			 */
 
-			const { MolbioInputError, normalizeSequence } = __molbio_require("lib.mjs");
+			const { BASE_INDEX, IUPAC_MASKS, MASK_SYMBOLS, MolbioInputError, normalizeSequence } = __molbio_require("lib.mjs");
 			// ── scoring and limits ──────────────────────────────────────────────────────
 
 			const MSA_SCORING = {
@@ -3077,20 +3138,10 @@ window.__ModuleLoader__.load({
 			const SYMBOL_INDEX = {};
 			for (let k = 0; k < SYMBOLS.length; k++) SYMBOL_INDEX[SYMBOLS[k]] = k;
 
-			// Bitmask of the ACGT set each symbol expands to (A=1, C=2, G=4, T=8).
-			const EXPANDED_BASES = {
-			  A: 1, C: 2, G: 4, T: 8,
-			  R: 5, Y: 10, S: 6, W: 9, K: 12, M: 3,
-			  B: 14, D: 13, H: 11, V: 7, N: 15,
-			};
-
-			const BASE_INDEX = { A: 0, C: 1, G: 2, T: 3 };
-
-			// ACGT-subset mask → IUPAC ambiguity code.
-			const UNION_CODE = {
-			  3: 'M', 5: 'R', 9: 'W', 6: 'S', 10: 'Y', 12: 'K',
-			  7: 'V', 11: 'H', 13: 'D', 14: 'B', 15: 'N',
-			};
+			// The alphabet itself (symbol → bases, symbol → bitmask, mask → symbol) lives in
+			// `lib.mjs`: this file used to carry a third copy of the same ACGT bitmasks plus
+			// its own inverse table. `SYMBOLS` above stays local on purpose — it is the ORDER
+			// of the per-column symbol counts, not a mapping.
 
 			const NEG_INF = -1_000_000_000;
 			const SYMBOL_COUNT = SYMBOLS.length;
@@ -3421,7 +3472,7 @@ window.__ModuleLoader__.load({
 			// ── conservation analysis ───────────────────────────────────────────────────
 
 			function unionCodeOf(mask) {
-			  return UNION_CODE[mask] ?? 'N';
+			  return MASK_SYMBOLS[mask] ?? 'N';
 			}
 
 			/**
@@ -3504,7 +3555,7 @@ window.__ModuleLoader__.load({
 			          top = counts[s];
 			          topSymbol = SYMBOLS[s];
 			        }
-			        expanded |= EXPANDED_BASES[SYMBOLS[s]];
+			        expanded |= IUPAC_MASKS[SYMBOLS[s]];
 			      }
 			      identity = Math.round((top / residues) * 1000) / 1000;
 			      if (top / residues >= 0.5) {
@@ -3517,7 +3568,7 @@ window.__ModuleLoader__.load({
 			        const mask = BASE_INDEX[base];
 			        let count = 0;
 			        for (let s = 0; s < SYMBOL_COUNT; s++) {
-			          if (counts[s] > 0 && (EXPANDED_BASES[SYMBOLS[s]] & (1 << mask)) !== 0) count += counts[s];
+			          if (counts[s] > 0 && (IUPAC_MASKS[SYMBOLS[s]] & (1 << mask)) !== 0) count += counts[s];
 			        }
 			        if (count === 0) continue;
 			        const frac = count / residues;
@@ -3591,15 +3642,8 @@ window.__ModuleLoader__.load({
 			 * Text renders identically in every browser and without external fonts.
 			 */
 
-			const { MolbioInputError } = __molbio_require("lib.mjs");
+			const { IUPAC_MASKS, MolbioInputError } = __molbio_require("lib.mjs");
 			const { FIGURE_FONT } = __molbio_require("svgio.mjs");
-			/** Bitmask of the ACGT set each IUPAC symbol expands to (A=1, C=2, G=4, T=8). */
-			const EXPANDED_BASES = {
-			  A: 1, C: 2, G: 4, T: 8,
-			  R: 5, Y: 10, S: 6, W: 9, K: 12, M: 3,
-			  B: 14, D: 13, H: 11, V: 7, N: 15,
-			};
-
 			/** Classic sequence-logo letter colours. */
 			const LOGO_COLORS = {
 			  A: '#2e9b4f',
@@ -3650,7 +3694,7 @@ window.__ModuleLoader__.load({
 			    for (const row of rows) {
 			      const ch = row[c];
 			      if (ch === '-') continue;
-			      const mask = EXPANDED_BASES[ch];
+			      const mask = IUPAC_MASKS[ch];
 			      if (mask === undefined) continue; // unreachable for normalized rows
 			      let cardinality = 0;
 			      for (let b = 0; b < 4; b++) if ((mask & (1 << b)) !== 0) cardinality++;
@@ -3846,7 +3890,7 @@ window.__ModuleLoader__.load({
 			 * validated prediction of cutting efficiency or of true off-target activity.
 			 */
 
-			const { DNA_BASES, MolbioInputError, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore } = __molbio_require("lib.mjs");
+			const { DNA_BASES, IUPAC_MASKS, MolbioInputError, findRuns, hairpinThermo, normalizeSequence, primerTm, reverseComplement, selfAnyScore } = __molbio_require("lib.mjs");
 			/** Default SpCas9 PAM. */
 			const DEFAULT_PAM = 'NGG';
 
@@ -3896,8 +3940,8 @@ window.__ModuleLoader__.load({
 			      let matched = true;
 			      for (let i = 0; i < pattern.length; i++) {
 			        const base = seq[start + i];
-			        const allowed = IUPAC_ALLOWED[pattern[i]];
-			        if (allowed === undefined || !allowed.has(base)) {
+			        const allowed = IUPAC_MASKS[pattern[i]];
+			        if (allowed === undefined || (allowed & IUPAC_MASKS[base]) === 0) {
 			          matched = false;
 			          break;
 			        }
@@ -3940,14 +3984,7 @@ window.__ModuleLoader__.load({
 			  return hits;
 			}
 
-			/** IUPAC symbol → the DNA bases it matches (only ACGT are consulted). */
-			const IUPAC_ALLOWED = {
-			  A: new Set(['A']), C: new Set(['C']), G: new Set(['G']), T: new Set(['T']),
-			  R: new Set(['A', 'G']), Y: new Set(['C', 'T']), S: new Set(['C', 'G']), W: new Set(['A', 'T']),
-			  K: new Set(['G', 'T']), M: new Set(['A', 'C']),
-			  B: new Set(['C', 'G', 'T']), D: new Set(['A', 'G', 'T']), H: new Set(['A', 'C', 'T']), V: new Set(['A', 'C', 'G']),
-			  N: new Set(['A', 'C', 'G', 'T']),
-			};
+			/** IUPAC symbol → the DNA bases it matches (from `lib.mjs`'s single table). */
 
 			/** Fraction of G+C over the guide (0-1). */
 			function gcFraction(seq) {
@@ -4228,8 +4265,8 @@ window.__ModuleLoader__.load({
 			function pamMatches(triple, pattern) {
 			  if (triple.length !== pattern.length) return false;
 			  for (let i = 0; i < pattern.length; i++) {
-			    const allowed = IUPAC_ALLOWED[pattern[i]];
-			    if (allowed === undefined || !allowed.has(triple[i])) return false;
+			    const allowed = IUPAC_MASKS[pattern[i]];
+			    if (allowed === undefined || (allowed & IUPAC_MASKS[triple[i]]) === 0) return false;
 			  }
 			  return true;
 			}
@@ -8132,6 +8169,11 @@ window.__ModuleLoader__.load({
 			  const view = mapCardView(settled ? block.meta : undefined);
 			  const host = useRef(null);
 			  const svg = view.kind === 'map' ? view.svg : '';
+			  // The markup can pass `mapCardView`'s boundary check and still not be
+			  // parseable — it is a string that travelled through the session log. Failing to
+			  // parse used to leave the header claiming "N feature(s)" above an empty body,
+			  // with nothing to explain it.
+			  const [drawError, setDrawError] = useState(null);
 
 			  // The markup is parsed and inserted as real DOM, exactly as in the panels:
 			  // the SVG stays selectable and inherits the page's font stack.
@@ -8141,7 +8183,11 @@ window.__ModuleLoader__.load({
 			    node.replaceChildren();
 			    if (svg === '') return;
 			    const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
-			    if (parsed.querySelector('parsererror') !== null) return;
+			    if (parsed.querySelector('parsererror') !== null) {
+			      setDrawError('the map markup could not be parsed as SVG');
+			      return;
+			    }
+			    setDrawError(null);
 			    const element = parsed.documentElement;
 			    element.setAttribute('style', 'width:100%;height:auto;max-width:520px');
 			    node.append(document.importNode(element, true));
@@ -8152,6 +8198,9 @@ window.__ModuleLoader__.load({
 			    : 'Drawing the map…';
 			  const content = [h('div', { key: 'head', style: styles.cardHead }, head)];
 			  if (view.kind === 'map') {
+			    // The host stays mounted whatever happens, so the ref is still valid when
+			    // the markup changes; the notice sits above the (empty) drawing area.
+			    if (drawError !== null) content.push(h('div', { key: 'drawerr', style: styles.cardNote }, drawError));
 			    content.push(h('div', { key: 'svg', ref: host, style: styles.cardSvg }));
 			  } else {
 			    content.push(h('div', { key: 'note', style: styles.cardNote }, view.message));

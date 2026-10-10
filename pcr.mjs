@@ -30,7 +30,7 @@
  * taken with a modular slice, and `wraps_origin` says so.
  */
 
-import { MolbioInputError, normalizeSequence, reverseComplement } from './lib.mjs';
+import { IUPAC_MASKS, MolbioInputError, normalizeSequence, reverseComplement } from './lib.mjs';
 import { renderGel } from './plot.mjs';
 
 export const PCR_DEFAULTS = {
@@ -43,22 +43,11 @@ export const PCR_DEFAULTS = {
   max_returned_sequence: 5000,
 };
 
-/** IUPAC expansion, used for both the primer and the template base. */
-const IUPAC = {
-  A: 'A', C: 'C', G: 'G', T: 'T', U: 'T',
-  R: 'AG', Y: 'CT', S: 'CG', W: 'AT', K: 'GT', M: 'AC',
-  B: 'CGT', D: 'AGT', H: 'ACT', V: 'ACG', N: 'ACGT',
-};
-
-/** Do an IUPAC primer base and a template base agree? */
+/** Do an IUPAC primer base and a template base agree? Their base sets intersect. */
 function baseMatches(primerBase, templateBase) {
-  const primerSet = IUPAC[primerBase];
-  const templateSet = IUPAC[templateBase];
-  if (primerSet === undefined || templateSet === undefined) return false;
-  for (const base of primerSet) {
-    if (templateSet.includes(base)) return true;
-  }
-  return false;
+  const primerMask = IUPAC_MASKS[primerBase];
+  const templateMask = IUPAC_MASKS[templateBase];
+  return primerMask !== undefined && templateMask !== undefined && (primerMask & templateMask) !== 0;
 }
 
 /** The product sequence of a template, taking the top strand with a modular slice. */

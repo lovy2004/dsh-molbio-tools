@@ -827,6 +827,113 @@ function makeTemplate(n, seed = 42) {
   const circular = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/span.seq', reference });
   assert.equal(circular.verdict, 'match');
   assert.ok(circular.differences.length === 0);
+
+  // PBAS2 with leading padding. The base string used to be `.trim()`ed while the
+  // quality array was not, which shifted every quality by one — and the low
+  // quality filter and the verdict are computed from exactly those numbers. The
+  // padding's own quality (5) must leave with the padding, not land on base 1.
+  const padded = makeAbif(` ${reference.slice(0, 249)}`, [5, ...new Array(249).fill(40)]);
+  memFs.files.set('C:/tmp/padded.ab1', padded);
+  const paddedOut = await run('molbio_verify_sanger', { trace_path: 'C:/tmp/padded.ab1', reference });
+  assert.equal(paddedOut.trace_length, 249, 'the padding is dropped from the trace');
+  assert.equal(paddedOut.quality_mean, 40, 'and its quality left with it (a shift would read 39.9)');
+
+  // Two FASTA records in one "trace": concatenating them would silently fuse two
+  // reads into one.
+  memFs.files.set('C:/tmp/two.fasta', `>a\n${reference.slice(0, 120)}\n>b\n${reference.slice(120, 240)}\n`);
+  await assert.rejects(
+    () => run('molbio_verify_sanger', { trace_path: 'C:/tmp/two.fasta', reference }),
+    /2 FASTA records; a trace is a single read/,
+  );
+}
+
+{
+  // The alignment span fields are 0-based start / EXCLUSIVE end, and the rendered
+  // text prints the 1-based inclusive span. Pin both, so a caller cannot be told
+  // one convention in the schema and handed the other in the values.
+  const out = await run('molbio_align', { sequence1: 'TTTACGTAAA', sequence2: 'ACGT' });
+  assert.deepEqual([out.b_start, out.b_end], [0, 4], 'b_start/b_end are 0-based and exclusive');
+  const alignBlocks = registered.find((t) => t.name === 'molbio_align').output.render({}, out);
+  assert.ok(alignBlocks[0].text.includes('sequence2 1-4'), 'the rendered text prints the 1-based inclusive span');
+}
+
+{
+  // The IUPAC alphabet has ONE definition now (lib.mjs); pcr, crispr, logo and
+  // msa import it. Pin the bit order those modules depend on and prove every
+  // symbol round-trips, so an edit to the table cannot quietly redefine a symbol
+  // for five modules at once — the failure mode that made the methylation table
+  // wrong in 0.16.0.
+  assert.deepEqual(lib.BASE_ORDER, ['A', 'C', 'G', 'T']);
+  assert.deepEqual(lib.BASE_INDEX, { A: 0, C: 1, G: 2, T: 3 });
+  for (const [symbol, bases] of Object.entries(lib.IUPAC_EXPAND)) {
+    const expected = bases.reduce((mask, base) => mask | (1 << lib.BASE_INDEX[base]), 0);
+    assert.equal(lib.IUPAC_MASKS[symbol], expected, `${symbol}'s mask matches its expansion`);
+    assert.equal(lib.MASK_SYMBOLS[expected], symbol, `${symbol} round-trips through its mask`);
+  }
+  assert.equal(lib.IUPAC_MASKS.U, lib.IUPAC_MASKS.T, 'U reads as T');
+  assert.equal(lib.MASK_SYMBOLS[lib.IUPAC_MASKS.T], 'T', 'and that mask maps back to T, never U');
+  assert.equal(Object.keys(lib.IUPAC_MASKS).length, 16, '15 symbols plus U');
+}
+
+{
+  // Everything the golden_gate `enzyme` description advertises must actually be
+  // accepted. SapI/BspQI/LguI (3 bp overhangs) were named there for a whole
+  // release while the simulator refused them — a dead end handed to the model by
+  // its own tool description. The list is read out of the description, so
+  // re-adding one fails here.
+  const description = registered.find((t) => t.name === 'molbio_golden_gate').parameters.properties.enzyme.description;
+  const advertised = (/also:\s*([^)—]+)/.exec(description)?.[1] ?? '')
+    .split(',').map((name) => name.trim()).filter((name) => name !== '');
+  assert.ok(advertised.length >= 8, `the description still names the enzymes (found ${advertised.length})`);
+  for (const name of advertised) {
+    const resolved = lib.enzymePattern(name);
+    assert.ok(resolved !== undefined, `${name} is in the built-in enzyme table`);
+    assert.equal(
+      resolved.pattern.length + resolved.bottom - resolved.cutOffset,
+      4,
+      `${name} has the 4 bp overhang Golden Gate needs`,
+    );
+  }
+}
+
+{
+  // A GenBank record whose ORIGIN disagrees with its LOCUS line, and a feature
+  // whose location cannot be read: both used to pass silently.
+  const record = [
+    'LOCUS       TESTREC               500 bp    DNA     circular SYN 01-JAN-2020',
+    'FEATURES             Location/Qualifiers',
+    '     misc_feature    10..20',
+    '                     /label="real"',
+    '     misc_feature    ?',
+    '                     /label="unplaceable"',
+    'ORIGIN',
+    `        1 ${'acgtacgtac'.repeat(30)}`,
+    '//',
+  ].join('\n');
+  const out = await run('molbio_parse_genbank', { genbank: record });
+  assert.equal(out.sequence.length, 300, 'the ORIGIN sequence is what the tools use');
+  assert.equal(out.length, 300);
+  assert.equal(out.length_declared, 500, 'the LOCUS claim that disagrees is reported, not swallowed');
+  assert.equal(out.features.length, 1, 'only the placeable feature is returned');
+  assert.equal(out.features_skipped, 1, 'and the dropped one is counted');
+  const blocks = registered.find((t) => t.name === 'molbio_parse_genbank').output.render({}, out);
+  assert.match(blocks[0].text, /1 feature\(s\) were dropped because their location could not be read/);
+  assert.match(blocks[0].text, /the LOCUS line declares 500 bp but ORIGIN holds 300 bp/);
+}
+
+{
+  // A DNA packet that runs past the end of the file used to yield a silently
+  // SHORTER sequence (slice clamps). It is refused now.
+  const bases = 'ACGT'.repeat(50);
+  const bytes = new Uint8Array(5 + 4 + 5 + 1 + bases.length);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x09; view.setUint32(1, 4);
+  bytes[9] = 0x00; view.setUint32(10, 1 + bases.length + 40); // declares 40 bases more than are present
+  const truncatedRecord = bytes;
+  assert.throws(
+    () => snapgene.parseSnapGeneBytes(truncatedRecord),
+    /truncated SnapGene file \(the DNA packet runs past the end of the file\)/,
+  );
 }
 
 {

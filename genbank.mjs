@@ -76,6 +76,7 @@ export function parseGenBank(text) {
   let definition = '';
   const features = [];
   const sequenceChunks = [];
+  let skippedFeatures = 0;
 
   let inFeatures = false;
   let inOrigin = false;
@@ -98,13 +99,21 @@ export function parseGenBank(text) {
       if (/^\s{5}\S/.test(line)) {
         // New feature: 5 spaces, then type and location.
         const match = /^\s{5}(\S+)\s*(.*)$/.exec(line);
-        if (match === null) continue;
+        if (match === null) {
+          skippedFeatures += 1;
+          continue;
+        }
         currentFeature = {
           type: match[1],
           location: parseLocation(match[2] ?? ''),
           qualifiers: {},
         };
-        if (currentFeature.location === undefined) continue; // unparseable location: skip the feature
+        if (currentFeature.location === undefined) {
+          // No digits in the location: the feature cannot be placed. It is
+          // dropped, and the caller reports the count.
+          skippedFeatures += 1;
+          continue;
+        }
         features.push(currentFeature);
         continue;
       }
@@ -177,8 +186,13 @@ export function parseGenBank(text) {
     ...accession !== '' ? { accession } : {},
     ...definition !== '' ? { definition } : {},
     length: sequence !== '' ? sequence.length : locus.length,
+    // The LOCUS line declares a length and ORIGIN carries the sequence; every
+    // downstream calculation uses the sequence, so a disagreement is reported
+    // rather than settled silently in favour of one of the two numbers.
+    ...sequence !== '' && locus.length !== sequence.length ? { length_declared: locus.length } : {},
     ...locus.topology !== undefined ? { topology: locus.topology } : {},
     features: projected,
+    ...skippedFeatures > 0 ? { features_skipped: skippedFeatures } : {},
     sequence,
   };
 }

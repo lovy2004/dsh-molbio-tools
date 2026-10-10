@@ -134,6 +134,13 @@ export function parseSnapGeneBytes(bytes) {
 
   const dnaLength = view.getUint32(off + 1);
   const flags = bytes[off + 5];
+  // The packet declares its own length (`dnaLength` counts the flags byte plus
+  // the bases). A file that stops short of it used to yield a silently SHORTER
+  // sequence — `slice` clamps — which is the one thing a sequence reader must
+  // never do quietly.
+  if (dnaLength < 1 || off + 5 + dnaLength > bytes.length) {
+    throw new MolbioInputError('truncated SnapGene file (the DNA packet runs past the end of the file)');
+  }
   const seqBytes = bytes.slice(off + 6, off + 6 + dnaLength - 1);
   const sequence = decodeSequence(seqBytes);
   off += 1 + 4 + dnaLength;
@@ -144,7 +151,10 @@ export function parseSnapGeneBytes(bytes) {
   while (off + 5 <= bytes.length) {
     const type = bytes[off];
     const length = view.getUint32(off + 1);
-    if (off + 5 + length > bytes.length) break; // truncated tail; keep what we have
+    // A packet that does not fit is a truncated tail. Writers do leave trailing
+    // padding, so this stays lenient — and it can only ever drop the OPTIONAL
+    // XML packets, never the sequence (validated above).
+    if (off + 5 + length > bytes.length) break;
     const data = bytes.slice(off + 5, off + 5 + length);
     if (type === PACKET_FEATURES) featuresXml = new TextDecoder().decode(data).replace(/^\uFEFF/, '');
     else if (type === PACKET_PRIMERS) primersXml = new TextDecoder().decode(data).replace(/^\uFEFF/, '');
@@ -173,8 +183,8 @@ export function parseSnapGeneBytes(bytes) {
 
 /**
  * Decode the DNA packet's sequence bytes. Modern files store ASCII bases;
- * legacy files store one byte per base (0=A, 1=C, 2=G, 3=T; high bit =
- * lowercase). The encoding is auto-detected.
+ * legacy files store one byte per base (0=A, 1=C, 2=G, 3=T; the high bit marked
+ * lowercase, which this parser normalises away). The encoding is auto-detected.
  */
 function decodeSequence(seqBytes) {
   if (seqBytes.length === 0) return '';
@@ -182,14 +192,14 @@ function decodeSequence(seqBytes) {
   if (ascii) return decodeAscii(seqBytes);
   let out = '';
   for (const byte of seqBytes) {
+    // 2 bits per base; anything else is not a base. The high bit marked
+    // "lowercase" in the legacy packing, but this parser normalises to upper
+    // case — reading the bit and then uppercasing the result was dead work, and
+    // the header comment claimed case was preserved.
     const base = 'ACGT'[byte & 0x7f];
-    if (base === undefined) {
-      out += 'N';
-      continue;
-    }
-    out += (byte & 0x80) !== 0 ? base.toLowerCase() : base;
+    out += base === undefined ? 'N' : base;
   }
-  return out.toUpperCase();
+  return out;
 }
 
 /**

@@ -37,7 +37,7 @@
  * ground truth.
  */
 
-import { MolbioInputError, normalizeSequence } from './lib.mjs';
+import { BASE_INDEX, IUPAC_MASKS, MASK_SYMBOLS, MolbioInputError, normalizeSequence } from './lib.mjs';
 
 // ── scoring and limits ──────────────────────────────────────────────────────
 
@@ -59,20 +59,10 @@ const SYMBOLS = ['A', 'C', 'G', 'T', 'R', 'Y', 'S', 'W', 'K', 'M', 'B', 'D', 'H'
 const SYMBOL_INDEX = {};
 for (let k = 0; k < SYMBOLS.length; k++) SYMBOL_INDEX[SYMBOLS[k]] = k;
 
-// Bitmask of the ACGT set each symbol expands to (A=1, C=2, G=4, T=8).
-const EXPANDED_BASES = {
-  A: 1, C: 2, G: 4, T: 8,
-  R: 5, Y: 10, S: 6, W: 9, K: 12, M: 3,
-  B: 14, D: 13, H: 11, V: 7, N: 15,
-};
-
-const BASE_INDEX = { A: 0, C: 1, G: 2, T: 3 };
-
-// ACGT-subset mask → IUPAC ambiguity code.
-const UNION_CODE = {
-  3: 'M', 5: 'R', 9: 'W', 6: 'S', 10: 'Y', 12: 'K',
-  7: 'V', 11: 'H', 13: 'D', 14: 'B', 15: 'N',
-};
+// The alphabet itself (symbol → bases, symbol → bitmask, mask → symbol) lives in
+// `lib.mjs`: this file used to carry a third copy of the same ACGT bitmasks plus
+// its own inverse table. `SYMBOLS` above stays local on purpose — it is the ORDER
+// of the per-column symbol counts, not a mapping.
 
 const NEG_INF = -1_000_000_000;
 const SYMBOL_COUNT = SYMBOLS.length;
@@ -403,7 +393,7 @@ export function progressiveAlign(entries) {
 // ── conservation analysis ───────────────────────────────────────────────────
 
 function unionCodeOf(mask) {
-  return UNION_CODE[mask] ?? 'N';
+  return MASK_SYMBOLS[mask] ?? 'N';
 }
 
 /**
@@ -486,7 +476,7 @@ export function conservationAnalysis(rows, threshold = 0.8) {
           top = counts[s];
           topSymbol = SYMBOLS[s];
         }
-        expanded |= EXPANDED_BASES[SYMBOLS[s]];
+        expanded |= IUPAC_MASKS[SYMBOLS[s]];
       }
       identity = Math.round((top / residues) * 1000) / 1000;
       if (top / residues >= 0.5) {
@@ -499,7 +489,7 @@ export function conservationAnalysis(rows, threshold = 0.8) {
         const mask = BASE_INDEX[base];
         let count = 0;
         for (let s = 0; s < SYMBOL_COUNT; s++) {
-          if (counts[s] > 0 && (EXPANDED_BASES[SYMBOLS[s]] & (1 << mask)) !== 0) count += counts[s];
+          if (counts[s] > 0 && (IUPAC_MASKS[SYMBOLS[s]] & (1 << mask)) !== 0) count += counts[s];
         }
         if (count === 0) continue;
         const frac = count / residues;
