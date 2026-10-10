@@ -233,6 +233,14 @@ node benchmark/profile.mjs --check   # fail if it is stale
 node benchmark/profile.mjs --reset   # rebuild from scratch
 ```
 
+`--check` compares the profile **this machine** generated, at
+`$DSH_HOME/profiles/molbio-bench`. It is not part of `npm test` and cannot be: CI
+has never generated one, and the repository cannot carry one (the patch holds
+absolute paths and a `file:` dependency on this checkout). Wiring it in makes
+every CI run fail with "no profile at …" on every platform, which is what
+happened once — the part of that comparison that runs against the repository is
+`test/benchmark-profile.mjs`, and its header says so.
+
 Nothing about the reconstruction is trusted:
 
 - `test/benchmark-profile.mjs` compares every mounted row against the preset

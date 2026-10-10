@@ -28,8 +28,14 @@
 
 ### benchmark / 测试层的死角
 
-- **`bench:profile:check` 进了 `npm test`**。workflow.md 自己写着"这一项不在 npm test 里，别忘"
-  ——一条要求人记住的守卫等于没有守卫。
+- **`bench:profile:check` 曾被并入 `npm test`，CI 两个平台随即都红在 `Run the suite`——已回退。**
+  它比较的是**本机生成**的 profile（`$DSH_HOME/profiles/molbio-bench`），而 CI 从未生成过它，仓库也
+  载不了它（里面是绝对路径与指向本 checkout 的 `file:` 依赖）。`test/benchmark-profile.mjs` 的头注释
+  早就写着"**刻意不检查磁盘上的 profile 目录**：那是一条由另一个命令生成的、用户自己的路径"——
+  我没先读它就动手。顺带把这个失败的两种状态拆开：以前"没生成过"和"生成了但过期"都打印
+  `profile STALE`，现在前者打印
+  `profile ABSENT (this compares the profile THIS machine generated — not part of npm test)`，
+  并把原因写进 `benchmark/README.md`，免得下一个人再试一遍。
 - **两个孤儿 builder 删掉**（`plasmid-map`、`restriction-map`：任务改名后留下的，永远不会被调用，
   也就永远不再验证任何东西；其中一个还带 `type: 'FIXTURES.CDS'` 这个字面量笔误）。新增**反向检查**：
   从源码读出 builder id，断言每一个都对应真实任务。

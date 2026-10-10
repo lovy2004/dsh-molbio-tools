@@ -245,18 +245,29 @@ export async function writeProfile(options) {
   return { dir, patchPath, rows: kept.length, skipped };
 }
 
-/** Is the on-disk patch already what the generator would write? */
+/**
+ * Is the on-disk patch already what the generator would write?
+ *
+ * "Absent" and "stale" are different failures and used to share one word. Absent
+ * is normal machine state — the profile is generated per developer by
+ * `node benchmark/profile.mjs`, and the repository cannot carry one (it holds
+ * absolute paths and a `file:` dependency on this checkout). Stale is the defect
+ * this check exists for. Conflating them is how this got wired into `npm test`,
+ * where it could only ever fail: CI has never generated a profile.
+ */
 export async function checkProfile(options) {
   const patchPath = join(profileDir(options.dshHome), 'cordis.patch.yml');
-  if (!existsSync(patchPath)) return { ok: false, detail: `no profile patch at ${patchPath}` };
+  if (!existsSync(patchPath)) {
+    return { ok: false, state: 'absent', detail: `no profile at ${patchPath} — generate it with \`node benchmark/profile.mjs\`` };
+  }
   const current = await readFile(patchPath, 'utf8');
   const wanted = await renderProfilePatch({
     presetPath: join(options.repoRoot, 'preset', 'molbio-lab', 'agent.cordis.yml'),
     harnessRoot: options.harnessRoot,
   });
   return current === wanted
-    ? { ok: true, detail: `${patchPath} matches the preset` }
-    : { ok: false, detail: `${patchPath} is stale — run \`node benchmark/profile.mjs\`` };
+    ? { ok: true, state: 'ok', detail: `${patchPath} matches the preset` }
+    : { ok: false, state: 'stale', detail: `${patchPath} is stale — run \`node benchmark/profile.mjs\`` };
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -276,7 +287,12 @@ async function main() {
   }
   if (argv.includes('--check')) {
     const result = await checkProfile({ dshHome, repoRoot, harnessRoot });
-    console.log(result.ok ? `profile OK: ${result.detail}` : `profile STALE: ${result.detail}`);
+    const label = result.state === 'ok'
+      ? 'profile OK'
+      : result.state === 'absent'
+        ? 'profile ABSENT (this compares the profile THIS machine generated — not part of `npm test`)'
+        : 'profile STALE';
+    console.log(`${label}: ${result.detail}`);
     process.exit(result.ok ? 0 : 1);
   }
   const result = await writeProfile({ dshHome, repoRoot, harnessRoot, reset: argv.includes('--reset') });
