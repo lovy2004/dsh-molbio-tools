@@ -32,7 +32,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
@@ -537,6 +537,85 @@ async function fetchPublishedArtifact(url) {
   }
 }
 
+/**
+ * What the workflow should do about each package, given the registry.
+ *
+ * WHY THIS IS A SEPARATE, PURE DECISION
+ * ------------------------------------
+ * The first real release run reached `npm publish` for a package that does not
+ * exist on npm, and failed with:
+ *
+ *     npm error code ENEEDAUTH
+ *     npm error need auth This command requires you to be logged in to
+ *     https://registry.npmjs.org/
+ *
+ * OIDC trusted publishing CANNOT bootstrap a package: the trusted publisher is
+ * configured per package on npmjs.com, so there is nothing to authenticate
+ * against until the name exists. The preflight already DETECTED this condition
+ * and printed a note — and then let the publish run anyway, because the
+ * workflow's `if` only asked whether the event was a tag push. A gate that
+ * detects a condition and does not act on it is not a gate; it is a log line.
+ *
+ * So the decision is made here, as a function of the probes, and handed to the
+ * workflow: only a package whose name npm already knows may be published.
+ *
+ * `unknown` (the registry was unreachable) is treated as "attempt it": a flaky
+ * lookup must not be able to stop a release that `npm publish` will verify
+ * anyway, and the failure mode of attempting is a clear auth error rather than a
+ * silent skip.
+ *
+ * @param {Array<{name: string, version: string, state: string}>} probes
+ * @returns {{publish: boolean, blocked: string[], actions: Array<{name: string, version: string, action: string, reason: string}>}}
+ */
+export function publishPlan(probes) {
+  const actions = [];
+  const blocked = [];
+  for (const probe of probes) {
+    const { name, version, state } = probe;
+    if (state === 'first-release') {
+      actions.push({
+        name,
+        version,
+        action: 'skip',
+        reason: `${name}@${version} does not exist on npm: trusted publishing cannot create a package, and npm will answer ENEEDAUTH. Publish it once by hand, then configure a trusted publisher for it.`,
+      });
+      blocked.push(name);
+    } else if (state === 'same') {
+      actions.push({
+        name,
+        version,
+        action: 'skip',
+        reason: `${name}@${version} is already published; npm refuses to publish over a version`,
+      });
+    } else if (state === 'older') {
+      actions.push({
+        name,
+        version,
+        action: 'refuse',
+        reason: `${name}@${version} is older than what npm has`,
+      });
+      blocked.push(name);
+    } else {
+      // `newer` (this version is new) and `unknown` (could not ask) both attempt.
+      actions.push({
+        name,
+        version,
+        action: 'publish',
+        reason: state === 'unknown'
+          ? `${name}@${version}: the registry could not be read, so the publish is attempted and will report its own error`
+          : `${name}@${version} is not on npm yet`,
+      });
+    }
+  }
+  const refused = actions.some((action) => action.action === 'refuse');
+  const anyPublish = actions.some((action) => action.action === 'publish');
+  return {
+    publish: anyPublish && !refused,
+    blocked: refused ? actions.filter((a) => a.action === 'refuse').map((a) => a.name) : blocked,
+    actions,
+  };
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const offline = argv.includes('--offline');
@@ -583,49 +662,52 @@ async function main() {
   failures.push(...workspacePublishProblem(packages.find((entry) => entry.directory === '.')?.manifest));
   if (failures.length === 0) notes.push('both manifests declare the client half a profile looks for, and the root is not an npm workspace');
 
+  let plan = null;
   if (version !== undefined && !offline) {
-    let firstRelease = false;
+    // Probe every package first, then decide. The decision is a single function
+    // of the probes (see `publishPlan`), so it can be tested without a registry.
+    const probes = [];
     for (const entry of packages) {
       const declared = entry.manifest.version;
       const probe = await probeRegistry(entry.name, declared);
       const state = publishedState(probe, declared);
-      if (state.state === 'unknown') {
-        // A flaky lookup must not block a release the publish step will verify.
-        notes.push(`${entry.name}: ${state.message}`);
-        continue;
-      }
-      if (state.state === 'first-release') {
-        firstRelease = true;
-        notes.push(`${entry.name}: ${state.message}`);
-        continue;
-      }
-      if (state.state === 'older') {
-        failures.push(`${entry.name}: ${state.message}`);
-        continue;
-      }
-      notes.push(`${entry.name}: ${state.message}`);
+      probes.push({ name: entry.name, version: declared, state: state.state, message: state.message, artifact: probe.artifact, directory: entry.directory });
+      if (state.state === 'older') failures.push(`${entry.name}: ${state.message}`);
+      else notes.push(`${entry.name}: ${state.message}`);
+    }
 
-      // A version npm ALREADY HAS is only harmless if it carries the same
-      // artifact. For the panel that is the whole question: its version line is
-      // independent, so "not bumped" and "nothing changed" have to be told
-      // apart, and npm's own refusal to re-publish is the symptom rather than
-      // the diagnosis.
-      if (state.state === 'same' && entry.directory !== '.') {
-        const published = await fetchPublishedArtifact(probe.artifact);
-        const current = readFileSync(join(root, entry.directory, 'lib', 'client.js'), 'utf8').replace(/\r\n/g, '\n');
-        if (published === undefined) {
-          notes.push(`${entry.name}: could not read the published artifact, so the "was it changed?" check was skipped`);
-        } else if (panelArtifactChanged(published, current)) {
-          failures.push(
-            `${entry.name}@${declared} is already on npm but its lib/client.js DIFFERS from the one in this tree — bump the panel version (its line is independent of the root package's)`,
-          );
-        } else {
-          notes.push(`${entry.name}@${declared} is already published with identical bytes — the publish step will be a no-op`);
-        }
+    // The panel's independent version line: "already published" is only harmless
+    // if it carries the SAME bytes. npm's refusal to re-publish is the symptom;
+    // this is the diagnosis.
+    for (const probe of probes) {
+      if (probe.state !== 'same' || probe.directory === '.') continue;
+      const published = await fetchPublishedArtifact(probe.artifact);
+      const current = readFileSync(join(root, probe.directory, 'lib', 'client.js'), 'utf8').replace(/\r\n/g, '\n');
+      if (published === undefined) {
+        notes.push(`${probe.name}: could not read the published artifact, so the "was it changed?" check was skipped`);
+      } else if (panelArtifactChanged(published, current)) {
+        failures.push(
+          `${probe.name}@${probe.version} is already on npm but its lib/client.js DIFFERS from the one in this tree — bump the panel version (its line is independent of the root package's)`,
+        );
+        probe.state = 'older'; // refuse to publish over it
+      } else {
+        notes.push(`${probe.name}@${probe.version} is already published with identical bytes — the publish step is a no-op`);
       }
     }
-    if (firstRelease) {
-      notes.push('FIRST RELEASE: publish each package by hand once, then configure a trusted publisher for it (docs/workflow.md section 4)');
+
+    plan = publishPlan(probes);
+    for (const action of plan.actions) notes.push(`${action.action}: ${action.reason}`);
+
+    // A first release cannot be published by this workflow at all. Saying so and
+    // CONTINUING is what produced the ENEEDAUTH failure, so this is now a
+    // refusal: the run stops before touching the registry, with the bootstrap
+    // step in the message.
+    if (plan.blocked.length > 0) {
+      for (const name of plan.blocked) {
+        failures.push(
+          `${name} cannot be published by this workflow yet: trusted publishing has nothing to authenticate against until the package exists. Publish it once by hand (npm publish --access public, with your OTP), then configure a Trusted Publisher for it on npmjs.com (repository lovy2004/dsh-molbio-tools, workflow file release.yml), then re-run this release.`,
+        );
+      }
     }
   } else if (offline) {
     notes.push('--offline: registry state not checked');
@@ -637,7 +719,24 @@ async function main() {
     console.error(`\nrelease-preflight FAILED: ${failures.length} problem(s) — nothing was published`);
     process.exit(1);
   }
-  console.log(`\nrelease preflight OK: v${version} is ready to publish (${packages.length} package(s): ${packages.map((entry) => `${entry.name}@${entry.manifest.version}`).join(', ')})`);
+  // Hand the decision to the workflow, which gates each publish step on it. Written
+  // only on success, so a failed preflight can never look like "go ahead".
+  const outputFile = process.env.GITHUB_OUTPUT;
+  if (outputFile !== undefined && plan !== null) {
+    const lines = [
+      `publish=${plan.publish}`,
+      `publish_tools=${plan.actions.some((a) => a.name === 'dsh-molbio-tools' && a.action === 'publish')}`,
+      `publish_panel=${plan.actions.some((a) => a.name === 'dsh-molbio-panel' && a.action === 'publish')}`,
+      `version=${version}`,
+      'reason=' + plan.actions.map((a) => `${a.name}@${a.version}:${a.action}`).join(' '),
+    ];
+    appendFileSync(outputFile, `${lines.join('\n')}\n`);
+    console.log(`  note  publish decisions written to GITHUB_OUTPUT`);
+  }
+  const summary = plan === null
+    ? `(${packages.length} package(s): ${packages.map((entry) => `${entry.name}@${entry.manifest.version}`).join(', ')})`
+    : `(${plan.actions.map((a) => `${a.name}@${a.version} -> ${a.action}`).join(', ')})`;
+  console.log(`\nrelease preflight OK: v${version} ${summary}`);
 }
 
 // Only run when invoked, not when imported by the test suite.

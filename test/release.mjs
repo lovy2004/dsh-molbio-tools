@@ -39,6 +39,7 @@ import {
   npmVersionSupport,
   packageVersionCheck,
   panelArtifactChanged,
+  publishPlan,
   publishedState,
   tagVersion,
   versionShapeProblem,
@@ -351,7 +352,62 @@ if (process.env.MOLBIO_RELEASE_NETWORK === '1') {
   notes.push(`npm ${support.version.join('.')} here satisfies the trusted-publishing floor (${floor})`);
 }
 
-// ── (12) the workflow itself ────────────────────────────────────────────────
+// ── (13) the publish decision ───────────────────────────────────────────────
+//
+// THE FAILURE THIS ENCODES. The first real release run reached `npm publish` for
+// a package that does not exist on npm, and died with `ENEEDAUTH` / "need auth".
+// Trusted publishing cannot create a package: the trusted publisher is
+// configured per package on npmjs.com, so there is nothing to authenticate
+// against until the name exists. The preflight had detected that already and
+// printed a note — and the publish ran anyway, because the workflow's `if` only
+// asked whether the event was a tag push.
+//
+// So "detects it and says so" is not the property to test. The property is that
+// the decision REFUSES, and that the workflow consumes the refusal.
+{
+  const tools = (state) => ({ name: 'dsh-molbio-tools', version: '0.19.0', state });
+  const panel = (state) => ({ name: 'dsh-molbio-panel', version: '0.1.2', state });
+
+  // The bootstrap case: nothing may be published, and both names are reported as
+  // blocked so the error message can name them.
+  const first = publishPlan([tools('first-release'), panel('first-release')]);
+  assert.equal(first.publish, false, 'a first release must not attempt a publish');
+  assert.deepEqual(first.blocked, ['dsh-molbio-tools', 'dsh-molbio-panel']);
+  assert.deepEqual(first.actions.map((a) => a.action), ['skip', 'skip']);
+  assert.match(first.actions[0].reason, /ENEEDAUTH/, 'the reason names the error the user actually saw');
+
+  // The steady state: the version is new, so both publish.
+  const fresh = publishPlan([tools('newer'), panel('newer')]);
+  assert.equal(fresh.publish, true);
+  assert.deepEqual(fresh.actions.map((a) => a.action), ['publish', 'publish']);
+  assert.deepEqual(fresh.blocked, []);
+
+  // A re-run of an already-published version is a no-op, not a failure and not an
+  // attempt: npm refuses to publish over a version.
+  const rerun = publishPlan([tools('same'), panel('same')]);
+  assert.equal(rerun.publish, false, 'nothing left to publish');
+  assert.deepEqual(rerun.blocked, [], 'and it is NOT a failure — a re-run is legitimate');
+  assert.deepEqual(rerun.actions.map((a) => a.action), ['skip', 'skip']);
+
+  // The dangerous one: npm has a NEWER version than the tag. Refuse.
+  const stale = publishPlan([tools('older'), panel('newer')]);
+  assert.equal(stale.publish, false, 'publishing an older version must be refused');
+  assert.deepEqual(stale.blocked, ['dsh-molbio-tools']);
+
+  // A registry that cannot be read must NOT block: `npm publish` verifies by
+  // attempting, and a flaky lookup must not be able to stop a release.
+  const unknown = publishPlan([tools('unknown'), panel('unknown')]);
+  assert.equal(unknown.publish, true, 'an unreachable registry falls through to the publish attempt');
+
+  // Mixed: one new, one already there. Only the new one is attempted.
+  const mixed = publishPlan([tools('newer'), panel('same')]);
+  assert.equal(mixed.publish, true);
+  assert.equal(mixed.actions.find((a) => a.name === 'dsh-molbio-tools').action, 'publish');
+  assert.equal(mixed.actions.find((a) => a.name === 'dsh-molbio-panel').action, 'skip');
+  notes.push('the publish decision refuses a first release, a stale version and a re-run, and attempts a new one');
+}
+
+// ── (14) the workflow itself ────────────────────────────────────────────────
 //
 // `.github/` is deliberately NOT in the npm `files` allowlist — the workflow is
 // repository infrastructure, not something an installer needs. This suite is
@@ -412,7 +468,25 @@ if (process.env.MOLBIO_RELEASE_NETWORK === '1') {
       !/case\s+"\$TAG"\s+in/.test(workflow),
       'a shell `case` for the tag would accept shapes the parser rejects (a glob cannot express three numeric components)',
     );
-    notes.push('the workflow grants OIDC, stores no token, and delegates every decision to the tested module');
+
+    // THE PUBLISH GATE MUST BE CONSUMED. The preflight refusing is only useful if
+    // the publish steps read that refusal; the first release failed precisely
+    // because they gated on the event alone.
+    assert.match(workflow, /id:\s*preflight/, 'the preflight step needs an id for its outputs to be reachable');
+    assert.match(
+      workflow,
+      /steps\.preflight\.outputs\.publish_tools\s*==\s*'true'/,
+      'the root publish must gate on the preflight decision, not only on the event',
+    );
+    assert.match(
+      workflow,
+      /steps\.preflight\.outputs\.publish_panel\s*==\s*'true'/,
+      'the panel publish must gate on the preflight decision too',
+    );
+    // The GitHub Release may still be created when nothing was published: the run
+    // legitimately reaches that point for a re-run of an existing version.
+    assert.match(workflow, /Create the GitHub Release[\s\S]{0,200}steps\.mode\.outputs\.publish/, 'the notes step stays tied to the event');
+    notes.push('the workflow grants OIDC, stores no token, delegates every decision to the tested module, and consumes the publish decision');
   }
 }
 

@@ -93,6 +93,15 @@ anchor，并且**没有任何标签墨迹进入面板边框带**——后者与"
 
 ### 4. 持续交付（CD）：推一个 tag 就发完
 
+> **首发必须手动做一次，这是 npm 可信发布的固有限制，不是配置错误。** 推 tag 跑 CD 会以
+> `npm error code ENEEDAUTH` / `need auth` 失败——Trusted Publisher 是**逐包**在 npmjs.com 上
+> 配置的，包名还不存在时 npm 没有可认证的对象。**0.19.0 的第一次真实运行就是这样失败的。**
+> 更值得记的是**当时的 preflight 已经检测出"包不存在"，却只打印一条 note 就放行**：一个检测到
+> 条件却不据此行动的守卫不是守卫，只是一行日志。现在 `publishPlan()` 把每条注册表状态落成
+> `publish` / `skip` / `refuse` 三个动作，首发与"npm 已有更新版本"都是 `refuse`，workflow 的发布
+> 步骤读 `steps.preflight.outputs.publish_*`，于是**在碰注册表之前**停下并打印准确的首发步骤。
+> 完整顺序（含必要时如何安全地强制移动 tag）见 [workflow.md](docs/workflow.md) 第 4 节。
+
 `.github/workflows/release.yml` 把「发布流程」第 4 节那套手工步骤变成流水线。**触发条件是推
 `v*` tag**，不是推 main——版本号就是"这是一次发布"的决定，而 tag 是唯一不可能被顺手推出去的东西。
 

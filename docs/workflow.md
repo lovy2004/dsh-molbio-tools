@@ -535,18 +535,35 @@ npm 把它换成一张**短期**凭证，且**限于这个仓库 + 这个 workfl
 **这条路有一个前提：npm 必须先知道这个包。** Trusted Publisher 是**逐包**在 npmjs.com 上配置的，
 而一个不存在的包没有可配置的对象。所以两个包的**首次发布必须由人手动做一次**：
 
-```bash
-# ① 手动首发（只需一次，需要 OTP；npm login 必须是真 TTY，只能由人操作）
-cd <仓库根> && npm publish --access public          # dsh-molbio-tools
-cd packages\molbio-panel && npm publish --access public   # dsh-molbio-panel
+#### 首发（bootstrap）的准确顺序
 
-# ② 为每个包配置 Trusted Publisher（npmjs.com → 包的 Settings → Trusted Publisher）
+```powershell
+# ① 先推 tag 试一次 CD（可选但推荐）：它会在 preflight 就停下并告诉你"这是首发"
+git push origin main
+git push origin refs/tags/v0.19.0        # 若之前已推过旧 tag，见下面 ⑤ 的强制推送
+
+# ② 手动首发（只需一次；需要 OTP，npm login 必须是真 TTY，只能由人操作）
+cd D:\deepseek-harness\dsh-molbio-tools
+npm publish --access public                       # dsh-molbio-tools
+cd packages\molbio-panel
+npm publish --access public                       # dsh-molbio-panel
+
+# ③ 为每个包配置 Trusted Publisher（npmjs.com → 该包的 Settings → Trusted Publisher）
 #    Repository:    lovy2004/dsh-molbio-tools
-#    Workflow file: release.yml        （只写文件名，不带 .github/workflows/ 前缀）
+#    Workflow file: release.yml    ← 只写文件名，不带 .github/workflows/ 前缀
 #    Environment:   留空
 
-# ③ 之后每次发版只需推 tag
+# ④ 之后每次发版只需推 tag，CD 全程自动
+git tag -a v0.20.0 -m "..." && git push origin v0.20.0
+
+# ⑤ 只有"首发之前就已经推过 v0.19.0 的失败运行"才需要这一步：
+git push origin refs/tags/v0.19.0 --force   # 把 tag 移到修好的提交，重新触发
 ```
+
+> **⑤ 的强制推送为什么安全**：那次运行**在 preflight 就失败了，没有发布任何东西**，npm 上不存在
+> 这两个包（`npm view dsh-molbio-tools` 仍是 404），所以没有任何已发布版本会被覆盖。一旦某个
+> 版本真的发出去过，就**不要**再移动 tag——npm 不允许覆盖同版本号，而且删/改 tag 会让已经
+> 引用它的东西对不上。正确做法是发一个更高版本。
 
 > **首发用 `--provenance` 会让包永久变为 public 且不可逆**，对本包（MIT、公开工具）是想要的结果，
 > 但要知道这一步不可撤销。
@@ -555,13 +572,24 @@ cd packages\molbio-panel && npm publish --access public   # dsh-molbio-panel
 
 - **设了 `NODE_AUTH_TOKEN` 反而会关掉可信发布**——npm 见到 token 就不再走 OIDC。所以 workflow
   里**故意不设**它，`test/release.mjs` 直接断言文件里没有对它的赋值、也没有任何 `secrets.` 引用。
-- **首发时 `npm publish` 的报错是 404，看不出真正原因**。所以 `release-preflight.mjs` 会先问
-  注册表"这个包存在吗"，包不存在就明确回一句"这是首发，必须手动做一次"，而不是把 404 丢给你猜。
+- **首发跑 CD 会以 `ENEEDAUTH` 失败，而且失败在 `npm publish` 那一步**：
+  `npm error need auth This command requires you to be logged in to https://registry.npmjs.org/`。
+  这不是配置写错了，而是可信发布的**固有限制**——Trusted Publisher 是**逐包**配置的，包名还不存在时
+  npm 没有可认证的对象，于是回退到"需要登录"。**0.19.0 的第一次真实运行就是这样失败的。**
+  **当时的 preflight 已经检测出"包不存在"，却只打印一条 note 就放行**——一个检测到条件却不据此
+  行动的守卫不是守卫，只是一行日志。现在 `publishPlan()` 会**拒绝**，workflow 的发布步骤也读它的
+  结论（`steps.preflight.outputs.publish_tools` / `publish_panel`），所以首发会在**碰注册表之前**
+  停下，并把上面①②两步原文写在错误信息里。
 - **面板包的版本线是独立的**（v20 计划里是 `0.1.1 → 0.1.2`），**不与根包同步**。但两者共用
   **同一份客户端源码**（`build/`），所以浏览器半一改，`packages/molbio-panel/lib/client.js` 就变了；
   此时若面板版本不动，第二次发布会拿同版本号发不同字节，npm 会拒绝。preflight 因此会把
   **已发布版本的 `lib/client.js` 抓下来**（直接请求注册表 tarball，在进程内解 tar）与工作区里的
   逐字节比对：不一致就**在发布前**报错，并说明要 bump 面板版本。
+
+> **首发之后，同一个 tag 会被重新推一次。** 因为首发是在本地手动做的，而 CD 那次运行必然已经失败
+> （它会走到 preflight 就停下）。把 tag 强制推到修好的提交上是**安全**的：那次失败**没有发布任何
+> 东西**，npm 版本号没有被消耗，所以没有任何已发布的版本会被覆盖。命令见本节开头的
+> 「首发（bootstrap）的准确顺序」。
 
 #### `build/release-preflight.mjs` 到底检查什么
 
@@ -576,6 +604,7 @@ cd packages\molbio-panel && npm publish --access public   # dsh-molbio-panel
 | **CHANGELOG 有该版本条目且足够长** | GitHub Release 的正文就是这一段；没有它就没有发布说明 |
 | 清单里客户端半的字段（`dsh.client.platform` / `exports["./client"]` / `dsh.bundle.patch`） | 缺了会**装得上但没有面板**——0.15.2 已经踩过一次 |
 | 注册表状态（首发 / 已存在同版本 / npm 更新） | 首发要人手动；同版本要区分"没 bump"与"没改"；npm 更新则说明在发一个更旧的版本 |
+| **发布决定（`publishPlan`）** | 上面每条状态**都要落到一个动作**上：`publish` / `skip` / `refuse`。首发与"npm 已有更新版本"是 `refuse`——**碰注册表之前就停**。这正是 ENEEDAUTH 那次失败暴露的缺口：检测到了却没有据此行动 |
 | 面板产物是否变了而版本没动 | 见上；这是唯一需要网络与 tar 读取的检查 |
 
 网络相关的那两项**不会因为网络抖动而阻断发布**：取不到注册表时状态记为 `unknown`，只打印

@@ -154,13 +154,27 @@ jobs:
       # section worth publishing as notes, the client-half manifest fields a
       # profile looks for, and whether the panel's independent version line has
       # fallen behind a changed artifact.
+      #
+      # It also DECIDES what may be published, and writes that decision to
+      # `GITHUB_OUTPUT` for the steps below. The first real release reached
+      # `npm publish` for a package that does not exist on npm and failed with
+      # `ENEEDAUTH`: trusted publishing cannot create a package, because the
+      # trusted publisher is configured per package and there is nothing to
+      # authenticate against until the name exists. The preflight had already
+      # detected that and only printed a note — a gate that detects a condition
+      # and does not act on it is not a gate. It now refuses, before anything
+      # touches the registry.
       - name: Release preflight
+        id: preflight
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: node build/release-preflight.mjs --tag "$TAG"
 
+      # Both conditions are required: the event decides whether this run publishes
+      # at all (a manual dispatch is a dry run), and the preflight decides whether
+      # npm knows this package well enough to authenticate.
       - name: Publish dsh-molbio-tools
-        if: steps.mode.outputs.publish == 'true'
+        if: steps.mode.outputs.publish == 'true' && steps.preflight.outputs.publish_tools == 'true'
         run: npm publish --access public --provenance
         env:
           # No NODE_AUTH_TOKEN on purpose: with none set, npm performs the OIDC
@@ -172,7 +186,7 @@ jobs:
       # directory: two `npm publish` runs in the repository root publish the root
       # package twice (recorded in docs/workflow.md, section 4).
       - name: Publish dsh-molbio-panel
-        if: steps.mode.outputs.publish == 'true'
+        if: steps.mode.outputs.publish == 'true' && steps.preflight.outputs.publish_panel == 'true'
         working-directory: packages/molbio-panel
         run: npm publish --access public --provenance
         env:
