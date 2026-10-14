@@ -1,0 +1,187 @@
+name: release
+
+# ── What this is ────────────────────────────────────────────────────────────
+#
+# `test.yml` is the gate; this is the delivery. Pushing a `v<version>` tag
+# publishes the two npm entries this repository owns and opens a GitHub Release
+# whose notes are the CHANGELOG's section for that version.
+#
+# ── Why a tag, and not every push to main ───────────────────────────────────
+#
+# The version IS the release decision. There is no auto-versioning here: a
+# maintainer bumps `package.json`, writes the CHANGELOG section, commits, and
+# tags. So the tag is the only signal that means "this is a release", and it is
+# also the one that cannot be sent by accident — pushing a branch publishes
+# nothing.
+#
+# ── Why there is no NPM_TOKEN ───────────────────────────────────────────────
+#
+# Publishing uses npm's TRUSTED PUBLISHING: the job presents a GitHub OIDC token
+# (`id-token: write` below) and npm exchanges it for a short-lived credential
+# scoped to this repository and this workflow file. Nothing long-lived is stored
+# in the repository, so there is no token to leak, rotate or forget. The tradeoff
+# is that npm must already know the package — a trusted publisher is configured
+# per package on npmjs.com — so the FIRST release of each package has to be done
+# by hand. `docs/workflow.md` section 4 walks through it; the preflight below
+# detects that case and says so, instead of letting `npm publish` fail with an
+# opaque 404.
+#
+# ── Why the suite runs again here ───────────────────────────────────────────
+#
+# A tag may point at a commit no branch has, and a tag push triggers `test.yml`
+# in PARALLEL with this workflow — so "the tests passed" is not something this
+# job can assume about the commit it is about to publish. Re-running them costs a
+# few minutes and makes the published artifact one this workflow verified itself.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Dry run. Runs every step except the publishes and the GitHub Release, so the
+  # pipeline can be exercised without spending a version number npm will not let
+  # anyone reuse.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to pretend was pushed (for example v0.19.0)'
+        required: true
+        type: string
+
+# One release at a time: two GITHUB RELEASES for one tag is not something a
+# re-run repairs, and two concurrent publishes of the same version end with a
+# confusing "cannot publish over an existing version".
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # mint the OIDC token trusted publishing exchanges
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          # NO `registry-url`, deliberately. It makes setup-node write an
+          # `.npmrc` with a `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+          # line, and trusted publishing works by having NO usable token: npm
+          # performs the OIDC exchange only when it cannot authenticate any other
+          # way. The public registry is npm's default, so omitting this changes
+          # nothing except removing the chance of an empty-token `.npmrc`
+          # suppressing the exchange.
+
+      # A tag push publishes; a manual run is a dry run. One place decides, so
+      # the publish steps cannot disagree with the notes step about which mode
+      # they are in.
+      - name: Decide whether this run publishes
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing: triggered by tag ${{ github.ref_name }}"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Dry run: every step except the publishes and the GitHub Release"
+          fi
+
+      # Delegated to `tagVersion` rather than written as a shell glob: a glob
+      # cannot express "three numeric components", so it would admit `v1.2.3-any`
+      # and `v1x2y3` while the preflight later rejects them — two gates
+      # disagreeing about what a release tag is.
+      - name: Assert the tag is a release tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node --input-type=module -e "
+            import { tagVersion } from './build/release-preflight.mjs';
+            const parsed = tagVersion(process.env.TAG ?? '');
+            if (parsed.error !== undefined) { console.error('::error::' + parsed.error); process.exit(1); }
+            console.log('release tag:', process.env.TAG, '-> version', parsed.version);
+          "
+
+      # Trusted publishing needs npm >= 11.5.1. The Node above ships one, but the
+      # floor is asserted rather than assumed: when it is not met, npm does not
+      # attempt the OIDC exchange and the failure surfaces later as a 401 that
+      # says nothing about the real cause.
+      - name: Assert the npm CLI supports trusted publishing
+        run: |
+          node --input-type=module -e "
+            const match = /npm\/(\d+)\.(\d+)\.(\d+)/.exec(process.env.npm_config_user_agent ?? '');
+            if (match === null) { console.error('cannot read the npm version from npm_config_user_agent'); process.exit(1); }
+            const [, major, minor] = match.map(Number);
+            if (major < 11 || (major === 11 && minor < 5)) {
+              console.error('npm ' + major + '.' + minor + ' is older than 11.5.1, the floor for trusted publishing');
+              process.exit(1);
+            }
+            console.log('npm ' + major + '.' + minor + ' supports OIDC trusted publishing');
+          "
+
+      - name: Install the DSH baseline the guards compare against
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.1.7-rc.1
+
+      # Same derivation as test.yml: on a runner npm's global prefix is the Node
+      # toolchain directory, and several guards resolve the harness through
+      # `benchmark/harness.mjs`.
+      - name: Point the guards at the harness they just installed
+        run: >-
+          node --input-type=module -e "import { execFileSync } from 'node:child_process';
+          import { existsSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const prefix = execFileSync('npm', ['prefix', '-g'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
+          const root = [join(prefix, 'node_modules', '@deepseek-ai', 'dsh'), join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh')].find((c) => existsSync(join(c, 'package.json')));
+          if (root === undefined) { console.error('the harness is not under the prefix npm reports:', prefix); process.exit(1); }
+          appendFileSync(process.env.GITHUB_ENV, 'DSH_HARNESS_ROOT=' + root + '\n');
+          console.log('DSH_HARNESS_ROOT =', root);"
+
+      # The same suite test.yml runs, on the exact commit being published. It
+      # includes the benchmark offline gates and the client-artifact freshness
+      # check, which is what makes the publish steps safe to attempt.
+      - name: Run the suite on the tagged commit
+        run: npm test
+        env:
+          MOLBIO_AUTO_VIEW: '0'
+
+      # The release-specific invariants: tag vs declared version, a CHANGELOG
+      # section worth publishing as notes, the client-half manifest fields a
+      # profile looks for, and whether the panel's independent version line has
+      # fallen behind a changed artifact.
+      - name: Release preflight
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: node build/release-preflight.mjs --tag "$TAG"
+
+      - name: Publish dsh-molbio-tools
+        if: steps.mode.outputs.publish == 'true'
+        run: npm publish --access public --provenance
+        env:
+          # No NODE_AUTH_TOKEN on purpose: with none set, npm performs the OIDC
+          # exchange. Setting it to an empty string DISABLES trusted publishing,
+          # which is the classic silent failure for this mechanism.
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      # The panel is a SEPARATE npm entry and must be published from its own
+      # directory: two `npm publish` runs in the repository root publish the root
+      # package twice (recorded in docs/workflow.md, section 4).
+      - name: Publish dsh-molbio-panel
+        if: steps.mode.outputs.publish == 'true'
+        working-directory: packages/molbio-panel
+        run: npm publish --access public --provenance
+        env:
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      # Last, and only on a real release: the notes come from the CHANGELOG
+      # section the preflight already proved exists, so the GitHub Release and
+      # the npm package can never describe different changes.
+      - name: Create the GitHub Release
+        if: steps.mode.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node build/release-notes.mjs --tag "$TAG" --out release-notes.md
+          gh release create "$TAG" --title "$TAG" --notes-file release-notes.md

@@ -602,9 +602,16 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 | 文档 | 回答的问题 |
 | --- | --- |
 | [docs/rules.md](docs/rules.md) | 什么**不能**违反（preset 行必须按包名引用、座位必须 `slots.inject`、产物三条纪律…） |
-| [docs/workflow.md](docs/workflow.md) | **怎么做**：测试金字塔各层在防什么、客户端半、发布预检、DSH 升级后怎么做 |
+| [docs/workflow.md](docs/workflow.md) | **怎么做**：测试金字塔各层在防什么、客户端半、发布预检、**CD（推 tag 自动发布）**、DSH 升级后怎么做 |
 | [docs/roadmap.md](docs/roadmap.md) | 接下来**往哪走**，以及明确不做的清单 |
 | [docs/history.md](docs/history.md) | **已经发生了什么**、每个 bug 换来了哪条规则 |
+
+**发布（CD）**：CI 是 `.github/workflows/test.yml`（push / PR 跑全套，双平台），CD 是
+`.github/workflows/release.yml`——**推一个 `v*` tag 就会**在被打 tag 的提交上重跑全套、过
+`build/release-preflight.mjs` 的发布前置检查，然后用 npm 的 **Trusted Publishing（OIDC）**
+把两个 npm 条目分开发布（仓库里没有任何长期 token），最后用 CHANGELOG 该版本段落建 GitHub Release。
+两个包的**首次发布必须由人手动做一次**（可信发布要求包已存在于 npm），步骤见
+[docs/workflow.md](docs/workflow.md) 第 4 节。
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型

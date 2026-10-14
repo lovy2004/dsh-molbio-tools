@@ -34,12 +34,16 @@
   `molbio_plot` 一个工具承载 8 种图表）。
 - **基线**：DSH **0.1.7-rc.1**；`package.json` 版本 0.19.0。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
-  **两个独立的 npm 条目**，必须分别发布。
+  **两个独立的 npm 条目、两条独立的版本线**，必须分别发布。
 - **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 是**空列表**，
   58 个工具由 preset 层承载，只会挂进 "Molecular Biology Lab" 模式。
 - **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`/`charts`）+ 客户端四套件 +
   DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
-  benchmark 的 profile 守卫与**离线期望值校验**。
+  发布守卫（`release`）+ benchmark 的 profile 守卫与**离线期望值校验**。
+- **CD**：`.github/workflows/release.yml`——推 `v*` tag 即在被打 tag 的提交上重跑全套、再过
+  `build/release-preflight.mjs`，然后用 **OIDC 可信发布**（仓库里没有任何长期 token）分两步发
+  两个 npm 条目，最后用 CHANGELOG 该版本段落建 GitHub Release。**首次发布必须手动做一次**
+  （可信发布要求包已存在），完整步骤见 [workflow.md](workflow.md) 第 4 节的 CD 段。
 - **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 56 题），分
   `tools_ok` / `args_ok` / `answer_ok` 三项判分；`npm run bench:offline` 零成本校验期望值。
 
@@ -73,14 +77,17 @@ dsh-molbio-tools/
 ├── svgio.mjs        # 共享绘图助手（几何 + 折行，进客户端产物）
 ├── font-metrics.mjs # 字宽度量（**也进客户端产物**：svgio 折行要用，面板要画质粒图/logo）
 ├── svgpng.mjs       # SVG→PNG 光栅化器（内置折线字体 + 自写 PNG 编码；仅宿主侧用）
+├── .github/workflows/test.yml  # CI：push / PR 跑全套（双平台）
+│                    #   release.yml 是 CD：推 v* tag → 全套 + preflight → 可信发布 → GitHub Release
 ├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
+│                    #   release-preflight.mjs / release-notes.mjs 是 CD 的发布前置检查与发布说明生成
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
 │                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
 ├── benchmark/       # 可用性评估：tasks/*.json + 判分器 + headless profile 推导
 │                    #   （README.md 是入口；reports/ 与 scratch 工作区不进 git）
-├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查 + preset 漂移守卫 + benchmark profile 守卫
+├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查 + preset 漂移守卫 + 发布守卫 + benchmark profile 守卫
 ├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
 └── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
 ```

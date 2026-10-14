@@ -31,17 +31,18 @@ node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核�
 node test/contract.mjs      # DSH 契约：官方是否改了规则或 API
 node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
 node test/drift-probe.mjs   # 组合漂移守卫：用变异组合证明 preset-health 的比对会失败
+node test/release.mjs       # 发布守卫：tag/版本/CHANGELOG/清单字段/tar 读取的决定函数（见第 4 节）
 node test/benchmark-profile.mjs  # benchmark 的 headless profile 是否仍与 preset 逐行一致
 node benchmark/run.mjs --offline # benchmark 的期望值是否仍等于工具的真实（渲染）输出
 ```
 
 `npm test` 依次跑全部套件（`test:unit` = smoke + svgpng + svgio + 四个客户端套件，
-再 `contract`、`drift-probe`、`preset-health`、`benchmark-profile`、`bench:offline`）。
+再 `contract`、`drift-probe`、`preset-health`、`release`、`benchmark-profile`、`bench:offline`）。
 脚本用 `node --run` 串联而不是裸 `&&`——`&&` 是 npm 的 shell 语法、不是 node 的，
 在 Windows 的 cmd/PowerShell 下 `npm test` 会失败。
 
 只想跑一半时：`node --run test:smoke` / `test:svgpng` / `test:svgio` / `test:client` /
-`test:preset` / `test:benchmark-profile` / `bench:offline`。
+`test:preset` / `test:release` / `test:benchmark-profile` / `bench:offline`。
 
 **需要真实模型、因而不在 `npm test` 里的**：`npm run bench`（见
 [benchmark/README.md](../benchmark/README.md)）。它花钱、且会随模型更新而变化，
@@ -404,12 +405,17 @@ entry 的 `apply()` 抛了异常**，加载器拒绝 boot——不是"面板没�
 **任何**要 push 或打 tag 的版本，先跑完这几步，缺一步都不算发布完成：
 
 ```bash
-npm test                     # 全部套件 + benchmark 两道离线门；
+npm test                     # 全部套件 + benchmark 两道离线门 + 发布守卫（test/release.mjs）；
                              # 客户端半、光栅化器或 preset 组合的改动必须全绿
 node build/client-bundle.mjs # 产物与源同一批构建（`--check` 只报告陈旧、不落盘）
 node build/preset-patch.mjs --check   # 改了 preset 行清单才需要（见下）
+node build/release-preflight.mjs --tag v<版本>   # 发布特有的不变量（见本节末尾的 CD 段）
 git status --short           # lib/client.js 与 packages/molbio-panel/lib/client.js 不得是未提交状态
 ```
+
+> **推 tag 之后这些步骤由 CI 再跑一遍**（`.github/workflows/release.yml`），所以本地这一步是
+> "别把红的东西推上去"，不是发布本身的凭据。CD 的完整说明见本节最后的
+> 「持续交付（CD）：推一个 tag 就发完」。
 
 **改了 preset 的行清单**（`preset/molbio-lab/agent.cordis.yml`，**行清单**）额外一条：
 跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`（bundle patch）；
@@ -496,6 +502,118 @@ npm publish --access public
   `disabled` 指的是登录/其它操作的 2FA，写入策略是另一项。两条出路：交互式 `npm publish` 时
   输入 `--otp <6 位码>`，或用一个勾了 **bypass 2FA** 的 granular access token（环境变量
   `NPM_TOKEN`，不要写进仓库或 `.npmrc`）。
+
+### 持续交付（CD）：推一个 tag 就发完
+
+`.github/workflows/release.yml` 把上面那套手工步骤变成一条流水线。触发条件是**推 `v*` tag**，
+不是推 main——版本号就是"这是一次发布"的决定，而 tag 恰好是唯一不可能被顺手推出去的东西。
+
+```bash
+# 发一次版本的完整动作（维护者侧）
+npm test                                   # 本地先绿（CI 还会在 tag 的提交上再跑一遍）
+node build/release-preflight.mjs --tag v0.19.0   # 先干跑一遍发布前置检查
+git push origin main && git push origin v0.19.0  # 推 tag = 触发发布
+```
+
+流水线按顺序做六件事，**任何一步失败都不会发布**：
+
+1. 断言 tag 形状（`v<major>.<minor>.<patch>`）与 npm CLI ≥ 11.5.1（可信发布的版本下限）；
+2. 装**钉死版本**的 harness 并导出 `DSH_HARNESS_ROOT`（与 `test.yml` 同一套推导）；
+3. **在被打 tag 的那个提交上重跑全套** `npm test`。这不是重复劳动：tag 可以指向任何提交，
+   而 `test.yml` 是被**并行**触发的，所以"测试过了"不是这个 job 能假设的前提；
+4. 跑 `build/release-preflight.mjs`（见下）；
+5. **分两步**发布：根包 → `cd packages/molbio-panel` 再发面板包。两个是**独立的 npm 条目**，
+   在仓库根跑两次 `npm publish` 会把根包发两遍；
+6. 用 `build/release-notes.mjs` 把 CHANGELOG 里**该版本那一段**抽出来建成 GitHub Release。
+
+#### 凭据：没有 NPM_TOKEN，用的是可信发布
+
+流水线用 npm 的 **Trusted Publishing**：job 出示 GitHub 的 OIDC token（`id-token: write`），
+npm 把它换成一张**短期**凭证，且**限于这个仓库 + 这个 workflow 文件**。仓库里不存在任何长期
+密钥，所以没有可泄露、可忘记轮换的东西。
+
+**这条路有一个前提：npm 必须先知道这个包。** Trusted Publisher 是**逐包**在 npmjs.com 上配置的，
+而一个不存在的包没有可配置的对象。所以两个包的**首次发布必须由人手动做一次**：
+
+```bash
+# ① 手动首发（只需一次，需要 OTP；npm login 必须是真 TTY，只能由人操作）
+cd <仓库根> && npm publish --access public          # dsh-molbio-tools
+cd packages\molbio-panel && npm publish --access public   # dsh-molbio-panel
+
+# ② 为每个包配置 Trusted Publisher（npmjs.com → 包的 Settings → Trusted Publisher）
+#    Repository:    lovy2004/dsh-molbio-tools
+#    Workflow file: release.yml        （只写文件名，不带 .github/workflows/ 前缀）
+#    Environment:   留空
+
+# ③ 之后每次发版只需推 tag
+```
+
+> **首发用 `--provenance` 会让包永久变为 public 且不可逆**，对本包（MIT、公开工具）是想要的结果，
+> 但要知道这一步不可撤销。
+
+三条容易踩的坑，都写进了守卫：
+
+- **设了 `NODE_AUTH_TOKEN` 反而会关掉可信发布**——npm 见到 token 就不再走 OIDC。所以 workflow
+  里**故意不设**它，`test/release.mjs` 直接断言文件里没有对它的赋值、也没有任何 `secrets.` 引用。
+- **首发时 `npm publish` 的报错是 404，看不出真正原因**。所以 `release-preflight.mjs` 会先问
+  注册表"这个包存在吗"，包不存在就明确回一句"这是首发，必须手动做一次"，而不是把 404 丢给你猜。
+- **面板包的版本线是独立的**（v20 计划里是 `0.1.1 → 0.1.2`），**不与根包同步**。但两者共用
+  **同一份客户端源码**（`build/`），所以浏览器半一改，`packages/molbio-panel/lib/client.js` 就变了；
+  此时若面板版本不动，第二次发布会拿同版本号发不同字节，npm 会拒绝。preflight 因此会把
+  **已发布版本的 `lib/client.js` 抓下来**（直接请求注册表 tarball，在进程内解 tar）与工作区里的
+  逐字节比对：不一致就**在发布前**报错，并说明要 bump 面板版本。
+
+#### `build/release-preflight.mjs` 到底检查什么
+
+只检查**只有发布时才会问**的问题；产物新鲜度、`files` 白名单、客户端座位这些**已经在
+`test/contract.mjs` 里**，这里**不重复**（重复的守卫会漂移）。
+
+| 检查 | 为什么值得挡一次 |
+| --- | --- |
+| tag 形状与 `v` 前缀 | workflow 按 `v*` 触发；没有 `v` 的 tag 永远发不出去，放行等于给一个发不出的 tag 开绿灯 |
+| **tag 与根包版本互校** | 发出去的版本号来自 `package.json` 而不是 tag；两者不一致会用一个"自称是别的版本"的名字发布 |
+| 每个包声明的版本形状 | 面板版本是独立输入，`0.1` 这类不是可比较的发布版本 |
+| **CHANGELOG 有该版本条目且足够长** | GitHub Release 的正文就是这一段；没有它就没有发布说明 |
+| 清单里客户端半的字段（`dsh.client.platform` / `exports["./client"]` / `dsh.bundle.patch`） | 缺了会**装得上但没有面板**——0.15.2 已经踩过一次 |
+| 注册表状态（首发 / 已存在同版本 / npm 更新） | 首发要人手动；同版本要区分"没 bump"与"没改"；npm 更新则说明在发一个更旧的版本 |
+| 面板产物是否变了而版本没动 | 见上；这是唯一需要网络与 tar 读取的检查 |
+
+网络相关的那两项**不会因为网络抖动而阻断发布**：取不到注册表时状态记为 `unknown`，只打印
+note——真正的判据是发布步骤本身，而一次查不到不应该拦住一次发布。
+
+#### 幂等性、重跑与回滚
+
+- **重跑同一次发布是安全的。** 已经发过的版本再跑一遍，`npm publish` 直接报"版本已存在"而失败。
+  要重跑流水线（比如为了补一个 GitHub Release），先把已发布的版本号 bump 出一个新版本。
+  preflight 会把"同版本且字节一致"的情况标成 note 而不是失败，便于你判断。
+- **tag 不能重指向同一版本号再发。** npm 不允许覆盖同版本；这是 npm 的规则，不是本仓库的选择。
+- **回滚没有自动路径。** npm 的 `unpublish` 有 72 小时窗口且会破坏已装用户；正确做法是
+  **发一个更高版本**修掉问题（`npm deprecate` 可以给坏版本加警告）。GitHub Release 可以直接删或
+  改成 prerelease。这一点是刻意的：自动回滚会让人以为发布可以随便试。
+- **并发**：`concurrency: release-<ref>` 且 `cancel-in-progress: false`，所以同一个 tag 的两个运行
+  会排队而不是互相打断。
+
+#### 干跑（不花版本号）
+
+`workflow_dispatch` 手动触发时**只跑检查、不发布**（`mode` 那一步决定）：
+
+```bash
+gh workflow run release.yml -f tag=v0.19.0      # 演练一次，什么都不发
+```
+
+本地等价物不需要 GitHub：
+
+```bash
+node build/release-preflight.mjs --tag v0.19.0            # 含注册表查询
+node build/release-preflight.mjs --tag v0.19.0 --offline  # 只查本地不变量
+node build/release-notes.mjs --tag v0.19.0                # 看一眼发布说明长什么样
+```
+
+`test/release.mjs` 把这些决定函数**逐个用变异输入驱动**（tag 写错、版本漂移、CHANGELOG 缺段、
+面板版本没 bump、tar 读错文件），所以"发布守卫会拦住"是**被证明过**的，而不是被声明的。
+其中两条要真实网络的检查（注册表确实按 `probeRegistry` 的假设回答、真实 tarball 确实读得出）
+默认关闭，用 `MOLBIO_RELEASE_NETWORK=1` 打开；真实 tarball 也可以直接指给
+`MOLBIO_RELEASE_TARBALL=<路径>`。
 
 ---
 
