@@ -483,9 +483,29 @@ if (process.env.MOLBIO_RELEASE_NETWORK === '1') {
       /steps\.preflight\.outputs\.publish_panel\s*==\s*'true'/,
       'the panel publish must gate on the preflight decision too',
     );
-    // The GitHub Release may still be created when nothing was published: the run
-    // legitimately reaches that point for a re-run of an existing version.
-    assert.match(workflow, /Create the GitHub Release[\s\S]{0,200}steps\.mode\.outputs\.publish/, 'the notes step stays tied to the event');
+    // The GitHub Release answers a DIFFERENT question from the publishes. Tying
+    // it to `publish` meant a manual run could never create one — and a manual
+    // run is exactly how a release whose npm versions were bootstrapped by hand
+    // gets its Release. So it must be guarded by `release`, and that output must
+    // be set on BOTH events.
+    assert.match(workflow, /echo "release=true"/, 'the release output must be set regardless of the event');
+    assert.match(
+      workflow,
+      /Create the GitHub Release[\s\S]{0,300}steps\.mode\.outputs\.release\s*==\s*'true'/,
+      'the notes step must gate on `release`, not on `publish`',
+    );
+    assert.ok(
+      !/Create the GitHub Release[\s\S]{0,300}steps\.mode\.outputs\.publish\s*==\s*'true'/.test(workflow),
+      'the notes step must not be tied to the publish decision',
+    );
+    // And the publishes must NOT be guarded by `release`: a manual run would then
+    // publish a version it was never allowed to spend.
+    for (const name of ['dsh-molbio-tools', 'dsh-molbio-panel']) {
+      const step = new RegExp(`Publish ${name}[\\s\\S]{0,200}?if: ([^\\n]+)`).exec(workflow);
+      assert.ok(step !== null, `the publish step for ${name} must exist`);
+      assert.match(step[1], /steps\.mode\.outputs\.publish\s*==\s*'true'/, `${name} publish must require the publish mode`);
+      assert.ok(!/outputs\.release/.test(step[1]), `${name} publish must not be guarded by the release-only output`);
+    }
     notes.push('the workflow grants OIDC, stores no token, delegates every decision to the tested module, and consumes the publish decision');
   }
 }

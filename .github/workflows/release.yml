@@ -75,10 +75,19 @@ jobs:
           # nothing except removing the chance of an empty-token `.npmrc`
           # suppressing the exchange.
 
-      # A tag push publishes; a manual run is a dry run. One place decides, so
-      # the publish steps cannot disagree with the notes step about which mode
-      # they are in.
-      - name: Decide whether this run publishes
+      # TWO SEPARATE QUESTIONS, and conflating them was a defect:
+      #
+      #   `publish` — may this run put NEW versions on npm? Only a tag push says
+      #               yes. A manual run must never spend a version number.
+      #   `release` — may this run record the release (GitHub Release from the
+      #               CHANGELOG)? Both a tag push AND a manual run say yes.
+      #
+      # The first version tied the GitHub Release to `publish`, so a manual run
+      # could never create one — which is exactly the run you want after a manual
+      # bootstrap publish, when the npm versions are already out and only the
+      # Release is missing. The publish steps still consult `publish`; the notes
+      # step consults `release`.
+      - name: Decide what this run may do
         id: mode
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -86,8 +95,9 @@ jobs:
             echo "Publishing: triggered by tag ${{ github.ref_name }}"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Dry run: every step except the publishes and the GitHub Release"
+            echo "Manual run: no publish, but the GitHub Release is still created"
           fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
       # Delegated to `tagVersion` rather than written as a shell glob: a glob
       # cannot express "three numeric components", so it would admit `v1.2.3-any`
@@ -192,11 +202,11 @@ jobs:
         env:
           NPM_CONFIG_PROVENANCE: 'true'
 
-      # Last, and only on a real release: the notes come from the CHANGELOG
-      # section the preflight already proved exists, so the GitHub Release and
-      # the npm package can never describe different changes.
+      # Last. Guarded by `release`, not `publish`: a manual run is exactly how a
+      # release whose npm versions were bootstrapped by hand gets its GitHub
+      # Release, and by then the publish steps above are correctly skipped.
       - name: Create the GitHub Release
-        if: steps.mode.outputs.publish == 'true'
+        if: steps.mode.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
