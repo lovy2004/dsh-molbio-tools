@@ -10,9 +10,9 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.18.3）
+## 1. 当前状态（0.19.0）
 
-- 57 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- 58 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
 - 基线：DSH **0.1.7-rc.1**。
@@ -23,6 +23,8 @@ L = 需要新机制或外部资源）。
   见 [history.md](history.md) 的 v0.16.0 段与 [CHANGELOG](../CHANGELOG.md)。
 - **图表能力已完整交付**：0.17.0 落地折线/直方图/箱型图与 CSV/TSV 读取层，
   0.18.0 落地小提琴/火山/热力图与连续色带 —— `molbio_plot` 现共 **8 种图表**（见 2.10）。
+- **2.4 与 2.2 已在 0.19.0 交付**：环形/扇形的旋转多行标签（含像素断言），以及
+  `molbio_alignment_postprocess`（共识/修剪/同一性矩阵/覆盖度）。
 
 ---
 
@@ -49,21 +51,40 @@ L = 需要新机制或外部资源）。
 根因是"位点里含 GATC/CCWGG ⇒ 该酶敏感"这条构造规则（15/29 条与来源不符），
 修法与逐酶证据见 [CHANGELOG 0.16.0](../CHANGELOG.md)；`build/rebase-audit.mjs` 可重新推导。
 
-### 2.2 比对后处理套件（M）
+### 2.2 ✅ 已做（0.19.0）比对后处理套件
 
-`conservationAnalysis` 已给出共识/逐列 identity/熵，缺的是**修剪与覆盖度视图**：
-IUPAC 共识、缺口比例修剪、同一性矩阵、逐列覆盖度。survey 第 6 名。
+新增 `molbio_alignment_postprocess` + `align-post.mjs`：IUPAC 共识（三种口径）、缺口比例
+修剪（报**修剪前**的原始列号）、同一性矩阵、逐列覆盖度。survey 第 6 名。
+
+**为什么是新工具而不是扩 `conservationAnalysis`**（这是本条最该记住的一点）：其中两件事
+需要 `msa.mjs` 刻意没有的语义，改它就会悄悄挪动已发布版本报出的数字。
+
+- **同一性分母**：本工具排除双缺口列，`pairwiseIdentities` 除以**全部列**。同一 fixture 上
+  均值分别是 **37.17%** 与 **32%**，`test/smoke.mjs` 把两个数并排钉住——两套口径都是自洽的，
+  但**不可互换**，所以谁也不能悄悄合并。
+- **共识有三种可辩护的定义**，必须由调用方选：`plurality` / `union` / `strict`。
+  `conservationAnalysis` 只是选了其中一种并写明。
 
 ### 2.3 批量分析 + 表格导出（M）
 
 survey 第 7 条：对工作区里所有匹配文件跑同一项分析并出 CSV。
 牵连点是"写文件"路径已经齐备（`ctx.fs` + sandboxPolicy），主要是参数设计。
 
-### 2.4 `svgpng.mjs` 的旋转多行文本（M）
+### 2.4 ✅ 已修（0.19.0）环形/扇形布局的旋转多行文本
 
-v20 给**矩形**布局折了行，但**环形/扇形**布局的旋转标签仍按整行绘制——旋转文本没有按真实
-字宽测过，硬折会算错行数。真修法是让折行也知道旋转，或给径向标签改用别的排布
-（沿切线/半径分层），并补像素断言。属于"画面正确性"那一类，优先级高。
+v20 给**矩形**布局折了行，环形/扇形却仍按**整行**旋转绘制，位置靠
+`labelLength * size * 0.62` 猜出的余量决定——名字比它长就直接落到画布外，不报错、不提示。
+
+修法：`font-metrics.rotatedDepth` 给出 `W·|cos θ| + H·|sin θ|`，`textSpanLines` 支持
+`rotate`（transform 加在父 `<text>` 上，因为 `<tspan>` 的 transform 会被光栅化器如实上报为
+unsupported），径向分支用**四角是否都在绘图矩形内**做精确判定并逐级缩字，半径由实测的标签
+深度反推。像素断言见 `test/svgpng.mjs`，且已用突变（把 anchor 全强制成 `start`）证明会失败。
+
+**实现中踩到、值得下次直接避开的四个坑**（细节见 [CHANGELOG 0.19.0](../CHANGELOG.md)）：
+①"沿射线剩余多少"是**旋转后局部坐标**上的量，不是页面上的像素距离，混算会在接近竖直的
+方向得到 1.4 px 而非 149 px；②`axisDistanceToEdge` 的分子按方向选边界时极易写反；
+③**折行宽度不能随角度变**——三种角度相关规则实测全部产生窄列或长行柱；
+④旋转文字的墨迹比几何宽度宽约 1 px（光栅化器用圆角描边画字形），预算要额外留出。
 
 ### 2.5 Cas12a/Cas13 等 PAM 家族（M）
 
@@ -131,7 +152,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 55 条任务覆盖 **57/57 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 56 条任务覆盖 **58/58 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。

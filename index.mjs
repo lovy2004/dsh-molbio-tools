@@ -71,6 +71,7 @@ import { toBibtex } from './papers.mjs';
 import { parseXml } from './snapgene.mjs';
 import { smithWaterman } from './align.mjs';
 import { conservationAnalysis, normalizeAlignedRow, normalizeMsaSequence, pairwiseIdentities, progressiveAlign } from './msa.mjs';
+import { ALIGN_POST_LIMITS, CONSENSUS_MODES, alignmentPostprocess } from './align-post.mjs';
 import { columnComposition, renderSequenceLogo } from './logo.mjs';
 import { CRISPR_LIMITS, DEFAULT_PAM, designGrnas } from './crispr.mjs';
 import { PROBE_DEFAULTS, designTaqmanProbes, resolveProbeOptions } from './taqman.mjs';
@@ -4352,6 +4353,27 @@ function showMsaSlice(sequence) {
   return sequence.length > 120 ? sequence.slice(0, 60) + ` …[${sequence.length - 120} bp]… ` + sequence.slice(-60) : sequence;
 }
 
+/**
+ * Resolve an alignment for the post-processing tool: pre-aligned `alignment` rows
+ * or unaligned `sequences` / `fasta_path` that are aligned first (exactly one
+ * source). The `alignment` branch shares `normalizeAlignedRow` with
+ * `molbio_msa_align` and `molbio_conservation`, so all three agree on what a row
+ * may contain and on U→T.
+ */
+async function alignmentRowsFor(ctx, exec, args, toolName) {
+  const hasAlignment = args.alignment !== undefined;
+  const hasSequences = args.sequences !== undefined;
+  const hasPath = args.fasta_path !== undefined && args.fasta_path !== '';
+  if ((hasAlignment ? 1 : 0) + (hasSequences ? 1 : 0) + (hasPath ? 1 : 0) !== 1) {
+    throw new MolbioInputError(`${toolName}: provide exactly one of "alignment", "sequences", or "fasta_path"`);
+  }
+  if (hasAlignment) {
+    return { rows: args.alignment.map((raw, k) => normalizeAlignedRow(raw, `alignment[${k}]`)), source: 'alignment' };
+  }
+  const entries = await msaEntries(ctx, exec, args, toolName);
+  return { rows: progressiveAlign(entries).alignment.map((row) => row.sequence), source: 'msa' };
+}
+
 const msaAlignTool = (ctx) => define({
   safe: (args) => args.save_path === undefined || args.save_path === '',
   name: 'molbio_msa_align',
@@ -4522,6 +4544,122 @@ const conservationTool = (ctx) => define({
       source = 'msa';
     }
     return { source, ...conservationAnalysis(rows, threshold) };
+  },
+});
+
+const alignmentPostprocessTool = (ctx) => define({
+  name: 'molbio_alignment_postprocess',
+  description: 'Post-process an alignment: IUPAC consensus, gap-ratio column trimming, a pairwise identity matrix, and per-column coverage. Provide exactly one of `alignment` (pre-aligned equal-length sequences, "-" for gaps — e.g. the output of molbio_msa_align), `sequences` (unaligned; aligned first with the same method as molbio_msa_align), or `fasta_path`. '
+    + '`consensus_mode` picks which consensus is reported, and they are genuinely different answers: "plurality" (default) gives the top residue when it reaches `consensus_threshold` (default 0.5) and otherwise the IUPAC code for everything observed; "union" always gives that IUPAC code; "strict" gives the top residue above the threshold and N otherwise, so a mixed position never masquerades as a base. '
+    + '`max_gap_fraction` (default 0.5) marks columns to trim and reports the column numbers BEFORE trimming (original 1-based coordinates, so they stay comparable with the input); the trimmed alignment itself is not returned — only which columns would go and how many remain. '
+    + '`coverage_threshold` (default 0.8, a non-gap fraction) lists poorly covered columns; `mean_coverage` and `fully_covered_columns` summarise the same numbers. '
+    + 'NOTE ON THE IDENTITY MATRIX: its denominator is the columns where at least one of the two rows has a residue (double-gap columns excluded), which is NOT the convention molbio_conservation uses for its pairwise_identity_percent (that one divides by all columns). Both are documented and internally consistent; do not compare the two numbers directly. '
+    + 'Heuristic reporting for working comparisons; deterministic.',
+  parameters: {
+    type: 'object',
+    properties: {
+      alignment: { type: 'array', items: { type: 'string' }, description: 'Pre-aligned sequences of equal length ("-" for gaps).' },
+      sequences: { type: 'array', items: { type: 'string' }, description: 'Unaligned IUPAC DNA sequences (2-50; U treated as T).' },
+      fasta_path: { type: 'string', description: 'Workspace FASTA file with unaligned sequences.' },
+      consensus_mode: { type: 'string', enum: [...CONSENSUS_MODES], description: `Consensus definition: ${CONSENSUS_MODES.join(', ')} (default plurality).` },
+      consensus_threshold: { type: 'number', description: 'Residue fraction at or above which the top residue is reported as the consensus, in (0, 1]; default 0.5. Used by plurality and strict.' },
+      max_gap_fraction: { type: 'number', description: 'Columns whose gap fraction exceeds this are reported as trimmed, in [0, 1]; default 0.5.' },
+      coverage_threshold: { type: 'number', description: 'Columns whose non-gap fraction is below this are reported as low coverage, in [0, 1]; default 0.8.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'source', 'sequence_count', 'aligned_columns', 'consensus_mode', 'consensus_threshold',
+      'consensus', 'conserved_columns', 'mean_column_identity',
+      'gap_fraction_threshold', 'columns_before_trim', 'columns_after_trim', 'trimmed_columns', 'trimmed_columns_truncated',
+      'coverage_threshold', 'mean_coverage', 'min_coverage', 'fully_covered_columns',
+      'low_coverage_columns', 'low_coverage_columns_truncated',
+      'per_column', 'per_column_truncated',
+      'identity_matrix_included', 'identity_matrix', 'pairwise_identity_percent',
+    ],
+    properties: {
+      source: { type: 'string', enum: ['msa', 'alignment'] },
+      sequence_count: { type: 'integer' },
+      aligned_columns: { type: 'integer' },
+      consensus_mode: { type: 'string', enum: [...CONSENSUS_MODES] },
+      consensus_threshold: { type: 'number' },
+      consensus: { type: 'string' },
+      conserved_columns: { type: 'integer' },
+      mean_column_identity: { type: 'number' },
+      gap_fraction_threshold: { type: 'number' },
+      columns_before_trim: { type: 'integer' },
+      columns_after_trim: { type: 'integer' },
+      trimmed_columns: { type: 'array', items: { type: 'integer' } },
+      trimmed_columns_truncated: { type: 'boolean' },
+      coverage_threshold: { type: 'number' },
+      mean_coverage: { type: 'number' },
+      min_coverage: { type: 'number' },
+      fully_covered_columns: { type: 'integer' },
+      low_coverage_columns: { type: 'array', items: { type: 'integer' } },
+      low_coverage_columns_truncated: { type: 'boolean' },
+      per_column: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['column', 'coverage', 'residues'],
+          properties: {
+            column: { type: 'integer' },
+            coverage: { type: 'number' },
+            residues: { type: 'integer' },
+          },
+        },
+      },
+      per_column_truncated: { type: 'boolean' },
+      identity_matrix_included: { type: 'boolean' },
+      identity_matrix: { type: 'array', items: { type: 'array', items: { type: 'number' } } },
+      pairwise_identity_percent: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['mean', 'min', 'max'],
+        properties: {
+          mean: { type: 'number' },
+          min: { type: 'number' },
+          max: { type: 'number' },
+        },
+      },
+    },
+  },
+  render(value) {
+    const lines = [
+      `${value.sequence_count} sequences x ${value.aligned_columns} columns (source: ${value.source}); consensus mode ${value.consensus_mode} at threshold ${value.consensus_threshold}`,
+      `consensus ${showMsaSlice(value.consensus)}`,
+    ];
+    lines.push(`coverage: mean ${value.mean_coverage}, min ${value.min_coverage}, ${value.fully_covered_columns} fully covered column(s); ${value.low_coverage_columns.length} below ${value.coverage_threshold}${value.low_coverage_columns_truncated ? ' (list truncated)' : ''}`);
+    if (value.low_coverage_columns.length > 0) {
+      lines.push(`  low coverage: ${value.low_coverage_columns.slice(0, 20).join(', ')}${value.low_coverage_columns.length > 20 ? ', …' : ''}`);
+    }
+    lines.push(`trimming at gap fraction > ${value.gap_fraction_threshold}: ${value.trimmed_columns.length} column(s) would go, ${value.columns_after_trim} of ${value.columns_before_trim} remain${value.trimmed_columns_truncated ? ' (list truncated)' : ''}`);
+    if (value.trimmed_columns.length > 0) {
+      lines.push(`  trimmed columns (original 1-based): ${value.trimmed_columns.slice(0, 20).join(', ')}${value.trimmed_columns.length > 20 ? ', …' : ''}`);
+    }
+    lines.push(`identity (double-gap columns excluded from the denominator — NOT the same convention as molbio_conservation): mean ${value.pairwise_identity_percent.mean}%, min ${value.pairwise_identity_percent.min}%, max ${value.pairwise_identity_percent.max}%`);
+    if (value.identity_matrix_included) {
+      lines.push(`identity matrix (${value.sequence_count}x${value.sequence_count}, percent):`);
+      for (const [index, row] of value.identity_matrix.entries()) lines.push(`  ${String(index + 1).padStart(3)} ${row.join(' ')}`);
+    } else {
+      lines.push(`identity matrix omitted: more than ${ALIGN_POST_LIMITS.maxMatrixSequences} sequences (the summary above still covers every pair)`);
+    }
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const { rows, source } = await alignmentRowsFor(ctx, exec, args, 'molbio_alignment_postprocess');
+    return {
+      source,
+      ...alignmentPostprocess(rows, {
+        consensusMode: args.consensus_mode ?? 'plurality',
+        consensusThreshold: args.consensus_threshold ?? 0.5,
+        maxGapFraction: args.max_gap_fraction ?? 0.5,
+        coverageThreshold: args.coverage_threshold ?? 0.8,
+      }),
+    };
   },
 });
 
@@ -6901,6 +7039,7 @@ export function apply(ctx) {
     alignTool,
     msaAlignTool(ctx),
     conservationTool(ctx),
+    alignmentPostprocessTool(ctx),
     sequenceLogoTool(ctx),
     grnaDesignTool(ctx),
     fastaFastqTool(ctx),

@@ -2190,6 +2190,54 @@ window.__ModuleLoader__.load({
 			}
 
 			/**
+			 * Cap height as a fraction of `font-size` — the ascent the rasterizer actually
+			 * draws (7 grid units out of 10; `svgpng.mjs` computes its own cap height from
+			 * the same two constants, which is the whole reason they live here).
+			 *
+			 * Needed by every caller that has to reserve room for a text run rather than
+			 * only measure its length along the baseline: a rotated label occupies space
+			 * PERPENDICULAR to its baseline as well, and that depth is this number times
+			 * the font size, not zero.
+			 */
+			const CAP_HEIGHT_RATIO = 7 / FONT_UNITS_PER_EM;
+
+			/**
+			 * How deep a text run reaches perpendicular to its baseline: the cap height,
+			 * i.e. the ascent above the baseline. Descenders would add ~0.2 em, but the
+			 * built-in font's descenders belong to lowercase letters only and every figure
+			 * label in this package is drawn with its baseline on top of what follows it,
+			 * so the ascent is what a layout has to clear.
+			 *
+			 * @param {number} fontSize
+			 * @returns {number} pixels.
+			 */
+			function capHeight(fontSize) {
+			  return CAP_HEIGHT_RATIO * fontSize;
+			}
+
+			/**
+			 * Radial (perpendicular) depth a run of `width` occupies once it has been
+			 * rotated by `angle` radians about a point.
+			 *
+			 * A run that is `width` wide and `height` tall, rotated by θ, spans
+			 * `width·|cos θ| + height·|sin θ|` along the ORIGINAL vertical axis. When that
+			 * axis is the radius of a radial tree layout, this is exactly the room the
+			 * label needs before it runs off the canvas — and the inverse of the same
+			 * relation is what turns a available radial depth back into a usable baseline
+			 * width.
+			 *
+			 * @param {number} width - extent along the baseline, in pixels.
+			 * @param {number} angle - rotation in radians (0 = horizontal).
+			 * @param {number} height - extent perpendicular to the baseline.
+			 * @returns {number} pixels of depth along the original vertical axis.
+			 */
+			function rotatedDepth(width, angle, height = 0) {
+			  const cos = Math.abs(Math.cos(angle));
+			  const sin = Math.abs(Math.sin(angle));
+			  return width * cos + height * sin;
+			}
+
+			/**
 			 * Greedy word wrap to a pixel budget, using the built-in font's advance.
 			 *
 			 * A single word longer than the budget is hard-broken rather than allowed to
@@ -2257,6 +2305,9 @@ window.__ModuleLoader__.load({
 			exports.FONT_UNITS_PER_EM = FONT_UNITS_PER_EM;
 			exports.characterAdvance = characterAdvance;
 			exports.textWidth = textWidth;
+			exports.CAP_HEIGHT_RATIO = CAP_HEIGHT_RATIO;
+			exports.capHeight = capHeight;
+			exports.rotatedDepth = rotatedDepth;
 			exports.wrapText = wrapText;
 			return exports;
 		};
@@ -2294,7 +2345,7 @@ window.__ModuleLoader__.load({
 			 * `font-metrics.mjs` tiptoed around the name. See `docs/roadmap.md` 3.5.)
 			 */
 
-			const { textWidth, wrapText } = __molbio_require("font-metrics.mjs");
+			const { characterAdvance, rotatedDepth, textWidth, wrapText } = __molbio_require("font-metrics.mjs");
 			/**
 			 * The font stack every figure declares.
 			 *
@@ -2474,10 +2525,19 @@ window.__ModuleLoader__.load({
 			 * `anchor` applies identically to every line, so a centred or end-anchored
 			 * multi-line block stays aligned as a block.
 			 *
-			 * Rasterized by the host-side rasterizer; the browser half does not draw this
-			 * form (see this module's header on why the filename stays out of this file).
+			 * `rotate` (degrees) turns the WHOLE block about (x, y) — the transform goes on
+			 * the enclosing `<text>`, never on a `<tspan>`, because that is the form both
+			 * renderers support: the rasterizer applies a `<text>`'s transform to every run
+			 * it lays out, and it REPORTS `transform` on a `<tspan>` as unsupported rather
+			 * than composing it (see its `flattenSpanRuns`). Rotating the parent is also
+			 * what keeps the line spacing sensible: the lines are stacked perpendicular to
+			 * the baseline, so they rotate with it instead of smearing along it.
+			 *
+			 * Used by the radial tree layouts, where a label runs outward along its own
+			 * radius and therefore has to be laid out rotation-aware — see
+			 * `wrapTextLines`' `angle`.
 			 */
-			function textSpanLines({ x, y, lines, size = 11, fill = '#24292f', anchor = 'start', weight = '', baseline = '', lineHeight = undefined, family = undefined }) {
+			function textSpanLines({ x, y, lines, size = 11, fill = '#24292f', anchor = 'start', weight = '', baseline = '', lineHeight = undefined, family = undefined, rotate = 0 }) {
 			  const step = lineHeight ?? size * 1.2;
 			  const body = lines
 			    .map((line, index) => {
@@ -2498,6 +2558,7 @@ window.__ModuleLoader__.load({
 			    `fill="${fill}"`,
 			    anchor === 'start' ? '' : `text-anchor="${anchor}"`,
 			    weight === '' ? '' : `font-weight="${weight}"`,
+			    rotate === 0 ? '' : `transform="rotate(${round(rotate)} ${round(x)} ${round(y)})"`,
 			    baseline === '' ? '' : `dominant-baseline="${baseline}"`,
 			  ].filter((value) => value !== '');
 			  return `<text ${attributes.join(' ')}>${body}</text>`;
@@ -2511,13 +2572,51 @@ window.__ModuleLoader__.load({
 			 * Returns the lines AND their block height, because a caller laying out rows
 			 * (the tree) has to know how much vertical room the label needs.
 			 *
-			 * @returns {{lines: string[], width: number, height: number, step: number}}
+			 * TWO BUDGETS, AND WHY. `maxWidth` is the extent along the BASELINE. `depth` is
+			 * the extent PERPENDICULAR to it — the room the rotated block may occupy in the
+			 * caller's own frame, which for a radial tree layout is the distance left to
+			 * the canvas edge along that leaf's radius. They differ by the rotation: a run
+			 * `w` wide rotated by θ reaches `w·cos θ` along the original vertical axis.
+			 *
+			 * Passing only `maxWidth` and then rotating the result is exactly the bug this
+			 * parameter exists to prevent: a label budgeted at 200 px along its baseline
+			 * reaches 200·cos 60° = 100 px directly below its anchor, so hard-wrapping on
+			 * the baseline width miscounts the lines the drawing can actually fit.
+			 *
+			 * The returned `depth` is the block's ACTUAL radial extent. It can exceed the
+			 * budget when the budget is too small for even one character (θ near 90°), and
+			 * it is the caller's job to notice — silently widening the run to make the
+			 * numbers come out is what put ink outside the canvas before.
+			 *
+			 * @param {string} text
+			 * @param {number|undefined} maxWidth - pixel budget along the baseline. May be
+			 *   `undefined` when no baseline limit applies and the caller only wants the
+			 *   natural lines for a font size (the tree measures the resulting block with
+			 *   `fitsInPlot` instead of budgeting a width up front).
+			 * @param {number} size - font size in pixels.
+			 * @param {{lineHeight?: number, angle?: number, depth?: number}} [options]
+			 *   `angle` in radians; `depth` is the perpendicular budget (see above).
+			 * @returns {{lines: string[], width: number, height: number, step: number, depth: number}}
 			 */
-			function wrapTextLines(text, maxWidth, size, { lineHeight = undefined } = {}) {
-			  const lines = wrapText(text, maxWidth, size);
+			function wrapTextLines(text, maxWidth = undefined, size, { lineHeight = undefined, angle = 0, depth: depthBudget = undefined } = {}) {
 			  const step = lineHeight ?? size * 1.2;
-			  const width = Math.max(...lines.map((line) => textWidth(line, size)));
-			  return { lines, width, height: step * lines.length, step };
+			  // Without a depth budget the caller's `maxWidth` stands on its own — and an
+			  // absent one means "no baseline limit", i.e. one line per newline. WITH a
+			  // budget the rotation decides: a depth `D` allows `D / cos θ` along the
+			  // baseline, floored at a single character so the wrapper cannot loop — and NOT
+			  // floated back up to a comfortable width, which would spend depth the caller
+			  // does not have.
+			  const cos = Math.max(0.05, Math.abs(Math.cos(angle)));
+			  const width = depthBudget !== undefined
+			    ? Math.max(characterAdvance(size), depthBudget / cos)
+			    : (maxWidth ?? Infinity);
+			  const lines = wrapText(text, width, size);
+			  const widest = Math.max(...lines.map((line) => textWidth(line, size)));
+			  const height = step * lines.length;
+			  // Depth the rotated block occupies, using its WIDEST line — the number a
+			  // radial caller has to fit, and the one the assertion can check.
+			  const depth = rotatedDepth(widest, angle, height);
+			  return { lines, width: widest, height, step, depth };
 			}
 
 			/** One straight line segment. */

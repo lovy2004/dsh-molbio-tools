@@ -43,9 +43,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        # The engine floor `package.json` declares. A newer Node is what local
-        # development runs; add it here when a version-specific change lands.
-        node: ['22']
+        # THE SAME VERSION `package.json`'s `engines.node` DECLARES, and the
+        # version local development runs. Keeping all three equal is the point:
+        # while the matrix sat at '22' and `engines` at '>=22' it tested the
+        # floor, but a developer on 26 could still land something the floor
+        # rejects and only find out from CI. Raise `engines.node` and this entry
+        # together, in the same commit, whenever a version-specific change lands.
+        node: ['26']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

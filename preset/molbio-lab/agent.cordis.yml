@@ -17,7 +17,7 @@
 #
 # Edit THIS file, then run `node build/preset-patch.mjs`.
 #
-# NOTE: the mode is the ONLY place these 57 tools load. The bundle's other patch
+# NOTE: the mode is the ONLY place these 58 tools load. The bundle's other patch
 # layer (`cordis.patch.yml`) deliberately inserts nothing — registering the tool
 # at the host level as well would put it in every session and is not what this
 # package is for.
@@ -326,7 +326,7 @@
   name: '@deepseek-ai/dsh-plugin-manager/tools'
   disabled: true
 
-# dsh-molbio-tools: molecular-biology toolset (57 tools across sequence
+# dsh-molbio-tools: molecular-biology toolset (58 tools across sequence
 # analysis, primers (incl. TaqMan probes and multiplex compatibility),
 # in-silico PCR, cloning (incl. Golden Gate), enzyme catalog, methylation-aware
 # and double digests, plasmids, Sanger verification, proteins (incl. helical

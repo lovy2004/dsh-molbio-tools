@@ -284,6 +284,22 @@ export function invocationsFor(task) {
     conservation: () => [
       { tool: 'molbio_conservation', args: { sequences: ['ACGTACGTAC', 'ACGTACGTAC', 'ACGTTCGTAC'] } },
     ],
+    // The four rows are the committed fixture, and the args here are the SAME
+    // four rows the instruction carries — a second copy would let the task text
+    // and the expectation diverge without either looking wrong.
+    'alignment-post': () => [
+      {
+        tool: 'molbio_alignment_postprocess',
+        args: {
+          alignment: [
+            NAMED_SEQUENCES.align_post_reference,
+            NAMED_SEQUENCES.align_post_mutant,
+            NAMED_SEQUENCES.align_post_deleted,
+            NAMED_SEQUENCES.align_post_partial,
+          ],
+        },
+      },
+    ],
     'sequence-logo': () => [
       { tool: 'molbio_sequence_logo', args: { sequences: ['ACGTACGTAC', 'ACGTACGTAC', 'ACGTTCGTAC'], title: 'conservation test' } },
     ],

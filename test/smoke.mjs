@@ -1226,6 +1226,129 @@ function makeTemplate(n, seed = 42) {
 }
 
 {
+  // ── alignment post-processing ─────────────────────────────────────────────
+  // The four capabilities on one hand-checked fixture, so a change to any of
+  // them is visible in one place. Column-by-column for `rows` below:
+  //
+  //   1: A A A A C -> A(4/5)=0.8   2: C C C C G -> C(4/5)=0.8   3: G G G - T -> G(3/4)
+  //   4: T T - - A -> T(2/3)       5: A - - - C -> 2 residues, 0.5 each -> V
+  const rows = ['ACGTA', 'ACGT-', 'ACG--', 'AC---', 'CGTAC'];
+  const post = await run('molbio_alignment_postprocess', { alignment: rows });
+  assert.equal(post.source, 'alignment');
+  assert.equal(post.sequence_count, 5);
+  assert.equal(post.aligned_columns, 5);
+  assert.equal(post.consensus_mode, 'plurality');
+  assert.equal(post.consensus, 'ACGTA');
+  assert.equal(post.conserved_columns, 5);
+
+  // Coverage: 5/5, 5/5, 4/5, 3/5, 2/5 → mean 0.76, min 0.4, 2 fully covered.
+  assert.equal(post.mean_coverage, 0.76);
+  assert.equal(post.min_coverage, 0.4);
+  assert.equal(post.fully_covered_columns, 2);
+  // Below the default 0.8 floor: column 4 (0.6) and column 5 (0.4). Column 3 is
+  // exactly 0.8 and is NOT listed — the comparison is strict, so a column at the
+  // threshold is covered.
+  assert.deepEqual(post.low_coverage_columns, [4, 5]);
+  assert.equal(post.low_coverage_columns_truncated, false);
+  assert.deepEqual(post.per_column, [
+    { column: 1, coverage: 1, residues: 5 },
+    { column: 2, coverage: 1, residues: 5 },
+    { column: 3, coverage: 0.8, residues: 4 },
+    { column: 4, coverage: 0.6, residues: 3 },
+    { column: 5, coverage: 0.4, residues: 2 },
+  ]);
+
+  // Trimming is a SEPARATE threshold. Column 5 is 3 gaps of 5 = 0.6 > 0.5, so it
+  // is reported; column 4 (2/5 = 0.4) is not. The numbers are the ORIGINAL
+  // 1-based columns, so they stay comparable with the input.
+  assert.equal(post.gap_fraction_threshold, 0.5);
+  assert.deepEqual(post.trimmed_columns, [5]);
+  assert.equal(post.trimmed_columns_truncated, false);
+  assert.equal(post.columns_before_trim, 5);
+  assert.equal(post.columns_after_trim, 4);
+
+  // The identity matrix's denominator EXCLUDES double-gap columns, which is not
+  // msa.mjs's convention. Every pair, hand-checked:
+  //   1v2 4/5=80  1v3 3/5=60  1v4 2/5=40  1v5 0/5=0
+  //   2v3 3/4=75  2v4 2/4=50  2v5 0/5=0
+  //   3v4 2/3=66.67 (column 4 is a DOUBLE gap, so it leaves the denominator —
+  //   which is exactly the difference: `pairwiseIdentities` would say 2/5=40)
+  //   3v5 0/5     4v5 0/5
+  // Mean over the 10 pairs = (80+60+40+0+75+50+0+66.67+0+0)/10 = 37.167.
+  assert.deepEqual(post.identity_matrix, [
+    [100, 80, 60, 40, 0],
+    [80, 100, 75, 50, 0],
+    [60, 75, 100, 66.67, 0],
+    [40, 50, 66.67, 100, 0],
+    [0, 0, 0, 0, 100],
+  ]);
+  assert.equal(post.identity_matrix_included, true);
+  assert.equal(post.pairwise_identity_percent.min, 0);
+  assert.equal(post.pairwise_identity_percent.max, 80);
+  assert.equal(post.pairwise_identity_percent.mean, 37.17);
+  // The same rows through the OLD tool. `pairwiseIdentities` divides by ALL
+  // columns (so pair 2v3 is 3/5 = 60 where this module says 3/4 = 75), and the
+  // two means differ: 24% vs 37.17%. Pinning both numbers is what keeps the two
+  // conventions from silently merging into one.
+  const viaConservation = await run('molbio_conservation', { alignment: rows });
+  assert.equal(viaConservation.pairwise_identity_percent.mean, 32);
+  // Its per-column identity is (4/5 + 4/5 + 3/4 + 2/3 + 1/2)/5 = 70.34%, a third
+  // number again — averaging column identities is not the same statistic as
+  // averaging pair identities, and neither is this module's matrix mean.
+  assert.equal(viaConservation.identity_percent, 70.34);
+
+  // Consensus modes on a column that mixes three bases. `plurality` and `union`
+  // both give the ambiguity code for everything observed; `strict` refuses to
+  // name a base at all. A TIE between the top two residues resolves to the first
+  // in alphabet order — `ACGTA` above, where column 5 is A/C at 2 counts each —
+  // because the plurality scan keeps the earliest maximum. That is a
+  // deterministic convention, not an ambiguity code, and it matches
+  // `conservationAnalysis`.
+  const mixed = ['A', 'C', 'G'];
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: mixed })).consensus, 'V');
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: mixed, consensus_mode: 'union' })).consensus, 'V');
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: mixed, consensus_mode: 'strict' })).consensus, 'N');
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: mixed, consensus_mode: 'strict' })).conserved_columns, 0);
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: ['A', 'C'] })).consensus, 'A');
+  // `union` on two identical ambiguous residues round-trips through the table.
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: ['RR', 'RR'], consensus_mode: 'union' })).consensus, 'RR');
+
+  // A raised threshold changes what "conserved" means, and a raised gap floor
+  // changes what gets trimmed — the two knobs are independent.
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: rows, consensus_threshold: 0.9 })).conserved_columns, 0);
+  assert.deepEqual((await run('molbio_alignment_postprocess', { alignment: rows, max_gap_fraction: 0.3 })).trimmed_columns, [4, 5]);
+  assert.equal((await run('molbio_alignment_postprocess', { alignment: rows, max_gap_fraction: 0.3 })).columns_after_trim, 3);
+
+  // Unaligned input is aligned first, and says so.
+  const fromSequences = await run('molbio_alignment_postprocess', { sequences: ['ACGTACGT', 'ACGTACGT', 'ACGTTCGT'] });
+  assert.equal(fromSequences.source, 'msa');
+  assert.equal(fromSequences.consensus, 'ACGTACGT');
+
+  // The matrix is omitted rather than truncated past its sequence limit, and the
+  // summary still covers every pair.
+  const many = Array.from({ length: 51 }, () => 'ACGT');
+  const wide = await run('molbio_alignment_postprocess', { alignment: many });
+  assert.equal(wide.identity_matrix_included, false);
+  assert.deepEqual(wide.identity_matrix, []);
+  assert.equal(wide.pairwise_identity_percent.mean, 100);
+
+  // Error paths
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: ['ACGT'] }), /at least 2/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: ['ACGT', 'ACG'] }), /same length/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: ['ACGTX', 'ACGT'] }), /invalid character/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: rows, sequences: rows }), /exactly one/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', {}), /exactly one/);
+  // The schema's enum rejects an unknown mode before the domain function runs,
+  // so this message comes from the generic argument validator rather than from
+  // `alignmentPostprocess`'s own check.
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: ['ACGT'], consensus_mode: 'majority' }), /must be one of plurality, union, strict/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: rows, consensus_threshold: 0 }), /greater than 0/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: rows, consensus_threshold: 1.5 }), /between 0 and 1/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: rows, max_gap_fraction: -0.1 }), /between 0 and 1/);
+  await assert.rejects(() => run('molbio_alignment_postprocess', { alignment: rows, coverage_threshold: 2 }), /between 0 and 1/);
+}
+
+{
   // FASTA/FASTQ processing
   memFs.files.set(at('seqs.fa'), '>a1 desc\nATGCATGC\n>b2\nGGGGCCCC\n');
   const stats = await run('molbio_fasta_fastq', { path: at('seqs.fa'), action: 'stats' });

@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **57 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **58 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 57 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 58 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：专属模式 preset（2 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**57 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**58 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。
 
 ```powershell
@@ -86,9 +86,9 @@ dsh plugin --profile web update dsh-molbio-tools
 | 层 | 作用 |
 | --- | --- |
 | `cordis.patch.yml` | 只插一行**惰性宿主锚点**（`./host.mjs`），不注册任何工具 |
-| `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，57 个工具在这一层里 |
+| `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，58 个工具在这一层里 |
 
-所以 57 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+所以 58 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
 > **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
@@ -104,7 +104,7 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 只要浏览器面板（可选）
 
-如果只想要图形面板、不想让该 profile 装 57 个工具（连模式都不装），装面板专用包即可
+如果只想要图形面板、不想让该 profile 装 58 个工具（连模式都不装），装面板专用包即可
 （见[浏览器面板](#浏览器面板)）：
 
 ```powershell
@@ -115,7 +115,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 
 ## 它会做什么
 
-57 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+58 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
 ### 1. 序列分析与酶切（7）
@@ -182,13 +182,14 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_helical_wheel` | **螺旋轮投影**：残基按 3.6 残基/圈落在圆周上、按性质着色，给出疏水矩 μH（判断是否两亲性），出 SVG |
 | `molbio_hydropathy_plot` | **Kyte-Doolittle 疏水性图**：滑动窗口曲线 + GRAVY + 达到跨膜阈值的峰，出 SVG |
 
-### 7. 比对与保守性（5）
+### 7. 比对与保守性（6）
 
 | 工具 | 用途 |
 | --- | --- |
 | `molbio_align` | Smith-Waterman 局部比对：可读的比对线、同一性%、比对区间、错配/缺失/插入列表 |
 | `molbio_msa_align` | **多序列比对**（2–50 条 IUPAC DNA）：渐进式比对，返回比对结果与两两同一性 |
 | `molbio_conservation` | **保守性分析**：共识序列、逐列 identity、熵基保守性打分、保守/可变位点统计 |
+| `molbio_alignment_postprocess` | **比对后处理**：共识（plurality/union/strict 三选一）、按缺口比例修剪（报原始 1-based 列号）、两两同一性矩阵、逐列覆盖度 |
 | `molbio_sequence_logo` | **序列标识图**：把保守性画成 SVG logo（字母高度 = 信息量 bits） |
 | `molbio_fasta_fastq` | 工作区 FASTA/FASTQ：条目统计、按 id 提取、FASTQ→FASTA、FASTQ 质量报告 |
 
@@ -460,7 +461,22 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   （悬垂列计 0 分，与被它替换的末端缺口同分）。
 - **保守性**：列 identity = 最高频残基数/该列残基数（缺口不计入）；熵基保守性 = 1 − H/2；
   共识 = 最高频碱基（占比 ≥ 50%）否则给出 IUPAC 简并码；全缺口列共识为 `-` 且计为保守。
-  `threshold`（默认 0.8）以下为可变位点（至多报告 200 个）。
+  `threshold`（默认 0.8）以下为可变位点（至多报告 200 个）。**平票**（两残基并列最多）
+  取**字母序靠前**的那个，是确定性约定、不是简并码。
+- **比对后处理**（v0.19.0，`molbio_alignment_postprocess`）：
+  - **共识有三种口径，由 `consensus_mode` 选，它们是不同的答案**：`plurality`（默认，达
+    `consensus_threshold` 给该残基，否则给观察到的碱基的并集码）、`union`（一律并集码）、
+    `strict`（达阈值给残基，否则给 `N`——混合位点绝不伪装成一个碱基）。
+  - **修剪阈值与覆盖阈值是两件独立的事**。`max_gap_fraction`（默认 0.5）标记"缺口太多、
+    建议删"的列，列号是**修剪前的原始 1-based 坐标**；`coverage_threshold`（默认 0.8，
+    非缺口比例）标记"数据不全"的列。一列完全可以**既该保留、又值得提示**——本工具的
+    输出文本同时给出两者，不要把它们当成一个判据。
+  - **同一性矩阵的分母与 `molbio_conservation` 不同，两个数不可互换**：矩阵排除
+    **双缺口列**（两行都没有残基的位置不参与统计），而 `pairwiseIdentities` 除以**全部列**。
+    同一组序列上均值可能是 37.17% 与 32%，两个都对，口径不同。工具的输出文本里写明了
+    用的是哪一个。
+  - 序列数超过 50 时**矩阵省略而非截断**（`identity_matrix_included: false`），均值/最小/最大
+    仍覆盖每一对；逐列清单上限 500 并带 `*_truncated` 标志。
 - **序列标识图**：字母高度 = 信息量 Rᵢ = log₂4 − (Hᵢ + e_n)，**纵轴是 bits（0–2）**，不是"归一化
   到最保守列"；小样本校正 `e_n` 默认开启——这就是"只有 2 条完全相同的序列"时图看起来不高的
   原因（每列 0.918 bits 而非名义上的 2 bits）。`score_type: "frequency"` 可切换成纯频率图。
@@ -503,9 +519,13 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   **bootstrap 百分比是列重采样的支持度，不是 p 值**；`seed` 显式给出，同种子必然复现（测试断言
   两次运行的 Newick 与支持度完全一致）。距离按**逐对完整删除**处理（该对里任一位是缺口/简并就跳过，
   `compared` 报实际位点数）。根节点的支持度不外显——那是生根位置造成的，不是可检验的演化支。
-  **长叶名会自动折行**（v20）：矩形式布局把叶名折成多行 `<tspan>`，列宽按内置字体的真实字宽
-  计算，字号只在必要时才缩小——v19 把长名字画成一行、直接压到相邻标签上。若你的标签被折行，
-  说明它超出了为该列预留的宽度。
+  **长叶名会自动折行**（v20 矩形式布局，v0.19.0 环形/扇形）：矩形式布局把叶名折成多行
+  `<tspan>`，列宽按内置字体的真实字宽计算，字号只在必要时才缩小——v19 把长名字画成一行、
+  直接压到相邻标签上。若你的标签被折行，说明它超出了为该列预留的宽度。
+  **环形与扇形的标签沿各自半径旋转**：折行宽度按 `W·|cos θ|` 换算成径向深度，整块绕锚点旋转
+  （多行随块一起转，所以行距仍然垂直于半径），并在**旋转后的四个角都落在绘图矩形内**之前
+  逐级缩小字号；半径本身由实测的标签深度反推，而不是面板的固定比例。v0.19.0 之前这两种布局
+  的标签是整行画出去的，名字比一个**猜出来的**余量长就直接落到画布外——不报错、不提示。
 - **in-silico PCR**：`max_mismatches`（容许多少错配）与 `three_prime_exact`（3' 端必须精确匹配
   几个碱基，默认 3）是**两个独立旋钮**——中段错配仍能延伸，3' 错配通常不能，所以默认被拒。位点坐标
   一律报在**顶链 1-based**；反向引物的位点其反向互补读在顶链上，产物就是顶链上 `forward.start →
@@ -588,13 +608,13 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 55 题（覆盖 57/57 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 56 题（覆盖 58/58 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
 > `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
 > （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
-> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 57/57 覆盖），
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 58/58 覆盖），
 > `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
@@ -620,7 +640,7 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 57 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 58 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
@@ -633,6 +653,7 @@ dsh-molbio-tools/
 ├── plasmid.mjs      # SVG 质粒图谱渲染器
 ├── align.mjs        # Smith-Waterman 局部比对
 ├── msa.mjs          # 多序列渐进式比对与保守性分析
+├── align-post.mjs   # 比对后处理：共识/缺口修剪/同一性矩阵/逐列覆盖度
 ├── logo.mjs         # 序列标识图（信息量 + SVG）
 ├── crispr.mjs       # CRISPR gRNA 设计（PAM 扫描、评分、脱靶搜索）
 ├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
@@ -644,7 +665,7 @@ dsh-molbio-tools/
 ├── papers.mjs       # 文献库存储
 ├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开
 ├── svgio.mjs        # 共享绘图助手（几何 + 折行；进客户端产物）
-├── font-metrics.mjs # 字宽度量（宿主侧专用，不进客户端产物）
+├── font-metrics.mjs # 字宽度量（**进客户端产物**：svgio 靠它算折行宽度，面板要画图）
 ├── svgpng.mjs       # SVG→PNG 光栅化器（内置折线字体 + 自写 PNG 编码；仅宿主侧用）
 ├── build/           # 浏览器半源码与零依赖打包器（client-bundle.mjs 是 CLI，client-bundle-core.mjs 是生成逻辑）
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）

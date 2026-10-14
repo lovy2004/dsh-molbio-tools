@@ -20,7 +20,7 @@
 | 使用 | 模型找得到、用得对吗？ | `benchmark/`（见 [benchmark/README.md](../benchmark/README.md)） |
 
 ```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 57 个工具 + 输出 schema 校验
+node test/smoke.mjs         # 插件：mock 注册表跑全部 58 个工具 + 输出 schema 校验
 node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
 node test/svgio.mjs         # 共享绘图助手：几何手算值 + 每种助手拼一张文档后光栅化必须干净
 node test/charts.mjs        # 图表：CSV/TSV 读取层 + 八种图表（含色带）的统计量与光栅化
@@ -49,7 +49,7 @@ node benchmark/run.mjs --offline # benchmark 的期望值是否仍等于工具�
 
 ### 各套件到底在防什么
 
-- **`smoke.mjs`** 证明**插件**可用：mock 注册表运行全部 57 个工具，并用 harness 自身的
+- **`smoke.mjs`** 证明**插件**可用：mock 注册表运行全部 58 个工具，并用 harness 自身的
   `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
   覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
   SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
@@ -115,11 +115,16 @@ node benchmark/run.mjs --offline # benchmark 的期望值是否仍等于工具�
   计数、5 条参数错误路径）、**v20 比对残基守恒**（多组不等长输入逐条断言"输出行去缺口后
   逐字符等于输入序列"——11/10、12/10、不等长多序列、4/4 无重叠、前导悬垂、5/10 单侧全
   悬垂；所有行等长；以及**用一个故意截断的行驱动 `coverageShortfall`**，断言它仍报
-  `u2 (10 of 11 bases kept)`，否则"没有警告"什么也证明不了）。
+  `u2 (10 of 11 bases kept)`，否则"没有警告"什么也证明不了）、**0.19.0 比对后处理**
+  （手工 fixture 上四件事一次钉住：共识三种口径 —— `plurality`/`union` 给并集码、
+  `strict` 给 N、平票取字母序首个；修剪阈值与覆盖阈值**互相独立** —— 0.6 的缺口列被修剪而
+  0.4 的不被、0.8 的覆盖列被标记而正好 0.8 的不被；同一性矩阵**排除双缺口列**的 66.67 与
+  `molbio_conservation` 同一对序列的 40 并排钉住，两个工具的均值 37.17% 与 32% 也一起钉，
+  防止两套口径悄悄合并；超 50 条时矩阵改为省略而非截断且摘要仍覆盖每一对；
+  10 条错误路径）。
 
 - **`svgpng.mjs`** 回答第三个正交问题：**工具算对了、但模型看到的图是不是对的**。纯文本
-  正确而 PNG 空白/错位/无法解码，是唯一一类"其它套件全绿"的真故障，所以这层必须自己站住：
-  测试用**与编码器不同实现**的 CRC（无表位运算）与裸 inflate 把字节解回像素，再做**手算
+  正确而 PNG 空白/错位/无法解码，是唯一一类"其它套件全绿"的真故障，所以这层必须自己站住：  测试用**与编码器不同实现**的 CRC（无表位运算）与裸 inflate 把字节解回像素，再做**手算
   几何**断言（rect 的四个边界像素、圆心与半径外、描边居中与 dash 空档、`fill-opacity`
   混合到中灰、`fill="none"` 不填充、`text-anchor` start/middle/end 的墨迹框、cap
   height≈0.7 em、`dominant-baseline` 居中、`textLength` 压缩到指定宽度、`rotate(-90)`
@@ -248,7 +253,7 @@ offline 证明"期望值仍然为真"，model 测量"模型是否仍然会用"�
 | 改了**几个**工具 | `--tools a,b,c`（也接受 `molbio_` 前缀与 `primer_*` 通配） | 并集 |
 | 改了**一个**已知任务 | `--task <id>` | 一题 |
 | 改了**共享模块**，想知道影响面 | `--list --changed`（不花钱） | 0 |
-| 发版前 | `node --run bench:full` | 55 题 |
+| 发版前 | `node --run bench:full` | 56 题 |
 | 只是提交文档 | `--changed` 会回答"无事可跑" | 0 |
 
 ```bash

@@ -63,6 +63,54 @@ export function textWidth(text, fontSize) {
 }
 
 /**
+ * Cap height as a fraction of `font-size` — the ascent the rasterizer actually
+ * draws (7 grid units out of 10; `svgpng.mjs` computes its own cap height from
+ * the same two constants, which is the whole reason they live here).
+ *
+ * Needed by every caller that has to reserve room for a text run rather than
+ * only measure its length along the baseline: a rotated label occupies space
+ * PERPENDICULAR to its baseline as well, and that depth is this number times
+ * the font size, not zero.
+ */
+export const CAP_HEIGHT_RATIO = 7 / FONT_UNITS_PER_EM;
+
+/**
+ * How deep a text run reaches perpendicular to its baseline: the cap height,
+ * i.e. the ascent above the baseline. Descenders would add ~0.2 em, but the
+ * built-in font's descenders belong to lowercase letters only and every figure
+ * label in this package is drawn with its baseline on top of what follows it,
+ * so the ascent is what a layout has to clear.
+ *
+ * @param {number} fontSize
+ * @returns {number} pixels.
+ */
+export function capHeight(fontSize) {
+  return CAP_HEIGHT_RATIO * fontSize;
+}
+
+/**
+ * Radial (perpendicular) depth a run of `width` occupies once it has been
+ * rotated by `angle` radians about a point.
+ *
+ * A run that is `width` wide and `height` tall, rotated by θ, spans
+ * `width·|cos θ| + height·|sin θ|` along the ORIGINAL vertical axis. When that
+ * axis is the radius of a radial tree layout, this is exactly the room the
+ * label needs before it runs off the canvas — and the inverse of the same
+ * relation is what turns a available radial depth back into a usable baseline
+ * width.
+ *
+ * @param {number} width - extent along the baseline, in pixels.
+ * @param {number} angle - rotation in radians (0 = horizontal).
+ * @param {number} height - extent perpendicular to the baseline.
+ * @returns {number} pixels of depth along the original vertical axis.
+ */
+export function rotatedDepth(width, angle, height = 0) {
+  const cos = Math.abs(Math.cos(angle));
+  const sin = Math.abs(Math.sin(angle));
+  return width * cos + height * sin;
+}
+
+/**
  * Greedy word wrap to a pixel budget, using the built-in font's advance.
  *
  * A single word longer than the budget is hard-broken rather than allowed to

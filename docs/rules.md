@@ -118,9 +118,16 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 ## 5. 所有写入经 `ctx.fs`，并携带会话 `sandboxPolicy`
 
-附加一条边界：**`font-metrics.mjs` / `svgio.mjs` / `svgpng.mjs` 不进客户端产物**
-（`svgpng.mjs` import `node:zlib`，进 bundle 就会在浏览器里炸）。
+附加一条边界：**`svgpng.mjs` 不进客户端产物**
+（它 import `node:zlib`，进 bundle 就会在浏览器里炸）。
 `contract.mjs` 与 `test/svgpng.mjs` 各有一条断言盯着这件事。
+
+> **`font-metrics.mjs` 不在这条边界内 —— 它必须进产物。** v19/v20 的注释曾写它"宿主侧专用"，
+> 那是当时的事实（只有光栅化器按它的度量画字），但 0.17.0 起 `svgio.mjs` 也用它算折行宽度，
+> 而 `svgio.mjs` 从面板开始画质粒图/logo 起就在产物里。0.19.0 更正了文档；
+> 代码侧的真相由两处断言看守：`test/contract.mjs` 要求它**在**模块图里，
+> `test/svgpng.mjs` 要求产物**确实注册了** `svgio.mjs` 与 `font-metrics.mjs`。
+> 写成"不进客户端"会让人为了"修好"它而删掉一个面板必需的模块。
 
 与官方 `tool-fs` 模式一致；读取用 `readBytes` 带大小上限。
 

@@ -523,6 +523,114 @@ test('the wrapped tree labels really do not overlap their neighbours', () => {
   assert.ok([...dense.slice(tail)].some((value) => !value), 'the last line is followed by blank rows, not clipped at the canvas edge');
 });
 
+test('the radial tree layouts wrap their labels and keep every one inside the panel', () => {
+  // v19/v20 wrapped the RECTANGULAR layout's long leaf names and left the radial
+  // ones as single unwrapped runs. On a circular or fan tree those runs are
+  // rotated onto their own radius, so a long name starts at the tip and leaves
+  // the panel — nothing clipped it, the ink simply landed outside, and the
+  // drawing said nothing about it.
+  //
+  // The radial layouts now wrap the label to a fixed width, place it along the
+  // leaf's radius, and shrink the font until the rotated block's four corners
+  // are inside the plot rectangle. This test measures the RESULT rather than the
+  // mechanism: rotated multi-line runs, no ink against the frame, and a wrapped
+  // block in every direction.
+  const longLeaf = (name) => ({ name, children: [], length: 0.01, support: undefined });
+  const names = [
+    'Escherichia_coli_K12_MG1655_chromosome_isolate_one',
+    'Salmonella_enterica_subsp_enterica_serovar_Typhimurium_str_LT2',
+    'Klebsiella_pneumoniae_subsp_pneumoniae_strain_HS11286_chromosome',
+    'Pseudomonas_aeruginosa_PAO1_complete_genome_sequence',
+    'Bacillus_subtilis_subsp_subtilis_str_168_complete_genome',
+    'Staphylococcus_aureus_subsp_aureus_N315_chromosome',
+    'Lactococcus_lactis_subsp_lactis_IL1403_complete_genome',
+    'Mycobacterium_tuberculosis_H37Rv_complete_genome_sequence',
+    'Vibrio_cholerae_O1_biovar_El_Tor_str_N16961_chromosome_I',
+    'Yersinia_pestis_CO92_biovar_Orientalis_complete_genome',
+    'Helicobacter_pylori_26695_complete_genome_sequence',
+    'Campylobacter_jejuni_subsp_jejuni_NCTC_11168_genome',
+  ];
+  // TWELVE leaves, and the count is the point. With eight 50-character names —
+  // 45° apart — the first font size tried already fits, so the test passed with
+  // the font-shrinking loop disabled; that was tried, and this fixture is the
+  // repair. At twelve (30° apart) the shrink is what makes the rotated corners
+  // fit, so removing the loop now fails the assertions below.
+  const pairs = [];
+  for (let i = 0; i < names.length; i += 2) {
+    pairs.push({ name: '', length: 0.005 + i * 0.001, support: 60 + i, children: [longLeaf(names[i]), longLeaf(names[i + 1])] });
+  }
+  const tree = { name: '', length: 0, support: undefined, children: pairs };
+  for (const layout of ['circular', 'fan']) {
+    const svg = renderTreeSvg(tree, { layout });
+    const result = renderSvgToPng(svg);
+    assert.deepEqual(result.unsupported, [], `${layout}: the radial tree stays inside the supported subset`);
+    assert.deepEqual(result.missing_glyphs, [], `${layout}: and needs no glyphs the font lacks`);
+    const image = decodePng(result.data);
+    // 1. The labels really are wrapped multi-line runs, and each is rotated onto
+    //    its own radius. A label pointing exactly right needs no transform — a
+    //    zero rotation is a no-op and the helper omits it — so the assertion is
+    //    that every label is EITHER rotated or axis-aligned, and that not all of
+    //    them are the latter (the fixture has leaves pointing up, down and left,
+    //    which a horizontal run cannot serve).
+    const labels = [...svg.matchAll(/<text([^>]*)>((?:<tspan[^>]*>[^<]*<\/tspan>)+)<\/text>/g)];
+    assert.equal(labels.length, names.length, `${layout}: one label per leaf`);
+    let rotated = 0;
+    for (const [, attributes, body] of labels) {
+      const spans = (body.match(/<tspan /g) ?? []).length;
+      assert.ok(spans >= 2, `${layout}: a 50-character leaf name wraps onto multiple <tspan> lines (got ${spans})`);
+      if (/transform="rotate\(/.test(attributes)) rotated += 1;
+      // The lines must be stacked in the ROTATED frame, i.e. all at the same x.
+      const xs = [...body.matchAll(/<tspan x="([\d.]+)"/g)].map((m) => m[1]);
+      assert.equal(new Set(xs).size, 1, `${layout}: every line of the block shares one baseline x`);
+    }
+    assert.ok(rotated >= names.length - 1, `${layout}: the off-axis labels are rotated onto their radii (rotated ${rotated})`);
+    // The block is anchored so it reads OUTWARD: 'end' for the left-pointing
+    // label, 'start' for the right-pointing one, 'middle' near vertical. Both
+    // 'end' and 'middle' are non-default, so this also proves the anchor reaches
+    // the document rather than being dropped on the way.
+    const anchors = [...svg.matchAll(/<text[^>]*text-anchor="(\w+)"[^>]*>/g)].map((m) => m[1]);
+    for (const anchor of anchors) {
+      assert.ok(['start', 'middle', 'end'].includes(anchor), `${layout}: an emitted anchor is one the rasterizer places (${anchor})`);
+    }
+    assert.ok(anchors.includes('end') && anchors.includes('middle'), `${layout}: the left and vertical labels carry their anchors (${anchors.join(', ')})`);
+    // And the request is honoured when it fits: this is the "no unnecessary
+    // shrinking" side of the contract, so a caller asking for a readable size
+    // does not silently get a smaller one. (The shrink loop itself is a safety
+    // net for requests that cannot fit; what the assertions above pin is the
+    // OUTCOME — every rotated block inside the plot rectangle — which is the
+    // property that has to hold either way.)
+    const bigger = renderTreeSvg(tree, { layout, leafFontSize: 15 });
+    const biggerSizes = [...bigger.matchAll(/<text[^>]*font-size="([\d.]+)"[^>]*>(?=<tspan)/g)].map((m) => Number.parseFloat(m[1]));
+    assert.ok(biggerSizes.length > 0, `${layout}: the larger-font tree still draws labels`);
+    assert.ok(
+      Math.min(...biggerSizes) >= 11,
+      `${layout}: a bigger requested size is not silently shrunk below the default (smallest drawn ${Math.min(...biggerSizes)})`,
+    );
+    // 2. No LABEL ink against the panel frame. The frame is drawn at x=12 and
+    //    x=width-12 with a 1 px stroke, so the 9 px band inside it is where a run
+    //    that overran the plot rectangle would land. The whole perimeter is
+    //    checked, because the labels point in four directions.
+    //
+    //    The panel's own chrome — title, border, the note line — lives in that
+    //    band too, so this compares against the SAME tree drawn with one-letter
+    //    leaf names: same panel, same branches, no wrapped labels. A pixel that
+    //    is inked in both documents is chrome, not a label.
+    const chromeTree = JSON.parse(JSON.stringify(tree, (key, value) => (key === 'name' && typeof value === 'string' && value.length > 4 ? 'x' : value)));
+    const chrome = decodePng(renderSvgToPng(renderTreeSvg(chromeTree, { layout })).data);
+    const band = [];
+    for (let y = 13; y < 22; y++) for (let x = 13; x < image.width - 13; x++) band.push([x, y]);
+    for (let y = image.height - 22; y < image.height - 13; y++) for (let x = 13; x < image.width - 13; x++) band.push([x, y]);
+    for (let x = 13; x < 22; x++) for (let y = 13; y < image.height - 13; y++) band.push([x, y]);
+    for (let x = image.width - 22; x < image.width - 13; x++) for (let y = 13; y < image.height - 13; y++) band.push([x, y]);
+    const leaked = band.filter(([x, y]) => countInk(image, x, y, x + 1, y + 1) > 0 && countInk(chrome, x, y, x + 1, y + 1) === 0);
+    assert.equal(
+      leaked.length,
+      0,
+      `${layout}: no label ink inside the frame band (${leaked.length} px, first at ${JSON.stringify(leaked[0])})`,
+    );
+  }
+});
+
 test('the rasterizer stays out of the browser half', async () => {
   // It imports a Node built-in (zlib), so pulling it into the client bundle
   // would break the panel in a browser.

@@ -727,7 +727,8 @@ export function renderTreeSvg(tree, {
   const frame = panel({ x: 12, y: 12, width: width - 24, height: height - 24, title, subtitle, inset: { top: 44, right: 20, bottom: 34, left: 20 } });
   const plot = frame.plot;
   const parts = [frame.markup];
-  const labelLength = Math.max(...leaves.map((leafNode) => leafNode.name.length));
+  /** Line pitch for a wrapped label at `fontSize` (the helper's own default). */
+  const lineStep = (fontSize) => fontSize * 1.2;
 
   if (layout === 'rectangular') {
     // Long leaf names are WRAPPED onto <tspan> lines instead of being drawn
@@ -806,10 +807,35 @@ export function renderTreeSvg(tree, {
     // panel means the drawing is always readable, and the scale bar carries the
     // real units, exactly as in the rectangular layout.
     const centre = { x: plot.x + plot.width / 2, y: plot.y + plot.height / 2 };
-    const headroom = labelLength * leafFontSize * 0.62 + 8;
-    const radius = Math.min(plot.width, plot.height) / 2 - headroom;
+    const halfExtent = Math.min(plot.width, plot.height) / 2;
+    if (halfExtent < 24) throw new MolbioInputError('the drawing area is too small for a radial tree layout; use a larger width/height');
+    const LABEL_GAP = 6;
+    // Extra inset from the plot rectangle, so a label that fills its budget does
+    // not land on the panel's own border. The rectangle is only 20 px inside the
+    // frame, and a rotated block's corners reach exactly the boundary the budget
+    // allowed — which measured as ink in the frame's 1 px stroke.
+    const LABEL_INSET = 6;
+    const labelWrap = halfExtent * 0.62;
+    // The tip radius FOLLOWS FROM THE LABELS, and is not a fixed share of the
+    // panel. The tips have to sit inside far enough for every wrapped label to
+    // fit outside them, so the deepest label is measured and the tips are placed
+    // that far inside the half-extent. Two passes, because the labels' depth
+    // depends on the angles, which are known, and the font, which is fixed here
+    // for the purpose of the measurement.
+    //
+    // A fixed share cannot work, and v19's `labelLength * size * 0.62` guess was
+    // the same mistake in another form: what decides where the tips belong is the
+    // RATIO of label size to tree size, and that ratio differs by an order of
+    // magnitude between `seq1` and a full species name. A fixed 0.4 of the
+    // half-extent put the tips 104 px out while the labels reached 200+ px, so
+    // the whole drawing collapsed into the middle third of the panel.
     const angleOf = new Map();
     leaves.forEach((leafNode, index) => angleOf.set(leafNode, (index / leaves.length) * Math.PI * 2 - Math.PI / 2));
+    let radius = Math.max(12, halfExtent * 0.5);
+    for (let pass = 0; pass < 2; pass++) {
+      const deepest = Math.max(...leaves.map((leafNode) => wrapTextLines(leafNode.name, labelWrap, leafFontSize, { angle: angleOf.get(leafNode) }).depth));
+      radius = Math.max(12, halfExtent - deepest - LABEL_GAP);
+    }
     const place = (node) => {
       if (node.children.length === 0) return;
       for (const child of node.children) place(child);
@@ -830,6 +856,178 @@ export function renderTreeSvg(tree, {
     // equal-angle drawing — a log-scaled radius would imply a distance
     // relationship that the layout does not actually encode.
     const radiusOf = (node) => (layout === 'circular' ? 2 + (depthMap.get(node) / maxDepth) * (radius - 2) : radius);
+    /**
+     * Radial DEPTH a label anchored at this leaf may occupy before its ink
+     * leaves the plot rectangle.
+     *
+     * THE REACH IS MEASURED FROM THE CENTRE, along the label's own direction,
+     * and not from the branch tip. Those differ: the panel is a rectangle, so
+     * the tip's distance to the edge along a diagonal is LONGER than the tip's
+     * own radius — an earlier version subtracted the radius and under-counted
+     * the budget by exactly that difference, which let the diagonal labels run
+     * tens of pixels past the right edge and off the canvas.
+     *
+     * `axisDistanceToEdge` is the distance from a point to the rectangle
+     * boundary along a unit direction, which is `min` over the two axes
+     * (horizontal/|cos|, vertical/|sin|).
+     *
+     * The result is short of the edge by `STROKE_MARGIN`: the rasterizer draws
+     * glyphs as stroked paths with round joins at `max(0.7, size·0.11)` units
+     * wide, so the ink of a run is about a pixel wider than its geometric extent
+     * on every side. Budgeting the geometric extent alone put label pixels
+     * inside the frame — found by measuring per-label ink rather than by
+     * reasoning about the arithmetic.
+     *
+     * Finally the reach is split by where the anchor sits: a label that starts
+     * at the tip ('start'/'end') may spend the whole outward reach, while one
+     * anchored at the middle of its run ('middle', for the near-vertical
+     * directions) grows both ways and may therefore only take half the tip's own
+     * radius as well.
+     */
+    const strokeMargin = (fontSize) => Math.max(1, fontSize * 0.11);
+    /**
+     * Does the label block stay inside the plot rectangle?
+     *
+     * THE EXACT TEST, not a projection. A text block is a rotated rectangle: it
+     * runs `width` along the leaf's direction from the tip and `height`
+     * perpendicular to it (the lines stack that way). Its bounds are the extremes
+     * of its four corners, so all four are transformed and compared.
+     *
+     * The projection shortcut used before — "budget = distance to the edge along
+     * the ray" — is not the same thing: along a ray that is nearly vertical the
+     * distance to the vertical edge is enormous while the room for the block's
+     * horizontal extent is nearly zero, so the budget came out far too generous
+     * and the font collapsed to the minimum with sixty-odd lines. The corners
+     * express the real constraint in both directions at once.
+     */
+    const fitsInPlot = (angle, anchor, reach, block, fontSize) => {
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const tipX = centre.x + cos * (reach + LABEL_GAP);
+      const tipY = centre.y + sin * (reach + LABEL_GAP);
+      // The block's first baseline sits at the anchor; a run occupies the space
+      // to the LOCAL left of its baseline (the -y direction in the rotated
+      // frame), so the block's far side is one `height` behind that baseline.
+      const behind = block.height;
+      const forward = block.width * (anchor === 'end' ? -1 : anchor === 'start' ? 1 : 0.5);
+      const back = block.width * (anchor === 'end' ? 1 : anchor === 'start' ? 0 : 0.5);
+      const corners = [];
+      for (const along of [forward, -back]) {
+        for (const across of [0, -behind]) {
+          corners.push([
+            tipX + cos * along - sin * across,
+            tipY + sin * along + cos * across,
+          ]);
+        }
+      }
+      const margin = strokeMargin(fontSize) + LABEL_INSET;
+      return corners.every(([x, y]) => x >= plot.x + margin && x <= plot.x + plot.width - margin && y >= plot.y + margin && y <= plot.y + plot.height - margin);
+    };
+    /**
+     * How far a label may wrap, in pixels along its own baseline.
+     *
+     * FIXED, NOT ANGLE-DEPENDENT. `labelSlot` is a share of the panel. Three
+     * angle-dependent rules were tried, measured and rejected, and each is
+     * recorded because each looked right on paper:
+     *
+     *   - the depth budget: narrow columns at some angles, long single lines at
+     *     others;
+     *   - the room along the label's own ray: a ray running almost straight down
+     *     has the panel's whole height, so a fifty-character name came out as a
+     *     nine-line column;
+     *   - minimising `W·|cos θ| + H(W)·|sin θ|`: the mathematical extremum, which
+     *     is a narrow column too.
+     *
+     * The two budgets are real — a line spends the room along the ray, and the
+     * stack of lines spends the room across it, weighted by `|cos θ|` and
+     * `|sin θ|` — but they are in different frames: "room along the ray" is a
+     * parameter in units of the label's own rotated x axis, not a pixel distance
+     * on the page. Mixing the two is what made all three rules misbehave.
+     *
+     * A fixed width is what the eye wants anyway: a few lines of similar length
+     * at every angle. What genuinely depends on the angle is the line COUNT, and
+     * that is what `fitsInPlot` and the font-shrinking loop below are for.
+     */
+    const labelWrapWidth = () => Math.max(leafFontSize * 4, labelWrap / 1.6);
+    /**
+     * Is the block still inside its own ANGULAR SLOT?
+     *
+     * Depth alone is not enough. The lines of a radial label stack
+     * perpendicular to the radius, which on the page is a step TANGENTIALLY —
+     * so a block that is deep enough also sweeps sideways into the neighbouring
+     * leaves' territory, and a tree of twelve long names turns into a starburst
+     * of overlapping text. The angular pitch between adjacent leaves bounds that
+     * sweep, and the check is an arc length: the block is `block.height` tall,
+     * centred at `reach + gap + depth/2`, and one leaf's slot is
+     * `2π·r/leaves` wide at that radius.
+     *
+     * The bound is the local slot width itself (factor 1.0). That is deliberately
+     * loose: a wrapped label's lines step radially outward, so adjacent names
+     * interleave rather than colliding, and the practical failure mode is only
+     * that a very tall block reaches into a neighbour's arc. Tightening this
+     * below the slot drives the font to the minimum on ordinary trees — measured,
+     * not assumed: 0.8 shrank a twelve-leaf tree of 50-character names to 6 px
+     * with every label on one line, which is unreadable and fixes nothing.
+     */
+    const fitsAngularSlot = (reach, block, leafCount) => {
+      const slot = (2 * Math.PI * (reach + LABEL_GAP + block.depth / 2)) / leafCount;
+      // Twice the slot, not once: the shrink loop's job is to make a drawing
+      // READABLE, and the arc bound is an approximation of where neighbour
+      // interference begins, not a hard boundary. Halving the font to respect it
+      // exactly is the worse trade — the labels become illegible while the tree
+      // stays the same size.
+      return block.height <= slot * 2;
+    };
+    /**
+     * Which end of the run sits at the branch tip. The label points AWAY from
+     * the tree, which is what keeps it out of its neighbours' angular slots:
+     * 'end' left of centre, 'start' right of it. Near vertical neither applies,
+     * so 'middle' centres the block and the depth budget above halves.
+     */
+    const anchorAt = (angle) => {
+      const cos = Math.cos(angle);
+      if (cos >= 0.1) return 'start';
+      if (cos <= -0.1) return 'end';
+      return 'middle';
+    };
+    // Font shrinking, exactly as in the rectangular branch and for the same
+    // reason: a wrapped block has to fit the room its own direction has.
+    //
+    // Every iteration re-wraps at the current size and asks the exact corner test
+    // whether the block is still inside the plot. A label that overruns even at
+    // the minimum font is drawn anyway rather than clipped silently — the
+    // overrun is then visible in the SVG and is asserted against in
+    // `test/svgpng.mjs`, instead of the ink quietly leaving the canvas.
+    const minimumLeafFont = 6;
+    let size = leafFontSize;
+    let blocks = null;
+    let fitted = null;
+    for (;;) {
+      fitted = leaves.map((leafNode) => {
+        const angle = angleOf.get(leafNode);
+        const anchor = anchorAt(angle);
+        const reach = radiusOf(leafNode);
+        // Baseline budget from the label's own direction — see `labelWrapWidth`.
+        const block = wrapTextLines(leafNode.name, labelWrapWidth(), size, { angle });
+        return {
+          leafNode,
+          angle,
+          anchor,
+          reach,
+          block,
+          fits: fitsInPlot(angle, anchor, reach, block, size) && fitsAngularSlot(reach, block, leaves.length),
+        };
+      });
+      blocks = new Map(fitted.map((entry) => [entry.leafNode, entry.block]));
+      if (process.env.MOLBIO_PROBE_RADIAL === '1' && !fitted.every((entry) => entry.fits)) {
+        for (const entry of fitted.filter((e) => !e.fits)) {
+          const slot = (2 * Math.PI * (entry.reach + LABEL_GAP + entry.block.depth / 2)) / leaves.length;
+          console.log(`  FAIL size=${size} ${entry.leafNode.name.slice(0, 14)} angle=${(entry.angle * 180 / Math.PI).toFixed(0)} anchor=${entry.anchor} reach=${entry.reach.toFixed(1)} w=${entry.block.width.toFixed(1)} h=${entry.block.height.toFixed(1)} depth=${entry.block.depth.toFixed(1)} lines=${entry.block.lines.length} slot=${slot.toFixed(1)} plot=${fitsInPlot(entry.angle, entry.anchor, entry.reach, entry.block, size)} slotOk=${fitsAngularSlot(entry.reach, entry.block, leaves.length)}`);
+        }
+      }
+      if (fitted.every((entry) => entry.fits) || size <= minimumLeafFont) break;
+      size = Math.max(minimumLeafFont, size - 0.5);
+    }
     const pointOf = (node) => {
       const angle = angleOf.get(node);
       const r = radiusOf(node);
@@ -854,9 +1052,24 @@ export function renderTreeSvg(tree, {
       if (node.children.length === 0) {
         const angle = angleOf.get(node);
         const [dx, dy] = [Math.cos(angle), Math.sin(angle)];
-        const [labelX, labelY] = [centre.x + dx * (radiusOf(node) + 6), centre.y + dy * (radiusOf(node) + 6)];
-        const anchor = Math.cos(angle) >= 0.1 ? 'start' : Math.cos(angle) <= -0.1 ? 'end' : 'middle';
-        parts.push(textRun({ x: labelX, y: labelY + 4, text: node.name, size: leafFontSize, fill: '#24292f', anchor }));
+        const block = blocks.get(node);
+        const anchor = anchorAt(angle);
+        // The anchor is the first baseline of a block that starts at the tip and
+        // grows outward, and the transform rotates the whole block about it —
+        // so the text runs away from the tree along the leaf's own radius.
+        const [anchorX, anchorY] = [
+          centre.x + dx * (radiusOf(node) + LABEL_GAP),
+          centre.y + dy * (radiusOf(node) + LABEL_GAP),
+        ];
+        parts.push(textSpanLines({
+          x: anchorX,
+          y: anchorY,
+          lines: block.lines,
+          size,
+          fill: '#24292f',
+          anchor,
+          rotate: round((angle * 180) / Math.PI, 3),
+        }));
       }
     };
     parts.push(svgCircle({ cx: centre.x, cy: centre.y, r: 2, fill: '#d1242f' }));

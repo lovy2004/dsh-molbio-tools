@@ -56,6 +56,70 @@ export const ALIGN_READ = `${ALIGN_REFERENCE.slice(50, 80)}A${ALIGN_REFERENCE.sl
 export const QPCR_TEMPLATE = makeTemplate(400, 7);
 
 /**
+ * A 300 bp alignment with a realistic amount of mess, for the post-processing
+ * task: one reference row, one row with eight substitutions, and one row that
+ * has lost three stretches to deletions (so those columns are gap-heavy and
+ * must be reported as trimmable) and carries two substitutions of its own.
+ *
+ * DERIVED, not typed. Every row is built from the same `makeTemplate` output, so
+ * the substitutions' positions are a property of this module and the task's
+ * expected counts cannot drift away from the sequences the model is shown —
+ * which is exactly the failure mode `NAMED_SEQUENCES` exists to prevent.
+ *
+ * The deletion stretches are placed at columns 61-63, 151-154 and 241-242
+ * (1-based, in the reference frame). Those three columns at 151-154 are the
+ * interesting ones: four of five rows are gap-free there, so the column is 4/5
+ * covered — above a 0.5 coverage floor but still worth reporting.
+ */
+function withSubstitutions(fragment, positions, replacement = 'A') {
+  const characters = [...fragment];
+  for (const position of positions) characters[position - 1] = characters[position - 1] === replacement ? 'C' : replacement;
+  return characters.join('');
+}
+
+/** The unchanged 300 bp row the other two are described against. */
+export const ALIGN_POST_REFERENCE = makeTemplate(300, 23);
+
+/** 300 bp with eight substitutions at spread-out positions. */
+export const ALIGN_POST_MUTANT = withSubstitutions(ALIGN_POST_REFERENCE, [12, 45, 88, 123, 167, 201, 255, 288]);
+
+/**
+ * 300 bp with two substitutions and two deletion stretches, written as gaps.
+ * Two substitutions are deliberately shared with the mutant row so the identity
+ * matrix is not trivially diagonal.
+ */
+export const ALIGN_POST_DELETED = (() => {
+  const mutated = withSubstitutions(ALIGN_POST_REFERENCE, [12, 88]);
+  const gapRanges = [[61, 63], [241, 242]];
+  const characters = [...mutated];
+  for (const [from, to] of gapRanges) for (let position = from; position <= to; position++) characters[position - 1] = '-';
+  return characters.join('');
+})();
+
+/**
+ * A 200 bp amplicon covering the first 200 columns, PADDED to all 300.
+ *
+ * `molbio_alignment_postprocess` takes an ALIGNMENT, so every row must already
+ * be the same length — padding is the caller's job and the tool refuses ragged
+ * input rather than guessing. This row is what makes the TWO THRESHOLDS
+ * distinguishable, and the reason the task's expectation is worth pinning:
+ *
+ *  - columns 61-63 and 241-242 carry 1 gap in 4 rows (fraction 0.25), so the
+ *    default 0.5 gap-fraction floor keeps them — a model that reports them as
+ *    trimmed has not read the threshold;
+ *  - columns 201-300 carry 1 gap in 4 rows for the same reason, and are what the
+ *    DEFAULT 0.8 coverage floor flags: 100 columns of "incomplete data" that are
+ *    nonetheless perfectly fine to keep.
+ *
+ * Without this row the fixture has no gap fraction above 0.5 at all (1 of 3 rows
+ * is 0.33), so nothing would exercise trimming and a broken trim path would pass.
+ * 200 rather than a short stub on purpose: a 40 bp row drags every pair it is in
+ * down to ~13% identity, which makes the matrix read as broken instead of as the
+ * partial overlap it is.
+ */
+export const ALIGN_POST_PARTIAL = ALIGN_POST_REFERENCE.slice(0, 200).padEnd(ALIGN_POST_REFERENCE.length, '-');
+
+/**
  * A 402 bp fragment that DOES contain a CpG island.
  *
  * A synthetic low-complexity repeat (`CGCG…`) is a bad fixture: it has a high
@@ -84,6 +148,10 @@ export const MUTAGENESIS_MUTATION = FIXTURES.MUTAGENESIS_MUTATION;
 export const NAMED_SEQUENCES = {
   align_reference: ALIGN_REFERENCE,
   align_read: ALIGN_READ,
+  align_post_reference: ALIGN_POST_REFERENCE,
+  align_post_mutant: ALIGN_POST_MUTANT,
+  align_post_deleted: ALIGN_POST_DELETED,
+  align_post_partial: ALIGN_POST_PARTIAL,
   qpcr_template: QPCR_TEMPLATE,
   puc118_cpg_region: PUCI18_CPG_REGION,
   construct: FIXTURES.CONSTRUCT,

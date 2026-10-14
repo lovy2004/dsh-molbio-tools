@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadTools, seedFixtures } from './tools.mjs';
+import { NAMED_SEQUENCES } from './sequences.mjs';
 
 process.env.MOLBIO_AUTO_VIEW = '0';
 
@@ -215,5 +216,47 @@ await probe(
   { lanes: [{ label: 'digest', sizes: [3162] }, { label: 'marker', sizes: [1000, 2000, 3000, 4000] }], ladder: '1kb' },
   (v) => v,
 );
+
+// ── P1: alignment post-processing ───────────────────────────────────────────
+//
+// The rendered TEXT is what a `where: "tool"` assertion sees, so this probe
+// prints both the value and the projection. The four rows are the committed
+// fixture (`benchmark/sequences.mjs`): a reference, a mutant with eight
+// substitutions, a row with two of those substitutions plus gap stretches, and a
+// 200 bp amplicon padded to 300 columns.
+{
+  const args = {
+    alignment: [
+      NAMED_SEQUENCES.align_post_reference,
+      NAMED_SEQUENCES.align_post_mutant,
+      NAMED_SEQUENCES.align_post_deleted,
+      NAMED_SEQUENCES.align_post_partial,
+    ],
+  };
+  if (only === undefined || only === 'alignment_post') {
+    const value = await harness.run('molbio_alignment_postprocess', args);
+    console.log('--- alignment_post [molbio_alignment_postprocess]');
+    console.log('RENDERED:');
+    console.log(harness.render('molbio_alignment_postprocess', args, value));
+    console.log('VALUE:');
+    console.log(JSON.stringify({
+      consensus_mode: value.consensus_mode,
+      consensus_length: value.consensus.length,
+      conserved_columns: value.conserved_columns,
+      mean_column_identity: value.mean_column_identity,
+      columns_before_trim: value.columns_before_trim,
+      columns_after_trim: value.columns_after_trim,
+      trimmed_columns: value.trimmed_columns,
+      mean_coverage: value.mean_coverage,
+      min_coverage: value.min_coverage,
+      fully_covered_columns: value.fully_covered_columns,
+      low_coverage_count: value.low_coverage_columns.length,
+      low_coverage_first: value.low_coverage_columns[0],
+      low_coverage_last: value.low_coverage_columns.at(-1),
+      identity_matrix: value.identity_matrix,
+      pairwise_identity_percent: value.pairwise_identity_percent,
+    }, null, 2));
+  }
+}
 
 process.exit(0);

@@ -53,6 +53,41 @@
       ]
     },
     {
+      "id": "alignment-post",
+      "category": "alignment",
+      "tier": "full",
+      "covers": ["molbio_alignment_postprocess"],
+      "instruction": "Here is a 300-column alignment of four sequences (the fourth only covers the first 200 columns). Tell me the consensus sequence, whether any columns are gap-heavy enough to be worth trimming at the default threshold, and both the mean coverage and the mean pairwise identity.\n\n{seq:align_post_reference}\n{seq:align_post_mutant}\n{seq:align_post_deleted}\n{seq:align_post_partial}",
+      "timeout_ms": 300000,
+      "expect_tools": ["molbio_alignment_postprocess"],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "4 sequences x 300 columns",
+          "note": "the shape of the input is pinned; the SOURCE label (msa vs alignment) is not, because a model that passes the four rows as `sequences` instead of `alignment` gets an equivalent answer."
+        },
+        {
+          "where": "tool",
+          "pattern": "trimming at gap fraction > 0\\.5: 0 column\\(s\\) would go, 300 of 300 remain",
+          "note": "THE POINT OF THE TASK. The fourth row leaves 1 gap in 4 at columns 61-63, 201-300, which is a gap FRACTION of 0.25 — under the default 0.5 floor, so nothing is trimmed even though 103 columns are under-covered. The two thresholds are separate knobs and a model that conflates them reports a trimmed alignment. Pin both the count and the remainder so either mistake is visible."
+        },
+        { "where": "tool", "pattern": "coverage: mean 0\\.913, min 0\\.5, 197 fully covered column\\(s\\); 103 below 0\\.8" },
+        {
+          "where": "tool",
+          "pattern": "identity \\(double-gap columns excluded from the denominator[^\\n]*\\): mean 81\\.41%, min 65%, max 97\\.67%",
+          "note": "the tool's own convention is spelled out in its text, and the three numbers are the matrix's off-diagonal extremes. molbio_conservation would report a DIFFERENT mean for these rows (it divides by all columns), so this also catches a model that substitutes the older tool."
+        },
+        { "where": "tool", "pattern": "identity matrix \\(4x4, percent\\)" },
+        { "where": "answer", "pattern": "CTTAACATAT" },
+        { "where": "answer", "pattern": "81\\.4|81\\.41" },
+        {
+          "where": "answer",
+          "pattern": "0\\.913|91\\.3",
+          "note": "the mean coverage the model reported, from either the text or the field"
+        }
+      ]
+    },
+    {
       "id": "sequence-logo",
       "category": "alignment",
       "tier": "full",
