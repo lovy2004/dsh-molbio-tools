@@ -108,17 +108,21 @@ jobs:
       # floor is asserted rather than assumed: when it is not met, npm does not
       # attempt the OIDC exchange and the failure surfaces later as a 401 that
       # says nothing about the real cause.
+      #
+      # The rule and the version detection live in `build/release-preflight.mjs`,
+      # which the suite tests. The first version of this step read
+      # `npm_config_user_agent` inline — and that variable IS NOT SET in a `run:`
+      # step, because npm sets it only for scripts IT spawns. The step therefore
+      # failed with "cannot read the npm version" before anything else ran.
+      # Reading `npm --version` asks the tool that will actually publish.
       - name: Assert the npm CLI supports trusted publishing
         run: |
           node --input-type=module -e "
-            const match = /npm\/(\d+)\.(\d+)\.(\d+)/.exec(process.env.npm_config_user_agent ?? '');
-            if (match === null) { console.error('cannot read the npm version from npm_config_user_agent'); process.exit(1); }
-            const [, major, minor] = match.map(Number);
-            if (major < 11 || (major === 11 && minor < 5)) {
-              console.error('npm ' + major + '.' + minor + ' is older than 11.5.1, the floor for trusted publishing');
-              process.exit(1);
-            }
-            console.log('npm ' + major + '.' + minor + ' supports OIDC trusted publishing');
+            import { detectNpmVersion, npmVersionSupport } from './build/release-preflight.mjs';
+            const { text } = detectNpmVersion();
+            const support = npmVersionSupport(text);
+            if (!support.ok) { console.error('::error::' + support.reason); process.exit(1); }
+            console.log('node ' + process.versions.node + ' with ' + support.text);
           "
 
       - name: Install the DSH baseline the guards compare against

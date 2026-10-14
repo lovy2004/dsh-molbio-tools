@@ -31,6 +31,7 @@
  * nobody has seen fail is not a gate (docs/rules.md rule 9).
  */
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +53,91 @@ export const PUBLISHED_PACKAGES = [
   { name: 'dsh-molbio-tools', directory: '.', tagVersioned: true },
   { name: 'dsh-molbio-panel', directory: 'packages/molbio-panel', tagVersioned: false },
 ];
+
+/**
+ * The oldest npm CLI that can publish with OIDC trusted publishing.
+ *
+ * Kept next to the check that enforces it, so the workflow and the tests cannot
+ * disagree about the floor.
+ */
+export const MIN_NPM_FOR_TRUSTED_PUBLISHING = [11, 5, 1];
+
+/**
+ * Parse an npm CLI version string and say whether it can do trusted publishing.
+ *
+ * THIS EXISTS BECAUSE THE FIRST VERSION OF THIS CHECK READ
+ * `npm_config_user_agent`, AND THAT VARIABLE IS NOT SET IN A GITHUB ACTIONS
+ * `run:` STEP. npm sets it for scripts it spawns; a `run:` step is spawned by the
+ * runner, so the check found `undefined`, reported "cannot read the npm version",
+ * and failed the release job before anything else ran.
+ *
+ * The lesson is not "use a different variable" — it is that FAILING WAS THE LEAST
+ * BAD OUTCOME. A check that cannot read its evidence must refuse, and this one
+ * did; the alternative (defaulting to "assume it is new enough") would have
+ * skipped the guard silently and let `npm publish` fail later with a 401 that
+ * says nothing about the cause.
+ *
+ * The caller obtains the version by RUNNING `npm --version` (see
+ * `detectNpmVersion`), so the value is evidence rather than an assumption about
+ * who spawned the process.
+ *
+ * @param {string} text - something like `11.16.0`, or `npm/11.16.0 node/...`.
+ * @returns {{ok: false, reason: string}|{ok: true, version: number[], text: string}}
+ */
+export function npmVersionSupport(text) {
+  const match = /(\d+)\.(\d+)\.(\d+)/.exec(String(text ?? ''));
+  if (match === null) {
+    return { ok: false, reason: `cannot read an npm version from ${JSON.stringify(String(text ?? ''))}` };
+  }
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])];
+  // Compare ALL THREE components. Comparing only major and minor let 11.5.0
+  // through a floor of 11.5.1 — found by testing the floor's own boundary, which
+  // is the one input a version comparison is most likely to get wrong.
+  const tooOld = version.some((part, index) => {
+    const need = MIN_NPM_FOR_TRUSTED_PUBLISHING[index];
+    const earlier = version.slice(0, index).every((earlierPart, earlierIndex) => earlierPart === MIN_NPM_FOR_TRUSTED_PUBLISHING[earlierIndex]);
+    return earlier && part < need;
+  });
+  if (tooOld) {
+    return {
+      ok: false,
+      reason: `npm ${version.join('.')} is older than ${MIN_NPM_FOR_TRUSTED_PUBLISHING.join('.')}, the floor for trusted publishing`,
+    };
+  }
+  return { ok: true, version, text: `npm ${version.join('.')} supports OIDC trusted publishing` };
+}
+
+/**
+ * The version of the npm CLI actually on PATH.
+ *
+ * Run as a subprocess on purpose: the value must come from the tool that will do
+ * the publishing, not from an environment variable whose presence depends on who
+ * spawned this process. The user agent is only a FALLBACK, for callers running
+ * inside an npm script where `npm --version` is unavailable.
+ *
+ * `shell: true` is required on Windows: since the 2024 argument-injection fix,
+ * Node refuses to spawn a `.cmd` without it (EINVAL), and resolving `npm` without
+ * the shell extension fails with ENOENT. That is safe here because the argv is a
+ * literal with no interpolation, and the deprecation warning Node emits for the
+ * combination is only visible on Windows — where this check is not what
+ * publishes (the workflow runs on ubuntu-latest).
+ *
+ * @returns {{text: string}}
+ */
+export function detectNpmVersion() {
+  try {
+    return {
+      text: execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      }),
+    };
+  } catch (error) {
+    if (process.env.npm_config_user_agent !== undefined) return { text: process.env.npm_config_user_agent };
+    return { text: String(error?.code ?? error?.message ?? 'npm --version failed') };
+  }
+}
 
 /**
  * Is a declared version a plain three-part release version?

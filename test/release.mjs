@@ -28,12 +28,15 @@ import { join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 import {
+  MIN_NPM_FOR_TRUSTED_PUBLISHING,
   PUBLISHED_PACKAGES,
   changelogSection,
   clientArtifactFromTar,
   clientArtifactFromTarball,
   clientManifestProblems,
   compareVersions,
+  detectNpmVersion,
+  npmVersionSupport,
   packageVersionCheck,
   panelArtifactChanged,
   publishedState,
@@ -309,7 +312,46 @@ if (process.env.MOLBIO_RELEASE_NETWORK === '1') {
   notes.push('network round trip skipped (set MOLBIO_RELEASE_NETWORK=1 to run it)');
 }
 
-// ── (11) the workflow itself ────────────────────────────────────────────────
+// ── (11) the npm version floor, AND how the workflow obtains the version ────
+//
+// This section exists because the release job failed on its FIRST real run, at
+// the npm-floor step, with "cannot read the npm version from
+// npm_config_user_agent". npm sets that variable only for scripts IT spawns, and
+// a GitHub Actions `run:` step is spawned by the runner — so the check read
+// `undefined` and refused. The guard below did not catch it because the rehearsal
+// meant to exercise that step fed in the very variable the step wrongly depended
+// on: it tested the assumption rather than the evidence.
+//
+// Two things fix that, and both are asserted here:
+//   1. the rule is a tested function of a version STRING, and the workflow gets
+//      that string by RUNNING `npm --version` (`detectNpmVersion`); and
+//   2. the workflow file is checked for the shape that failed, so the inline
+//      version cannot come back. Asserting only (1) would leave the YAML free to
+//      drift away from the code the tests cover.
+{
+  const floor = MIN_NPM_FOR_TRUSTED_PUBLISHING.join('.');
+  assert.equal(npmVersionSupport('11.16.0').ok, true);
+  assert.equal(npmVersionSupport('12.0.0').ok, true);
+  assert.equal(npmVersionSupport('npm/11.16.0 node/v26.3.0 linux x64').ok, true, 'the user-agent spelling is understood too');
+  assert.equal(npmVersionSupport(floor).ok, true, 'the floor itself is supported');
+  // The boundary is where a version comparison is most likely to be wrong: the
+  // first version of this function compared only major.minor and let 11.5.0
+  // through a floor of 11.5.1.
+  assert.equal(npmVersionSupport('11.5.0').ok, false, 'one patch below the floor must be refused');
+  assert.equal(npmVersionSupport('11.4.99').ok, false);
+  assert.equal(npmVersionSupport('10.99.99').ok, false);
+  assert.match(npmVersionSupport('not-a-version').reason, /cannot read an npm version/);
+  assert.match(npmVersionSupport('').reason, /cannot read an npm version/);
+
+  // Detection must yield something the rule accepts, on whatever machine runs the
+  // suite — that property is what the workflow depends on.
+  const detected = detectNpmVersion();
+  const support = npmVersionSupport(detected.text);
+  assert.equal(support.ok, true, `detectNpmVersion() returned ${JSON.stringify(detected.text)}, which the floor rule cannot accept`);
+  notes.push(`npm ${support.version.join('.')} here satisfies the trusted-publishing floor (${floor})`);
+}
+
+// ── (12) the workflow itself ────────────────────────────────────────────────
 //
 // `.github/` is deliberately NOT in the npm `files` allowlist — the workflow is
 // repository infrastructure, not something an installer needs. This suite is
@@ -351,7 +393,26 @@ if (process.env.MOLBIO_RELEASE_NETWORK === '1') {
     assert.match(workflow, /npm publish --access public --provenance/);
     assert.match(workflow, /node build\/release-preflight\.mjs/);
     assert.match(workflow, /npm test/, 'the tagged commit is tested by the release job itself');
-    notes.push('the workflow grants OIDC, stores no token, and publishes the panel from its own directory');
+
+    // THE DRIFT DETECTOR. Every Node-side decision in the workflow must go
+    // through the module this suite tests, rather than reimplementing the rule
+    // inline. The npm-floor step did the latter and broke on the first real run;
+    // these assertions make that shape impossible to reintroduce.
+    assert.match(workflow, /detectNpmVersion/, 'the npm-floor step must read the version from the CLI, not the environment');
+    assert.match(workflow, /npmVersionSupport/, 'and must apply the tested rule');
+    // The READ is what is forbidden, not the mention: the step's own comment
+    // names the variable to explain why it cannot be trusted. Matched as
+    // `process.env.X`, which is the access rather than the prose.
+    assert.ok(
+      !/process\.env\.npm_config_user_agent/.test(workflow),
+      'the workflow must not read process.env.npm_config_user_agent: it is unset in a run: step, which is exactly how the first release failed',
+    );
+    assert.match(workflow, /tagVersion/, 'the tag assertion must use the tested parser');
+    assert.ok(
+      !/case\s+"\$TAG"\s+in/.test(workflow),
+      'a shell `case` for the tag would accept shapes the parser rejects (a glob cannot express three numeric components)',
+    );
+    notes.push('the workflow grants OIDC, stores no token, and delegates every decision to the tested module');
   }
 }
 
