@@ -136,7 +136,7 @@ jobs:
           "
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.1.7-rc.1
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
 
       # Same derivation as test.yml: on a runner npm's global prefix is the Node
       # toolchain directory, and several guards resolve the harness through
@@ -205,8 +205,11 @@ jobs:
       # Last. Guarded by `release`, not `publish`: a manual run is exactly how a
       # release whose npm versions were bootstrapped by hand gets its GitHub
       # Release, and by then the publish steps above are correctly skipped.
+      # success() is required: without it this step's explicit `if` REPLACES
+      # GitHub's implicit success() gate, so a failed publish could still create
+      # a Release whose npm versions do not exist.
       - name: Create the GitHub Release
-        if: steps.mode.outputs.release == 'true'
+        if: success() && steps.mode.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
