@@ -41,7 +41,7 @@ import { gunzipSync } from 'node:zlib';
  * The two npm entries this repository publishes, in publish order.
  *
  * THEY DO NOT SHARE A VERSION LINE, and that is deliberate rather than an
- * oversight to be "fixed" here. The root package carries the 58 tools and moves
+ * oversight to be "fixed" here. The root package carries the 60 tools and moves
  * with every toolset release; `dsh-molbio-panel` carries only the browser panel
  * and moves when the panel's own artifact moves. The tag names the ROOT version
  * (`v0.19.0`), and each entry is checked against its own declared version —
@@ -201,7 +201,7 @@ export function tagVersion(tag) {
  * `rc.10 < rc.2`, so a release of `rc.2` after `rc.10` would look like a
  * DOWNGRADE and the gate would refuse a legitimate publish (or, in the other
  * direction, wave through a stale one). This repository does cut prereleases
- * (the harness baseline itself is `0.1.7-rc.1`), so the rule is implemented
+ * (the harness baseline itself is `0.2.0-rc.2`), so the rule is implemented
  * rather than approximated.
  *
  * Semver's rule: split on dots; numeric identifiers compare numerically and rank

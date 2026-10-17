@@ -147,7 +147,7 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 这条规则有两道**机器守卫**，它们让"忘了"变成"红"：
 
-- `test/benchmark-coverage.mjs` 断言 **57/57 个已注册工具都被至少一个任务覆盖**。
+- `test/benchmark-coverage.mjs` 断言 **60/60 个已注册工具都被至少一个任务覆盖**。
   新增工具而没加任务 = **直接 FAIL**。它同时守住 fixture 的前提（Golden Gate 的载体必须
   无 BsaI 位点、诱变模板必须仍能设计出引物）与 tier/占位符的健全性。
 - `test/benchmark-score.mjs` 用**真实模型响应的冻结副本**（`test/fixtures/benchmark-traces.json`）

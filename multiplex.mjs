@@ -45,6 +45,14 @@ export const MULTIPLEX_DEFAULTS = {
   maxSitesReported: 6,
   /** Concentration used for folding Tm (nM primer -> molar). */
   primerNm: 200,
+  /** Annealing-temperature recommendation: lowest primer Tm minus this offset. */
+  annealingOffsetC: 3,
+  /** Half-width of the recommended annealing window, °C. */
+  annealingWindowC: 1,
+  /** A primer-Tm spread above this makes one annealing temperature a compromise. */
+  tmSpreadWarnC: 5,
+  /** Starting primer concentration for every target, nM. */
+  primerConcentrationNm: 200,
 };
 
 const round2 = (value) => Math.round(value * 100) / 100;
@@ -177,6 +185,18 @@ export function checkMultiplex(rawTargets, rawOptions = {}) {
   if (rawTargets.length > opts.maxTargets) throw new MolbioInputError(`targets has ${rawTargets.length} entries; the limit is ${opts.maxTargets} per call`);
   if (!(opts.dimerTmThreshold > 0)) throw new MolbioInputError('dimer_tm_threshold must be a positive temperature in °C');
   if (!Number.isInteger(opts.minSizeSeparationBp) || opts.minSizeSeparationBp < 0) throw new MolbioInputError('min_size_separation_bp must be a non-negative integer');
+  if (!(typeof opts.annealingOffsetC === 'number' && Number.isFinite(opts.annealingOffsetC) && opts.annealingOffsetC >= 0 && opts.annealingOffsetC <= 15)) {
+    throw new MolbioInputError('annealing_offset_c must be a number between 0 and 15 (°C below the lowest primer Tm)');
+  }
+  if (!(typeof opts.annealingWindowC === 'number' && Number.isFinite(opts.annealingWindowC) && opts.annealingWindowC >= 0 && opts.annealingWindowC <= 5)) {
+    throw new MolbioInputError('annealing_window_c must be a number between 0 and 5 (°C on each side of the recommendation)');
+  }
+  if (!(typeof opts.tmSpreadWarnC === 'number' && Number.isFinite(opts.tmSpreadWarnC) && opts.tmSpreadWarnC >= 0 && opts.tmSpreadWarnC <= 20)) {
+    throw new MolbioInputError('tm_spread_warn_c must be a number between 0 and 20');
+  }
+  if (!(typeof opts.primerConcentrationNm === 'number' && Number.isFinite(opts.primerConcentrationNm) && opts.primerConcentrationNm >= 20 && opts.primerConcentrationNm <= 1000)) {
+    throw new MolbioInputError('primer_concentration_nm must be a number between 20 and 1000');
+  }
 
   const ctMolar = opts.primerNm * 1e-9;
   const targets = rawTargets.map((target, index) => {
@@ -223,6 +243,31 @@ export function checkMultiplex(rawTargets, rawOptions = {}) {
       });
     }
   }
+
+  // Annealing temperature: one tube, one temperature. The defensible starting
+  // point is the LOWEST primer Tm minus a small offset, because a primer that
+  // melts below the set temperature is the one that drops out first. This is a
+  // rule of thumb, not a thermal-cycling optimisation — the note says so.
+  const annealing = primers.length === 0 ? null : (() => {
+    const tms = primers.map((primer) => primer.tm);
+    const minTm = Math.min(...tms);
+    const maxTm = Math.max(...tms);
+    const spread = round2(maxTm - minTm);
+    const limiting = primers.reduce((best, primer) => (primer.tm < best.tm ? primer : best));
+    const recommended = round2(minTm - opts.annealingOffsetC);
+    return {
+      min_primer_tm: round2(minTm),
+      max_primer_tm: round2(maxTm),
+      spread_c: spread,
+      recommended_c: recommended,
+      range_c: [round2(recommended - opts.annealingWindowC), round2(recommended + opts.annealingWindowC)],
+      limiting_primer: `${limiting.target}/${limiting.role}`,
+      offset_c: opts.annealingOffsetC,
+      window_c: opts.annealingWindowC,
+      tm_spread_ok: spread <= opts.tmSpreadWarnC,
+      note: 'Starting point: the lowest primer Tm minus the configured offset; optimise on the bench with a temperature gradient.',
+    };
+  })();
 
   // Cross interactions: every primer pair that is not the same primer. Within a
   // target, forward+reverse is the intended pair (its dimer was already checked
@@ -341,6 +386,36 @@ export function checkMultiplex(rawTargets, rawOptions = {}) {
   }
   sizeConflicts.sort((x, y) => x.difference_bp - y.difference_bp);
 
+  // Primer concentrations: a multiplex is a competition, and a much shorter
+  // amplicon can out-compete a longer one. The plan is deliberately conservative
+  // — it starts every pair at the same concentration and only shifts the
+  // extremes when the size ratio is at least 2x. It is a starting point, not a
+  // measured optimum; the rationale field says which case each target is in.
+  const knownSizes = sizes.filter((entry) => entry.length !== undefined).map((entry) => entry.length);
+  const minSize = knownSizes.length === 0 ? undefined : Math.min(...knownSizes);
+  const maxSize = knownSizes.length === 0 ? undefined : Math.max(...knownSizes);
+  const sizeRatio = minSize === undefined || minSize === 0 || maxSize === undefined ? 1 : maxSize / minSize;
+  const primerConcentrations = targets.map((target) => {
+    const size = sizes.find((entry) => entry.name === target.name)?.length;
+    let recommended = opts.primerConcentrationNm;
+    let rationale = 'panel default; no size-based adjustment applies';
+    if (knownSizes.length >= 2 && sizeRatio >= 2 && size !== undefined) {
+      if (size === minSize) {
+        recommended = Math.round(opts.primerConcentrationNm * 0.75);
+        rationale = 'shortest amplicon in the panel; a lower share limits its competitive advantage';
+      } else if (size === maxSize) {
+        recommended = Math.round(opts.primerConcentrationNm * 1.5);
+        rationale = 'longest amplicon in the panel; a higher share compensates for lower amplification efficiency';
+      } else {
+        rationale = 'panel default; between the shortest and longest amplicon';
+      }
+    }
+    return { target: target.name, recommended_nm: recommended, rationale };
+  });
+  const concentrationNote = knownSizes.length >= 2 && sizeRatio >= 2
+    ? `amplicon sizes span ${minSize}-${maxSize} bp (${round2(sizeRatio)}x); the plan lowers the shortest and raises the longest pair — a starting point, not a measured optimum`
+    : '';
+
   const blockingInteractions = interactions.filter((entry) => entry.conflict && entry.cross_target);
   const blockingMispriming = mispriming.filter((entry) => entry.scope === 'other_templates');
   const blockingSizes = sizeConflicts.filter((entry) => entry.severity === 'indistinguishable');
@@ -356,6 +431,13 @@ export function checkMultiplex(rawTargets, rawOptions = {}) {
   for (const entry of blockingSizes.slice(0, 5)) {
     advice.push(`${entry.a} (${entry.a_length} bp) and ${entry.b} (${entry.b_length} bp) differ by only ${entry.difference_bp} bp — not resolvable on a standard gel`);
   }
+  if (annealing !== null) {
+    advice.push(`set the annealing temperature around ${annealing.recommended_c} °C (range ${annealing.range_c[0]}-${annealing.range_c[1]} °C): the lowest-Tm primer is ${annealing.limiting_primer} at ${annealing.min_primer_tm} °C`);
+    if (!annealing.tm_spread_ok) {
+      advice.push(`primer Tm spread is ${annealing.spread_c} °C (${annealing.min_primer_tm}-${annealing.max_primer_tm} °C) — one annealing temperature cannot be optimal for all; redesign the outlier primer(s) or use a two-step protocol`);
+    }
+  }
+  if (concentrationNote !== '') advice.push(concentrationNote);
 
   return {
     compatible: blockingInteractions.length === 0 && blockingMispriming.length === 0 && blockingSizes.length === 0,
@@ -372,10 +454,15 @@ export function checkMultiplex(rawTargets, rawOptions = {}) {
     cross_template_mispriming: blockingMispriming.length,
     amplicons: sizes,
     size_conflicts: sizeConflicts,
+    annealing,
+    primer_concentrations: primerConcentrations,
+    concentration_note: concentrationNote,
     advice,
     notes: [
       'Dimer/hairpin Tms are the same SantaLucia-1998 nearest-neighbour estimates the primer designer uses; they rank risk, they do not predict a multiplex outcome.',
       'Cross-template annealing is searched with a perfect 3\' tail only; own-template mispriming allows the configured mismatch tolerance.',
+      'The annealing temperature is a rule of thumb (lowest primer Tm minus the configured offset), not a thermal-cycling optimisation; run a gradient.',
+      'Primer concentrations are starting points chosen from amplicon-size balance, not measured optima; rebalance empirically.',
       'A panel that passes this check can still fail on the bench: template competition, unequal primer efficiencies and amplicon secondary structure are not modelled here.',
     ],
   };

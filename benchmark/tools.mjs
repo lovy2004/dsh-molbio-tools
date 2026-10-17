@@ -21,7 +21,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import * as plugin from '../index.mjs';
 
@@ -55,7 +55,33 @@ export function createMemFs(workspaceRoot) {
     },
     async stat(target) {
       const value = files.get(key(target.path));
-      return value === undefined ? undefined : { size: value.length };
+      if (value !== undefined) return { type: 'file', size: value.length };
+      const prefix = key(target.path) + sep;
+      for (const file of files.keys()) {
+        if (file.startsWith(prefix)) return { type: 'directory' };
+      }
+      return undefined;
+    },
+    async listDir(target) {
+      const dir = key(target.path);
+      const prefix = dir.endsWith(sep) ? dir : dir + sep;
+      const entries = new Map();
+      for (const [file, value] of files) {
+        if (!file.startsWith(prefix)) continue;
+        const rest = file.slice(prefix.length);
+        if (rest === '') continue;
+        const parts = rest.split(sep);
+        const name = parts[0];
+        if (!entries.has(name)) {
+          entries.set(name, {
+            name,
+            type: parts.length > 1 ? 'directory' : 'file',
+            target: { path: join(dir, name) },
+            ...parts.length > 1 ? {} : { size: value.length },
+          });
+        }
+      }
+      return [...entries.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
     async readText(target) {
       const value = files.get(key(target.path));

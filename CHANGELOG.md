@@ -10,6 +10,106 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.20.0] — 2026-10-17（Cas 家族几何、qPCR 订购/配平、批量分析与静默位点突变；并入 0.19.1 硬化）
+
+**工具数 58 → 60，benchmark 56 → 61 题（60/60 覆盖）。** 这一版把 0.19.1 计划的四项硬化直接并入，
+并落地 roadmap 2.3 / 2.5 / 2.7 / 2.8 与 survey #8。Cas12a/Cas13 不是"再加一个 PAM 字符串"：
+原来的 `findProtospacers` 把 3' PAM、20 nt 和 3' 种子写死在几何里，对 Cas12a/Cas13 会给出**生物学上错误**的
+坐标与评分，因此这一版把家族几何做成一张表，并补上了反向链脱靶定位的静默错误。
+
+### 1. 并入的 0.19.1 硬化（原计划单发 patch，现随 0.20.0 一起）
+
+- **Smith-Waterman 的 DP 矩阵上限**：`molbio_align` 在分配前拒绝超过 50,000,000 cells 的输入对，
+  而不是让两个几百 kb 的序列把宿主进程的内存吃光；工具描述同步说明"对齐窗口或改用
+  `molbio_verify_sanger`"。`test/smoke.mjs` 用 10 kb × 10 kb 的输入证明拒绝发生在分配之前。
+- **SnapGene/PubMed XML 数值实体**：`&#999999999;` 曾让 `String.fromCodePoint` 抛出 RangeError
+  并逃出整个解析器；现在越界码点与代理项按字面文本保留，合法实体（含星形平面）照常解码。
+- **`molbio_sequence_logo` 的并发声明**：它写共享默认路径 `logo.svg`，之前却默认 `safe`；
+  现与其他画图工具一致声明 `safe: false`。
+- **npm `files` 白名单**：不再整目录带 `benchmark`，改为 `benchmark/*.mjs`、`benchmark/tasks`、
+  `benchmark/README.md`，因此 `.gitignore` 里的本机 `benchmark/reports/` 不会再被打进包
+  （此前约 1.4 MB）。`test/contract.mjs` 直接禁止裸 `benchmark` 条目。
+
+### 2. roadmap 2.5：Cas12a/Cas13 家族几何（以及反向脱靶定位缺陷）
+
+- `crispr.mjs` 新增 `CAS_FAMILIES` 表：SpCas9（3' NGG / 20 nt / 3' 种子）、SaCas9
+  （3' NNGRRT / 21 nt）、Cas12a（**5' TTTV / 23 nt / 5' 种子**）、Cas13a（RNA / 3' H PFS / 28 nt）、
+  Cas13b（RNA / 5' D + 3' NAN / 30 nt）、Cas13d（RNA / 无 PFS / 22 nt）。PAM 校验现在按
+  **PAM 的哪一侧贴近 protospacer** 检查简并位，而不是一律要求首位为 N——`TTTV` 因此不再被误拒。
+- **Cas13 不是 PAM**：它有 PFS **偏好**，工具报告 PFS、按缺失扣分并明确说明"不是硬性 PAM"；
+  只有 `require_pfs=true` 才过滤。Cas13 的 `tm_celsius` 返回 `null`，因为对 RNA guide 报 DNA
+  NN Tm 是另一个分子；工具描述与渲染都写明这一点。
+- **反向链脱靶定位是真 bug**：索引把每个 k-mer 记在 top-strand 起点，旧 `finalizeSites` 却对
+  反向命中减去 `guideLength-1`，使它们整体偏移 19 nt 并大多越界丢弃——正向 fixture 永远看不见。
+  现在两种链都从 `entry.position` 起算，PAM 按 5'/3' 侧与链向取 top-strand 窗口；新增的
+  smoke fixture 在 forward guide 与 reverse perfect copy 之间互指，断言反向脱靶 `start/end/pam`
+  与 0 mismatch。
+- 新 benchmark：`crispr-cas12a`（5' TTTV、23 nt、坐标 9-31）与 `crispr-cas13`（RNA、PFS A、28 nt）。
+  `test/smoke.mjs` 另钉住 Cas12a/Cas13a 的几何、PFS 过滤与错误路径。
+
+### 3. roadmap 2.8：TaqMan MGB 与订购 CSV
+
+- `probe_chemistry: 'mgb'` 使用 13-20 nt、未修饰 NN Tm 48-60 °C 的窗口；**MGB 修饰的 Tm 不被
+  NN 模型预测**，因此报告的是未修饰 Tm，并以 `tm_model` 与 notes 明确要求向供应商复核。
+  MGB 不施加"探针 Tm 高于引物"的未修饰差值罚分（那会把每个 MGB 候选都罚掉）。
+- 新增 `taqmanOrderRows` / `taqmanOrderCsv`：每条 assay 三行（F/R/P），列含 5'/3' 修饰、规模、
+  纯化与说明；MGB 默认 `NFQ-MGB`，5' 默认 FAM。`save_path` 写 CSV；不传则只返回结构化 order。
+- 标准 chemistry 的默认值、排序与已发布数值保持不变（smoke 的 9 assays 与 pinned probe 仍绿）。
+
+### 4. roadmap 2.7：多重 PCR 的退火温度与浓度配平建议
+
+- `checkMultiplex` 新增 `annealing`：最低引物 Tm − `annealing_offset_c`（默认 3 °C），
+  给出 ±`annealing_window_c` 范围、最低 Tm 引物、Tm 离散度与是否超过警告阈值。
+- 新增 `primer_concentrations` 与 `concentration_note`：默认 200 nM；当扩增子大小比 ≥ 2 时，
+  最短的降到 150 nM、最长的升到 300 nM，并明确这是**起始点**而非实测最优。
+- 这些是清晰标注的规则性建议，notes 写明"不是热循环优化，需跑梯度"。
+
+### 5. roadmap 2.3：批量分析 + CSV/TSV
+
+- 新模块 `batch.mjs` 与新工具 `molbio_batch_analyze`：扫描目录（可递归）或显式 paths，复用
+  同一批 FASTA/FASTQ/GenBank/SnapGene 解析器，输出一张 CSV/TSV。
+- 每行：格式、拓扑、条目数、总长、GC%、N%、特征数、平均长度；`analysis: orf` 加 ORF 数/最长
+  ORF，`analysis: enzymes` 加指定酶的位点数，`all` 两者都加。单个坏文件变成一行 `error`，
+  其余文件继续；文件/字节上限与 `truncated` 都显式报告。
+- 拓扑按 GenBank/SnapGene 声明优先（环状质粒的位点计数不会被当成线性）；无声明时才用
+  `circular` 参数。新 benchmark `batch-analysis` 同时读 `pUC118.gb` 与 `pUC118.dna`。
+
+### 6. survey #8：静默酶切位点突变
+
+- 新模块 `silent-site.mjs` 与新工具 `molbio_silent_site_mutagenesis`：只在同义密码子内枚举，
+  因此**蛋白序列按构造不变**；输出逐碱基变化、密码子前后与氨基酸、可直接喂给
+  `molbio_mutagenesis_primers` 的 mutation texts、以及突变后序列。
+- 支持 remove/add、frame 1-3、可选 `host`（按 e_coli/yeast/human 密码子偏好排序）与区域限制；
+  只接受识别序列无简并碱基的酶（`GGTNACC` 这类直接拒绝而不是猜）。
+- 新 benchmark `silent-site` 钉住 EcoRI 的 `C12T`（TTC→TTT，Phe）与突变后序列。
+
+### 7. 版本、基线与文档
+
+- 根包 `0.19.0 → 0.20.0`，面板 `0.1.2 → 0.1.3`（客户端产物因 crispr/taqman/multiplex 改动而变，
+  两个 npm 条目需分别发布）。
+- **DSH 基线 `0.1.7-rc.1 → 0.2.0-rc.2`**：`.github/workflows/test.yml` 的 pin、roadmap/maintainer/
+  workflow 与 preset 头注释同步；`preset-health` 在 0.2.0-rc.2 上仍为 30 行全过（行清单无需改动）。
+- README/preset 描述/工具表/benchmark 计数同步到 **60 tools / 61 tasks**；新增模块进入 npm
+  `files` 白名单与目录树。
+- **未做**：`benchmark-score` 里 2 条 0.16.0 之前的冻结响应（`methylation-block`、`qpcr-primers`）
+  仍是 suspended；本次没有用真实模型重录，测试输出会继续点名这两条，而不是假装它们已通过。
+
+### 8. 发布前完整 benchmark（2026-10-17，真实模型）
+
+- **61 题首跑 55/61**：tool selection **61/61**，arguments **59/61**，final answer **57/61**；
+  12.7M tokens / 1747 s。
+- **新功能任务全部通过**：`taqman-mgb`、`crispr-cas12a`、`crispr-cas13`、`silent-site`、
+  `batch-analysis`。`multiplex-panel` 在把"退火温度/浓度"明确写进指令后复跑通过。
+- **4 个失败是断言写死格式，不是产品缺陷**：`plasmid-digest`（模型写 `2,840`）、
+  `protein-props`（`3,935`）、`codon-optimize`（`EcoRI-free`）、`chart-volcano`
+  （任务要求 `de.svg`，断言却写 `volcano.svg`）。修正后 `--replay` 四题全部转为 PASS。
+- **1 个真实可用性缺陷**：`molbio_extract_region` 的 schema 广告 `sequence`，但
+  `resolveVector` 只读 `vector`，于是文档里写的参数被静默忽略、调用报
+  "provide either vector or vector_path"。现在 `vector`/`sequence`/`reference` 三个已声明别名
+  都接受，smoke 增加回归断言。该任务的真实模型复跑因 DSH 沙箱对 headless 子进程的审批限制
+  未完成，因此发布时的实测口径是 **60/61**（这一题以 smoke 回归 + 修复代码为准，而不是假装已跑）。
+- benchmark 工具本身未改；全量首跑使用了一次性更宽沙箱来启动 headless DSH 子进程。
+
 ## [0.19.0] — 2026-10-11（环形树的旋转多行标签；比对后处理套件；持续交付）
 
 **工具数 57 → 58。** 这一版是 [roadmap](docs/roadmap.md) 2.4 与 2.2 两条候选的落地：

@@ -73,8 +73,22 @@ import { smithWaterman } from './align.mjs';
 import { conservationAnalysis, normalizeAlignedRow, normalizeMsaSequence, pairwiseIdentities, progressiveAlign } from './msa.mjs';
 import { ALIGN_POST_LIMITS, CONSENSUS_MODES, alignmentPostprocess } from './align-post.mjs';
 import { columnComposition, renderSequenceLogo } from './logo.mjs';
-import { CRISPR_LIMITS, DEFAULT_PAM, designGrnas } from './crispr.mjs';
-import { PROBE_DEFAULTS, designTaqmanProbes, resolveProbeOptions } from './taqman.mjs';
+import {
+  CAS_FAMILIES,
+  CAS_FAMILY_NAMES,
+  CRISPR_LIMITS,
+  DEFAULT_PAM,
+  designGrnas,
+  resolveCasFamily,
+} from './crispr.mjs';
+import {
+  PROBE_CHEMISTRY,
+  PROBE_DEFAULTS,
+  designTaqmanProbes,
+  resolveProbeOptions,
+  taqmanOrderCsv,
+  taqmanOrderRows,
+} from './taqman.mjs';
 import { MULTIPLEX_DEFAULTS, checkMultiplex } from './multiplex.mjs';
 import {
   HYDROPATHY_DEFAULTS,
@@ -119,6 +133,16 @@ import {
 } from './phylo.mjs';
 import { PCR_DEFAULTS, pcrGel, simulatePcr } from './pcr.mjs';
 import { COMPOSITION_DEFAULTS, gcComposition, renderCompositionSvg } from './composition.mjs';
+import {
+  BATCH_LIMITS,
+  analyzeSequenceFile,
+  batchColumns,
+  batchTable,
+  detectBatchFormat,
+  globToRegExp,
+} from './batch.mjs';
+import { designSilentSite } from './silent-site.mjs';
+import { relative, sep } from 'node:path';
 
 export const name = 'dsh-molbio-tools';
 export const inject = ['tools', 'systemPrompt'];
@@ -1231,6 +1255,9 @@ const PROBE_SCHEMA = {
   required: ['sequence', 'start', 'end', 'length', 'orientation', 'tm', 'gc_percent', 'five_prime_g', 'three_prime_g', 'self_any', 'self_end', 'hairpin_tm', 'repeats', 'runs', 'distance_from_primer_3prime', 'penalty', 'notes'],
   properties: {
     sequence: { type: 'string', description: 'Probe sequence 5\'→3\' as it should be ordered (reverse-oriented probes are reported reverse-complemented).' },
+    chemistry: { type: 'string', enum: Object.keys(PROBE_CHEMISTRY), description: 'Probe chemistry this candidate was designed for.' },
+    chemistry_label: { type: 'string' },
+    tm_model: { type: 'string', description: 'What the reported Tm is (and, for MGB, what it is not).' },
     start: { type: 'integer', description: '1-based top-strand start of the probe binding site on the template.' },
     end: { type: 'integer', description: '1-based top-strand end of the probe binding site.' },
     length: { type: 'integer' },
@@ -1266,7 +1293,8 @@ const CONDITIONS_SCHEMA = {
   },
 };
 
-const taqmanTool = define({
+const taqmanTool = (ctx) => define({
+  safe: (args) => args.save_path === undefined || args.save_path === '',
   name: 'molbio_design_taqman',
   description: 'Design a TaqMan (5\'-nuclease, hydrolysis probe) assay: it runs the standard primer-pair designer first (qPCR-sized amplicons, 70-200 bp by default), then places a probe inside the amplicon between the primers and applies the probe rules — no 5\' terminal G (it quenches the reporter), probe Tm at least min_tm_delta °C above the hotter primer, no mononucleotide run or repeat, bounded self-complementarity, and a check that the probe does not dimerize with either primer. Each assay reports the primer pair, the probe (sequence to order, position, orientation, Tm margin) and a transparent ranking penalty. Probe and primer Tm are the same SantaLucia-1998 nearest-neighbour estimates the other molbio tools use; they are design heuristics, not an efficiency prediction.',
   parameters: {
@@ -1287,6 +1315,14 @@ const taqmanTool = define({
       allow_3prime_g: { type: 'boolean', description: 'Allow a 3\' terminal G in the probe (default false: such a probe can extend without cleavage).' },
       max_probes_per_amplicon: { type: 'integer', description: 'Probe candidates reported per amplicon (1-10, default 3).' },
       max_amplicons: { type: 'integer', description: 'Amplicons reported (1-50, default 5).' },
+      probe_chemistry: { type: 'string', enum: Object.keys(PROBE_CHEMISTRY), description: 'taqman (standard dual-labelled, 18-27 nt, Tm 58-72) or mgb (13-20 nt, unmodified NN Tm 48-60; the MGB modification raises the real Tm, which the NN model does not predict). Default taqman.' },
+      reporter: { type: 'string', enum: ['FAM', 'HEX', 'VIC', 'JOE', 'TET', 'Cy5', 'ROX', 'Texas Red'], description: '5\' reporter dye for the ordering sheet (default FAM).' },
+      quencher: { type: 'string', enum: ['BHQ1', 'BHQ2', 'TAMRA', 'NFQ-MGB'], description: '3\' quencher for the ordering sheet; defaults to NFQ-MGB for mgb and BHQ1 otherwise.' },
+      primer_scale: { type: 'string', enum: ['25nm', '50nm', '100nm', '200nm'], description: 'Synthesis scale for primers (default 25nm).' },
+      probe_scale: { type: 'string', enum: ['25nm', '50nm', '100nm', '200nm'], description: 'Synthesis scale for probes (default 25nm).' },
+      primer_purification: { type: 'string', enum: ['standard', 'hplc', 'page'], description: 'Purification for primers (default standard).' },
+      probe_purification: { type: 'string', enum: ['standard', 'hplc', 'page'], description: 'Purification for probes (default hplc).' },
+      save_path: { type: 'string', description: 'Optional CSV path for the ordering sheet (primers + probes).' },
       primer_options: {
         type: 'object',
         additionalProperties: true,
@@ -1311,9 +1347,32 @@ const taqmanTool = define({
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['assays', 'conditions', 'probe_options', 'notes'],
+    required: ['assays', 'conditions', 'probe_chemistry', 'probe_options', 'order', 'saved_to', 'notes'],
     properties: {
       conditions: CONDITIONS_SCHEMA,
+      probe_chemistry: { type: 'string', enum: Object.keys(PROBE_CHEMISTRY) },
+      order: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['assay', 'role', 'name', 'sequence', 'length', 'tm_celsius', 'gc_percent', 'modification', 'scale', 'purification', 'notes'],
+          properties: {
+            assay: { type: 'integer' },
+            role: { type: 'string', enum: ['forward', 'reverse', 'probe'] },
+            name: { type: 'string' },
+            sequence: { type: 'string' },
+            length: { type: 'integer' },
+            tm_celsius: { type: 'number' },
+            gc_percent: { type: 'number' },
+            modification: { type: 'string' },
+            scale: { type: 'string' },
+            purification: { type: 'string' },
+            notes: { type: 'string' },
+          },
+        },
+      },
+      saved_to: { type: 'string' },
       assays: {
         type: 'array',
         items: {
@@ -1338,8 +1397,11 @@ const taqmanTool = define({
       probe_options: {
         type: 'object',
         additionalProperties: false,
-        required: ['length', 'tm', 'gc', 'min_tm_delta_vs_primer'],
+        required: ['chemistry', 'chemistry_label', 'tm_model', 'length', 'tm', 'gc', 'min_tm_delta_vs_primer'],
         properties: {
+          chemistry: { type: 'string', enum: Object.keys(PROBE_CHEMISTRY) },
+          chemistry_label: { type: 'string' },
+          tm_model: { type: 'string' },
           length: { type: 'array', items: { type: 'integer' } },
           tm: { type: 'array', items: { type: 'number' } },
           gc: { type: 'array', items: { type: 'number' } },
@@ -1367,6 +1429,7 @@ const taqmanTool = define({
     }
     const lines = [
       `Tm model conditions: ${value.conditions.na_mm} mM Na+ / ${value.conditions.mg_mm} mM Mg2+ / ${value.conditions.dntp_mm} mM dNTP / ${value.conditions.primer_nm} nM primer (SantaLucia 1998 NN — an estimate).`,
+      `Probe chemistry: ${value.probe_options.chemistry_label}; ${value.probe_options.tm_model}. Probe window ${value.probe_options.length[0]}-${value.probe_options.length[1]} nt, Tm ${value.probe_options.tm[0]}-${value.probe_options.tm[1]} °C.`,
       `${value.assays.length} TaqMan assay candidate(s), best first:`,
     ];
     for (const [index, assay] of value.assays.entries()) {
@@ -1374,15 +1437,21 @@ const taqmanTool = define({
       lines.push(`#${index + 1} amplicon ${assay.amplicon.start}-${assay.amplicon.end} (${assay.amplicon.length} bp), penalty ${assay.assay_penalty}`);
       lines.push(`  F ${assay.forward.sequence}  (${assay.forward.start}-${assay.forward.end}, Tm ${assay.forward.tm} °C, GC ${assay.forward.gc_percent}%)`);
       lines.push(`  R ${assay.reverse.sequence}  (${assay.reverse.start}-${assay.reverse.end}, Tm ${assay.reverse.tm} °C, GC ${assay.reverse.gc_percent}%)`);
-      lines.push(`  P ${probe.sequence}  (${probe.start}-${probe.end}, ${probe.orientation}-oriented, ${probe.length} nt, Tm ${probe.tm} °C = ${probe.tm_delta_vs_primer >= 0 ? '+' : ''}${probe.tm_delta_vs_primer} °C vs the hotter primer, GC ${probe.gc_percent}%, ${probe.distance_from_primer_3prime} bp from the primer 3' end)`);
+      const margin = probe.tm_delta_vs_primer === undefined
+        ? ''
+        : ` = ${probe.tm_delta_vs_primer >= 0 ? '+' : ''}${probe.tm_delta_vs_primer} °C vs the hotter primer`;
+      lines.push(`  P ${probe.sequence}  (${probe.start}-${probe.end}, ${probe.orientation}-oriented, ${probe.length} nt, Tm ${probe.tm} °C${margin}, GC ${probe.gc_percent}%, ${probe.distance_from_primer_3prime} bp from the primer 3' end)`);
       if (probe.notes.length > 0) lines.push(`    probe flags: ${probe.notes.join('; ')}`);
     }
     for (const note of value.notes) lines.push(`note: ${note}`);
+    if (value.saved_to !== '') lines.push(`ordering CSV (${value.order.length} oligo row(s)) saved to ${value.saved_to}`);
     lines.push('Label the probe 5\' with the reporter and 3\' with the quencher; Tm values are estimates, not an efficiency prediction.');
+    if (value.probe_options.chemistry === 'mgb') lines.push('MGB probes: the reported probe Tm is the unmodified DNA NN estimate — the modification raises it, so verify the final Tm with the supplier before ordering.');
     return lines.join('\n');
   },
-  execute(args) {
+  async execute(args, exec) {
     const probeArgs = {
+      probeChemistry: args.probe_chemistry,
       probeLenMin: args.probe_len_min,
       probeLenMax: args.probe_len_max,
       probeTmMin: args.probe_tm_min,
@@ -1400,7 +1469,26 @@ const taqmanTool = define({
     // Validate the probe windows and the nested primer windows before designing,
     // so a bad option is reported as itself rather than as "no assay found".
     resolveProbeOptions({ ...probeArgs, primer_options: args.primer_options ?? {} });
-    return designTaqmanProbes(args.sequence, { ...probeArgs, primer_options: args.primer_options ?? {} });
+    const design = designTaqmanProbes(args.sequence, { ...probeArgs, primer_options: args.primer_options ?? {} });
+    const order = taqmanOrderRows(design.assays, {
+      chemistry: design.probe_chemistry,
+      reporter: args.reporter,
+      quencher: args.quencher,
+      primerScale: args.primer_scale,
+      probeScale: args.probe_scale,
+      primerPurification: args.primer_purification,
+      probePurification: args.probe_purification,
+    });
+    let savedTo = '';
+    if (args.save_path !== undefined && args.save_path !== '') {
+      const fs = fsService(ctx);
+      const sandboxPolicyService = ctx.get('sandboxPolicy');
+      const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+      const file = workspaceFilePath(args.save_path, exec, policy?.workspaceRoot);
+      await writeWorkspaceFile(fs, file, taqmanOrderCsv(order), policy);
+      savedTo = file;
+    }
+    return { ...design, order, saved_to: savedTo };
   },
 });
 
@@ -1433,12 +1521,16 @@ const multiplexTool = define({
       warn_size_separation_bp: { type: 'integer', description: 'Amplicon size difference below which two bands are called close (default 40).' },
       mispriming_3prime_bases: { type: 'integer', description: 'Length of the 3\' tail checked for unintended annealing (6-10, default 8).' },
       mispriming_max_mismatches: { type: 'integer', description: 'Mismatches tolerated for an own-template annealing site to count (0-2, default 1). Cross-template hits always require a perfect tail.' },
+      annealing_offset_c: { type: 'number', description: 'Recommendation offset below the lowest primer Tm, °C (0-15, default 3).' },
+      annealing_window_c: { type: 'number', description: 'Half-width of the recommended annealing range, °C (0-5, default 1).' },
+      tm_spread_warn_c: { type: 'number', description: 'Primer-Tm spread above which one annealing temperature is called a compromise (°C, default 5).' },
+      primer_concentration_nm: { type: 'number', description: 'Starting primer concentration for the plan, nM (20-1000, default 200).' },
     },
   },
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['compatible', 'target_count', 'template_count', 'primer_count', 'primers', 'interactions', 'conflicting_interactions', 'cross_target_conflicts', 'mispriming', 'cross_template_mispriming', 'amplicons', 'size_conflicts', 'advice', 'notes'],
+    required: ['compatible', 'target_count', 'template_count', 'primer_count', 'primers', 'interactions', 'conflicting_interactions', 'cross_target_conflicts', 'mispriming', 'cross_template_mispriming', 'amplicons', 'size_conflicts', 'annealing', 'primer_concentrations', 'concentration_note', 'advice', 'notes'],
     properties: {
       compatible: { type: 'boolean', description: 'False when any cross-target dimer, cross-template anneal or indistinguishable amplicon size was found.' },
       target_count: { type: 'integer' },
@@ -1553,6 +1645,43 @@ const multiplexTool = define({
           },
         },
       },
+      annealing: {
+        description: 'Annealing-temperature recommendation, or null when no primer sequence was supplied.',
+        oneOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['min_primer_tm', 'max_primer_tm', 'spread_c', 'recommended_c', 'range_c', 'limiting_primer', 'offset_c', 'window_c', 'tm_spread_ok', 'note'],
+            properties: {
+              min_primer_tm: { type: 'number' },
+              max_primer_tm: { type: 'number' },
+              spread_c: { type: 'number' },
+              recommended_c: { type: 'number' },
+              range_c: { type: 'array', items: { type: 'number' } },
+              limiting_primer: { type: 'string', description: 'The lowest-Tm primer, as "target/role".' },
+              offset_c: { type: 'number' },
+              window_c: { type: 'number' },
+              tm_spread_ok: { type: 'boolean' },
+              note: { type: 'string' },
+            },
+          },
+          { type: 'null' },
+        ],
+      },
+      primer_concentrations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['target', 'recommended_nm', 'rationale'],
+          properties: {
+            target: { type: 'string' },
+            recommended_nm: { type: 'number' },
+            rationale: { type: 'string' },
+          },
+        },
+      },
+      concentration_note: { type: 'string' },
       advice: { type: 'array', items: { type: 'string' } },
       notes: { type: 'array', items: { type: 'string' } },
     },
@@ -1566,6 +1695,14 @@ const multiplexTool = define({
     ];
     for (const conflict of value.size_conflicts) {
       lines.push(`  ${conflict.a} (${conflict.a_length ?? '?'} bp) vs ${conflict.b} (${conflict.b_length ?? '?'} bp): ${conflict.difference_bp} bp apart — ${conflict.severity}`);
+    }
+    if (value.annealing !== null) {
+      const annealing = value.annealing;
+      lines.push(`annealing temperature: ${annealing.recommended_c} °C (range ${annealing.range_c[0]}-${annealing.range_c[1]} °C) — lowest-Tm primer ${annealing.limiting_primer} at ${annealing.min_primer_tm} °C, spread ${annealing.spread_c} °C${annealing.tm_spread_ok ? '' : ' (spread above the warning threshold)'}`);
+    }
+    if (value.primer_concentrations.length > 0) {
+      lines.push(`primer concentration plan (nM): ${value.primer_concentrations.map((entry) => `${entry.target} ${entry.recommended_nm}`).join(', ')}`);
+      if (value.concentration_note !== '') lines.push(`  ${value.concentration_note}`);
     }
     for (const entry of value.mispriming.slice(0, 8)) {
       const where = entry.scope === 'other_templates'
@@ -1587,6 +1724,10 @@ const multiplexTool = define({
       warnSizeSeparationBp: args.warn_size_separation_bp,
       mispriming3PrimeBases: args.mispriming_3prime_bases,
       misprimingMaxMismatches: args.mispriming_max_mismatches,
+      annealingOffsetC: args.annealing_offset_c,
+      annealingWindowC: args.annealing_window_c,
+      tmSpreadWarnC: args.tm_spread_warn_c,
+      primerConcentrationNm: args.primer_concentration_nm,
     };
     for (const [key, value] of Object.entries(options)) {
       if (value === undefined) delete options[key];
@@ -2588,12 +2729,20 @@ const CLONE_FEATURE_SCHEMA = {
 
 /** Resolve a vector from either a raw sequence or a .dna/.gb file. */
 async function resolveVector(ctx, exec, args, pathKey = 'vector_path') {
-  if (args.vector !== undefined && args.vector !== null && args.vector !== '') {
-    const sequence = normalizeSequence(args.vector, 'vector');
-    return { sequence, features: [], name: 'vector', circular: true };
+  // Different tools name the inline sequence differently (vector, sequence,
+  // reference). resolveVector used to look only at `args.vector`, while
+  // molbio_extract_region advertises `sequence` and molbio_verify_sanger
+  // advertises `reference` — so the documented argument was silently ignored
+  // and the tool answered "provide either vector or vector_path". The benchmark
+  // found it as an argument failure; accept every declared alias here.
+  const inline = args.vector ?? args.sequence ?? args.reference;
+  if (inline !== undefined && inline !== null && inline !== '') {
+    const sequence = normalizeSequence(inline, 'sequence');
+    const inlineName = args.vector !== undefined ? 'vector' : args.sequence !== undefined ? 'sequence' : 'reference';
+    return { sequence, features: [], name: inlineName, circular: true };
   }
   const path = args[pathKey];
-  if (path === undefined || path === '') throw new MolbioInputError('provide either `vector` (a sequence) or `vector_path` (a .dna/.gb file)');
+  if (path === undefined || path === '') throw new MolbioInputError('provide an inline sequence (vector/sequence/reference) or ' + pathKey + ' (a .dna/.gb/.fa file)');
   const bytes = await readFileBytes(ctx, exec, path);
   const lower = path.toLowerCase();
   if (lower.endsWith('.dna')) {
@@ -4239,7 +4388,7 @@ const virtualGelTool = (ctx) => define({
 
 const alignTool = define({
   name: 'molbio_align',
-  description: 'Locally align two sequences (Smith-Waterman). Returns the aligned strings, the aligned span, identity %, and a list of mismatches/gaps. NOTE the span fields: a_start/b_start are 0-BASED offsets and a_end/b_end are 0-based EXCLUSIVE ends — the 1-based inclusive span is a_start+1..a_end, which is what the rendered text prints. Use it to compare two sequences, check a primer against a template, or verify an edited region.',
+  description: 'Locally align two sequences (Smith-Waterman). Returns the aligned strings, the aligned span, identity %, and a list of mismatches/gaps. NOTE the span fields: a_start/b_start are 0-BASED offsets and a_end/b_end are 0-based EXCLUSIVE ends — the 1-based inclusive span is a_start+1..a_end, which is what the rendered text prints. The pairwise matrix is capped at 50,000,000 cells (sequence1 x sequence2, roughly 7,000 x 7,000 bases); a larger pair is refused with an error rather than exhausting host memory, so align a window or use molbio_verify_sanger, which anchors a read to a reference. Use it to compare two sequences, check a primer against a template, or verify an edited region.',
   parameters: {
     type: 'object',
     required: ['sequence1', 'sequence2'],
@@ -4696,6 +4845,10 @@ async function logoComposition(ctx, exec, args) {
 }
 
 const sequenceLogoTool = (ctx) => define({
+  // Writes an SVG (and may open it) — same rule as every other picture tool.
+  // The default logo.svg path is shared by concurrent calls, so declaring this
+  // safe let two parallel calls overwrite one file.
+  safe: false,
   name: 'molbio_sequence_logo',
   description: 'Render a sequence logo (per-position base composition, letter height = information content in bits) as an SVG file in the session workspace, then open it with the OS default application. Provide exactly one of `alignment` (pre-aligned equal-length sequences, "-" for gaps — e.g. the output of molbio_msa_align), `sequences` (unaligned; aligned first), or `fasta_path`. Frequencies are computed over residues only (gaps excluded and reported per column); IUPAC ambiguity codes are expanded into their base sets. `small_sample` (default true) subtracts the conventional (K-1)/(2·ln2·n) entropy correction, which matters most for few sequences; `score_type: "frequency"` switches to a plain frequency plot (letters sum to 1, y axis 0-1) instead of bits (0-2). Heuristic visualisation of an alignment — it shows the data you give it, and says nothing about function on its own.',
   parameters: {
@@ -4809,7 +4962,10 @@ const GRNA_SCHEMA = {
   properties: {
     rank: { type: 'integer' },
     sequence: { type: 'string' },
-    pam: { type: 'string' },
+    rna_sequence: { type: 'string', description: 'The guide as an RNA oligonucleotide (U for T); reported for Cas13 only.' },
+    pam: { type: 'string', description: 'PAM as read on the guide strand; empty for Cas13, which has a PFS preference rather than a PAM.' },
+    pfs: { type: 'string', description: 'Observed protospacer-flanking site (RNA alphabet), e.g. "A" or "A/GAT"; Cas13 only.' },
+    pfs_ok: { type: 'boolean', description: 'Whether the observed PFS matches the preferred pattern; a preference, not a hard requirement.' },
     strand: { type: 'string', enum: ['forward', 'reverse'] },
     start: { type: 'integer' },
     end: { type: 'integer' },
@@ -4851,6 +5007,8 @@ const GRNA_SCHEMA = {
           end: { type: 'integer' },
           pam: { type: 'string' },
           pam_intact: { type: 'boolean' },
+          pfs: { type: 'string' },
+          pfs_ok: { type: 'boolean' },
           mismatches: { type: 'integer' },
           mismatch_positions: { type: 'array', items: { type: 'integer' } },
         },
@@ -4862,14 +5020,17 @@ const GRNA_SCHEMA = {
 const grnaDesignTool = (ctx) => define({
   safe: (args) => (args.save_path === undefined || args.save_path === '') && (args.map_path === undefined || args.map_path === ''),
   name: 'molbio_grna_design',
-  description: 'Design CRISPR guide RNAs (SpCas9 default `NGG` PAM) over a target sequence and rank them. Scans BOTH strands for PAM-anchored 20 nt protospacers, then reports per guide: 1-based top-strand coordinates, strand, GC%, NN Tm, Primer3-style self-complementarity (self-any/self-end), seed self-complementarity, hairpin Tm, longest poly-T run, and a documented heuristic score. Hard filters (rejected guides are counted, not returned): GC bounds, poly-T, 3\' self-complementarity, G/C homopolymer runs — tune them with gc_min/gc_max/max_t_run/max_self_end. WITH `check_off_target: true` (default) it also indexes the same sequence (both strands), searches every variant of each of the best `max_off_target_guides` candidates within `max_mismatches` substitutions whose PAM is still intact, and folds the hit count into the score (8 points per off-target); substitution off-targets only — no bulges or indels, and a whole-genome search means passing the genome as the target. Output is a ranked list, optionally a CSV for ordering (`save_path`) and a plasmid map with the guides drawn as features (`map_path`). Every score is a heuristic ranking aid, not a validated efficiency or specificity prediction.',
+  description: 'Design CRISPR guide RNAs and rank them. cas_family selects the geometry and the biology: spcas9 (3\' NGG PAM, 20 nt, 3\'-proximal seed), sacas9 (3\' NNGRRT, 21 nt), cas12a (5\' TTTV PAM, 23 nt crRNA, PAM-proximal 5\' seed), cas13a/cas13b/cas13d (RNA targets; Cas13a 3\' H PFS / 28 nt, Cas13b 5\' D + 3\' NAN PFS / 30 nt, Cas13d no PFS / 22 nt). It reports per guide: 1-based top-strand coordinates, strand, GC%, NN Tm (DNA families only; null for Cas13 because the guide is RNA), self-complementarity, family-specific seed self-complementarity, hairpin Tm, longest poly-T run, the observed PFS for Cas13, and a documented heuristic score. Hard filters (rejected guides are counted, not returned): GC bounds, poly-T, 3\' self-complementarity, G/C runs — tune with gc_min/gc_max/max_t_run/max_self_end. WITH check_off_target: true (default) it indexes the supplied sequence, searches each candidate within max_mismatches substitutions, checks the family PAM on the correct side (or no PAM for Cas13), and folds the hit count into the score. A Cas13 PFS is a preference, not a PAM: guides without it are penalised and flagged, and only filtered when require_pfs=true. Substitution off-targets only — no bulges/indels, and a whole-genome search means passing the genome as the target. Output is a ranked list, optionally a CSV (save_path) and a plasmid map (map_path). Every score is a heuristic ranking aid, not a validated efficiency or specificity prediction.',
   parameters: {
     type: 'object',
     properties: {
-      sequence: { type: 'string', description: 'Target sequence (IUPAC; must resolve to A/C/G/T only).' },
+      sequence: { type: 'string', description: 'Target sequence (IUPAC; must resolve to A/C/G/T only). For Cas13, pass the sense (RNA-equivalent) strand unless you set target_strand.' },
       sequence_path: { type: 'string', description: 'Target file (.dna/.gb/FASTA/text), alternative to sequence.' },
-      pam: { type: 'string', description: 'PAM pattern with a degenerate first position, e.g. "NGG" (default, SpCas9), "NNGRRT" (SaCas9).' },
-      guide_length: { type: 'integer', description: 'Protospacer length in nt (default 20).' },
+      cas_family: { type: 'string', enum: CAS_FAMILY_NAMES, description: 'Cas family: spcas9 (default), sacas9, cas12a, cas13a, cas13b, cas13d. Selects PAM/PFS side, guide length and seed definition.' },
+      pam: { type: 'string', description: 'PAM pattern override. Defaults per cas_family: NGG (SpCas9), NNGRRT (SaCas9), TTTV (Cas12a, 5\' of the protospacer). Cas13 has no PAM; leave unset and use require_pfs.' },
+      guide_length: { type: 'integer', description: 'Protospacer length in nt. Defaults per family: 20 (SpCas9), 21 (SaCas9), 23 (Cas12a), 28/30/22 (Cas13a/b/d).' },
+      target_strand: { type: 'string', enum: ['both', 'forward', 'reverse'], description: 'Which strand to scan. Default both for DNA-targeting families; forward for Cas13 (the sense transcript).' },
+      require_pfs: { type: 'boolean', description: 'Cas13 only: reject guides without the preferred PFS (default false — the PFS is a preference and is penalised/reported instead).' },
       max_guides: { type: 'integer', description: 'Maximum number of guides returned (default 20).' },
       region_start: { type: 'integer', description: '1-based start of the region to target (default: whole sequence).' },
       region_end: { type: 'integer', description: '1-based inclusive end of the region to target.' },
@@ -4885,6 +5046,8 @@ const grnaDesignTool = (ctx) => define({
       max_off_target_guides: { type: 'integer', description: 'How many top candidates get the off-target search (default 200).' },
       save_path: { type: 'string', description: 'Optional CSV path listing the guides for ordering.' },
       map_path: { type: 'string', description: 'Optional SVG path for a plasmid map with the guides drawn on it.' },
+      map_title: { type: 'string', description: 'Map title; defaults to "<target name> gRNAs".' },
+      circular: { type: 'boolean', description: 'Draw the map as circular (default true; pass false for a linear construct).' },
       auto_view: { type: 'boolean', description: 'Open the map automatically after writing (default true).' },
       ...ATTACH_IMAGE_PARAM,
     },
@@ -4892,11 +5055,18 @@ const grnaDesignTool = (ctx) => define({
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['target_name', 'target_length', 'pam', 'guide_length', 'candidate_count', 'rejected_count', 'off_target_checked', 'off_target_scanned', 'max_mismatches', 'guides', 'guides_truncated', 'saved_to', 'map_path', 'auto_viewed'],
+    required: ['target_name', 'target_length', 'cas_family', 'cas_label', 'pam', 'pam_side', 'pfs', 'target', 'target_strand', 'require_pfs', 'guide_length', 'candidate_count', 'rejected_count', 'off_target_checked', 'off_target_scanned', 'max_mismatches', 'guides', 'guides_truncated', 'saved_to', 'map_path', 'auto_viewed'],
     properties: {
       target_name: { type: 'string' },
       target_length: { type: 'integer' },
-      pam: { type: 'string' },
+      cas_family: { type: 'string', enum: CAS_FAMILY_NAMES },
+      cas_label: { type: 'string' },
+      pam: { type: 'string', description: 'PAM as read on the guide strand; empty for Cas13.' },
+      pam_side: { type: 'string', enum: ['5prime', '3prime', 'none'] },
+      pfs: { type: 'string', description: 'Preferred PFS description for Cas13; empty for DNA-targeting families.' },
+      target: { type: 'string', enum: ['DNA', 'RNA'] },
+      target_strand: { type: 'string', enum: ['both', 'forward', 'reverse'] },
+      require_pfs: { type: 'boolean' },
       guide_length: { type: 'integer' },
       candidate_count: { type: 'integer' },
       rejected_count: { type: 'integer' },
@@ -4913,16 +5083,22 @@ const grnaDesignTool = (ctx) => define({
     },
   },
   render(value) {
+    const recognition = value.pam === '' ? 'no PAM (Cas13)' : `${value.pam} PAM (${value.pam_side === '5prime' ? "5'" : "3'"} of the protospacer)`;
     const lines = [
-      `${value.candidate_count} candidate(s) for ${value.pam} over ${value.target_name} (${value.target_length} bp), ${value.rejected_count} filtered out; showing ${value.guides.length}${value.guides_truncated ? ' (more available — raise max_guides)' : ''}`,
+      `${value.candidate_count} candidate(s) for ${value.cas_label} [${recognition}] over ${value.target_name} (${value.target_length} bp; target ${value.target}, scanning ${value.target_strand}), ${value.rejected_count} filtered out; showing ${value.guides.length}${value.guides_truncated ? ' (more available — raise max_guides)' : ''}`,
     ];
+    if (value.pfs !== '') lines.push(`PFS preference: ${value.pfs}; require_pfs=${value.require_pfs} (a PFS is a preference, not a PAM).`);
     for (const guide of value.guides) {
       const offTarget = guide.off_target_count === undefined ? '' : `, off-targets ${guide.off_target_count}`;
-      const tm = guide.tm_celsius === null ? 'n/a' : `${guide.tm_celsius} °C`;
-      lines.push(`  ${guide.rank}. ${guide.sequence} ${guide.pam} (${guide.strand} ${guide.start}-${guide.end}) score ${guide.score} — GC ${guide.gc_percent}%, Tm ${tm}${offTarget}`);
+      const tm = guide.tm_celsius === null ? 'n/a (RNA guide)' : `${guide.tm_celsius} °C`;
+      const pfs = guide.pfs === undefined ? '' : `, PFS ${guide.pfs}${guide.pfs_ok ? '' : ' (not preferred)'}`;
+      const rna = guide.rna_sequence === undefined ? '' : ` [RNA ${guide.rna_sequence}]`;
+      lines.push(`  ${guide.rank}. ${guide.sequence}${rna} ${guide.pam || '—'} (${guide.strand} ${guide.start}-${guide.end}) score ${guide.score} — GC ${guide.gc_percent}%, Tm ${tm}${pfs}${offTarget}`);
       for (const note of guide.notes ?? []) lines.push(`       note: ${note}`);
       for (const site of guide.off_target_sites ?? []) {
-        lines.push(`       off-target: ${site.strand} ${site.start}-${site.end} ${site.pam}${site.pam_intact ? '' : ' (PAM disrupted)'} — ${site.mismatches} mismatch(es) at guide position(s) ${site.mismatch_positions.join(', ') || 'none'}`);
+        const sitePam = site.pam === '' ? 'no PAM' : `${site.pam}${site.pam_intact ? '' : ' (PAM disrupted)'}`;
+        const sitePfs = site.pfs === undefined ? '' : `, PFS ${site.pfs}${site.pfs_ok ? '' : ' (not preferred)'}`;
+        lines.push(`       off-target: ${site.strand} ${site.start}-${site.end} ${sitePam}${sitePfs} — ${site.mismatches} mismatch(es) at guide position(s) ${site.mismatch_positions.join(', ') || 'none'}`);
       }
     }
     if (value.saved_to !== '') lines.push(`guide CSV saved to ${value.saved_to}`);
@@ -4933,10 +5109,20 @@ const grnaDesignTool = (ctx) => define({
   },
   async execute(args, exec) {
     const { sequence, name } = await crisprTarget(ctx, exec, args);
-    validateGrnaOptions(args);
+    const family = resolveCasFamily(args.cas_family ?? 'spcas9');
+    if (family.pam === null && args.pam !== undefined) {
+      throw new MolbioInputError(`${family.label} has no PAM; leave pam unset and use require_pfs (the PFS is a preference, not a PAM)`);
+    }
+    if (family.pfs === null && args.require_pfs === true) {
+      throw new MolbioInputError(`${family.label} has no PFS to require; require_pfs only applies to Cas13a/Cas13b`);
+    }
+    validateGrnaOptions(args, family);
     const result = designGrnas(sequence, {
-      pam: args.pam ?? DEFAULT_PAM,
-      guideLength: args.guide_length ?? 20,
+      casFamily: family.id,
+      ...args.pam !== undefined ? { pam: args.pam } : {},
+      ...args.guide_length !== undefined ? { guideLength: args.guide_length } : {},
+      ...args.target_strand !== undefined ? { targetStrand: args.target_strand } : {},
+      requirePfs: args.require_pfs === true,
       maxGuides: args.max_guides ?? 20,
       regionStart: args.region_start ?? 1,
       regionEnd: args.region_end ?? sequence.length,
@@ -4956,7 +5142,9 @@ const grnaDesignTool = (ctx) => define({
     const guides = result.guides.map((guide, index) => ({
       rank: index + 1,
       sequence: guide.sequence,
+      ...guide.rna_sequence !== undefined ? { rna_sequence: guide.rna_sequence } : {},
       pam: guide.pam,
+      ...guide.pfs !== undefined ? { pfs: guide.pfs, pfs_ok: guide.pfs_ok } : {},
       strand: guide.strand,
       start: guide.start,
       end: guide.end,
@@ -4979,7 +5167,7 @@ const grnaDesignTool = (ctx) => define({
       const sandboxPolicyService = ctx.get('sandboxPolicy');
       const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
       const file = workspaceFilePath(args.save_path, exec, policy?.workspaceRoot);
-      await writeWorkspaceFile(fs, file, guideCsv(guides), policy);
+      await writeWorkspaceFile(fs, file, guideCsv(guides, result.cas_family), policy);
       savedTo = file;
     }
     let mapPath = '';
@@ -5008,7 +5196,14 @@ const grnaDesignTool = (ctx) => define({
     return mergeAttachedImage({
       target_name: name,
       target_length: sequence.length,
+      cas_family: result.cas_family,
+      cas_label: result.cas_label,
       pam: result.pam,
+      pam_side: result.pam_side,
+      pfs: result.pfs,
+      target: result.target,
+      target_strand: result.target_strand,
+      require_pfs: result.require_pfs,
       guide_length: result.guide_length,
       candidate_count: result.candidate_count,
       rejected_count: result.rejected_count,
@@ -5025,12 +5220,16 @@ const grnaDesignTool = (ctx) => define({
 });
 
 /** CSV of the returned guides, for pasting into an ordering sheet. */
-function guideCsv(guides) {
-  const header = 'rank,sequence,pam,strand,start,end,gc_percent,tm_celsius,self_any,self_end,longest_t_run,off_target_count,score';
+function guideCsv(guides, casFamily) {
+  const header = 'rank,cas_family,sequence,rna_sequence,pam,pfs,pfs_ok,strand,start,end,gc_percent,tm_celsius,self_any,self_end,longest_t_run,off_target_count,score';
   const rows = guides.map((guide) => [
     guide.rank,
+    casFamily,
     guide.sequence,
+    guide.rna_sequence ?? '',
     guide.pam,
+    guide.pfs ?? '',
+    guide.pfs_ok === undefined ? '' : guide.pfs_ok,
     guide.strand,
     guide.start,
     guide.end,
@@ -5222,6 +5421,342 @@ function gcPercentOf(sequence) {
   }
   return gc + at === 0 ? 0 : Math.round((gc / (gc + at)) * 1000) / 10;
 }
+
+/** One error row; a bad file must not abort the batch. */
+function batchErrorRow(path, format, error) {
+  return {
+    path,
+    format: ['fasta', 'fastq', 'genbank', 'snapgene', 'text'].includes(format) ? format : 'unknown',
+    topology: 'unknown',
+    entries: 0,
+    total_bases: 0,
+    gc_percent: 0,
+    n_percent: 0,
+    feature_count: 0,
+    enzyme_sites: [],
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
+/** Resolve the files a batch call will read, without reading their contents. */
+async function batchFileList(ctx, exec, args, policy, root) {
+  const fs = fsService(ctx);
+  const maxBytes = Math.round((args.max_file_mb ?? 50) * 1024 * 1024);
+  const files = [];
+  let truncated = false;
+  if (Array.isArray(args.paths) && args.paths.length > 0) {
+    for (const supplied of args.paths) {
+      const absolute = workspaceFilePath(supplied, exec, root);
+      const target = await fs.resolve(absolute);
+      const label = relative(root, absolute).split(sep).join('/');
+      files.push({ target, label });
+    }
+    return { fs, files, truncated, maxBytes };
+  }
+  if (typeof fs.listDir !== 'function') {
+    throw new MolbioInputError('this harness fs service has no listDir; pass an explicit paths array instead of a directory');
+  }
+  const directory = workspaceFilePath(args.directory ?? '.', exec, root);
+  const directoryTarget = await fs.resolve(directory);
+  const info = await fs.stat(directoryTarget);
+  if (info === undefined || info.type !== 'directory') {
+    throw new MolbioInputError('batch directory ' + JSON.stringify(args.directory ?? '.') + ' is not a directory');
+  }
+  const pattern = globToRegExp(args.pattern ?? '*');
+  const recursive = args.recursive === true;
+  const maxFiles = Math.min(args.max_files ?? 50, BATCH_LIMITS.maxFiles);
+  let totalBytes = 0;
+  const walk = async (target, prefix, depth) => {
+    if (files.length >= maxFiles) {
+      truncated = true;
+      return;
+    }
+    const entries = await fs.listDir(target);
+    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.name.startsWith('.')) continue;
+      if (files.length >= maxFiles) {
+        truncated = true;
+        return;
+      }
+      const label = prefix === '' ? entry.name : prefix + '/' + entry.name;
+      if (entry.type === 'directory') {
+        if (recursive && depth < 8) await walk(entry.target, label, depth + 1);
+        continue;
+      }
+      if (entry.type !== 'file') continue;
+      const haystack = String(args.pattern ?? '').includes('/') ? label : entry.name;
+      if (!pattern.test(haystack)) continue;
+      files.push({ target: entry.target, label, size: entry.size });
+      totalBytes += entry.size ?? 0;
+      if (totalBytes > BATCH_LIMITS.maxTotalBytes) {
+        truncated = true;
+        return;
+      }
+    }
+  };
+  const directoryLabel = relative(root, directory).split(sep).join('/');
+  await walk(directoryTarget, directoryLabel === '.' ? '' : directoryLabel, 0);
+  if (files.length >= maxFiles) truncated = true;
+  return { fs, files, truncated, maxBytes };
+}
+
+const batchAnalyzeTool = (ctx) => define({
+  safe: false,
+  name: 'molbio_batch_analyze',
+  description: 'Run the SAME summary analysis over many sequence files in a workspace directory (or an explicit paths array) and write one CSV/TSV table. It parses FASTA, FASTQ, GenBank and SnapGene .dna with the same parsers the single-file tools use, then reports per file: format, topology, entries, total bases, GC%, N%, feature count, mean length, and — when requested — ORF count/longest ORF and restriction-site counts for a named enzyme list. A file that cannot be parsed becomes an error ROW, not a failed batch, so one bad .dna cannot hide the other files. Use it for "check all 60 plasmids/reads" workflows; it does not replace the single-file tools when you need their detailed output. File reads and the table write go through ctx.fs under the session sandbox policy.',
+  parameters: {
+    type: 'object',
+    properties: {
+      paths: { type: 'array', items: { type: 'string' }, description: 'Explicit workspace-relative or absolute file paths; when given, directory/pattern are ignored.' },
+      directory: { type: 'string', description: 'Directory to scan when paths is omitted (default ".").' },
+      pattern: { type: 'string', description: 'Basename glob (*, ?) to select files (default "*"); include "/" to match the relative path.' },
+      recursive: { type: 'boolean', description: 'Descend into subdirectories (default false, depth cap 8).' },
+      max_files: { type: 'integer', description: 'Maximum files in one batch (1-500, default 50).' },
+      max_file_mb: { type: 'number', description: 'Per-file size cap in MB (1-200, default 50).' },
+      analysis: { type: 'string', enum: ['summary', 'orf', 'enzymes', 'all'], description: 'summary = length/GC/N/features; orf = summary + ORF counts; enzymes = summary + site counts (needs enzymes); all = both. Default summary.' },
+      enzymes: { type: 'array', items: { type: 'string' }, description: 'Enzyme names for analysis=enzymes/all (max 20).' },
+      orf_min_aa: { type: 'integer', description: 'Minimum ORF length in amino acids for analysis=orf/all (default 30).' },
+      codon_table: { type: 'string', enum: GENETIC_CODES, description: 'Genetic code for ORFs (default standard).' },
+      circular: { type: 'boolean', description: 'Treat files without declared topology as circular for enzyme site counts (default false; GenBank/SnapGene topology always wins).' },
+      format: { type: 'string', enum: ['csv', 'tsv'], description: 'Table delimiter (default csv).' },
+      output_path: { type: 'string', description: 'Table path (default batch-report.csv, or batch-report.tsv for format=tsv).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['analysis', 'format', 'file_count', 'analyzed_count', 'error_count', 'truncated', 'columns', 'files', 'output_path', 'notes'],
+    properties: {
+      analysis: { type: 'string', enum: ['summary', 'orf', 'enzymes', 'all'] },
+      format: { type: 'string', enum: ['csv', 'tsv'] },
+      file_count: { type: 'integer' },
+      analyzed_count: { type: 'integer' },
+      error_count: { type: 'integer' },
+      truncated: { type: 'boolean', description: 'True when the file or byte limit stopped the scan.' },
+      columns: { type: 'array', items: { type: 'string' } },
+      files: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'format', 'topology', 'entries', 'total_bases', 'gc_percent', 'n_percent', 'feature_count', 'enzyme_sites', 'error'],
+          properties: {
+            path: { type: 'string' },
+            format: { type: 'string', enum: ['fasta', 'fastq', 'genbank', 'snapgene', 'text', 'unknown'] },
+            topology: { type: 'string', enum: ['circular', 'linear', 'unknown'] },
+            entries: { type: 'integer' },
+            total_bases: { type: 'integer' },
+            gc_percent: { type: 'number' },
+            n_percent: { type: 'number' },
+            feature_count: { type: 'integer' },
+            mean_length: { type: 'number' },
+            quality_mean: { type: 'number' },
+            orf_count: { type: 'integer' },
+            longest_orf_aa: { type: 'integer' },
+            orf_skipped: { type: 'boolean' },
+            enzyme_sites: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['name', 'sites'],
+                properties: { name: { type: 'string' }, sites: { type: 'integer' } },
+              },
+            },
+            error: { type: 'string' },
+          },
+        },
+      },
+      output_path: { type: 'string' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [
+      'batch ' + value.analysis + ': ' + value.analyzed_count + '/' + value.file_count + ' file(s) analysed, ' + value.error_count + ' error(s)' + (value.truncated ? ' (file limit reached)' : ''),
+      'table: ' + value.output_path + ' (' + value.columns.length + ' columns, ' + value.format + ')',
+    ];
+    for (const row of value.files.slice(0, 20)) {
+      const parts = [row.total_bases + ' bp', 'GC ' + row.gc_percent + '%', 'N ' + row.n_percent + '%', row.feature_count + ' feature(s)'];
+      if (row.orf_count !== undefined) parts.push(row.orf_count + ' ORF(s), longest ' + row.longest_orf_aa + ' aa');
+      if (row.mean_length !== undefined) parts.push('mean ' + row.mean_length + ' bp');
+      if (row.enzyme_sites.length > 0) parts.push(row.enzyme_sites.map((entry) => entry.name + ' ' + entry.sites).join(', '));
+      lines.push('  ' + row.path + ' [' + row.format + ', ' + row.topology + ']: ' + parts.join(', ') + (row.error === '' ? '' : ' — ERROR: ' + row.error));
+    }
+    if (value.files.length > 20) lines.push('  ... ' + (value.files.length - 20) + ' more row(s) in ' + value.output_path);
+    for (const note of value.notes) lines.push('note: ' + note);
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const policy = ctx.get('sandboxPolicy')?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+    const root = policy?.workspaceRoot ?? exec?.agent?.session?.header?.cwd ?? process.cwd();
+    const analysis = args.analysis ?? 'summary';
+    const wantsOrf = analysis === 'orf' || analysis === 'all';
+    const wantsEnzymes = analysis === 'enzymes' || analysis === 'all';
+    const enzymes = wantsEnzymes ? (args.enzymes ?? []) : [];
+    if (analysis === 'enzymes' && enzymes.length === 0) throw new MolbioInputError('analysis=enzymes needs a non-empty enzymes array');
+    if (enzymes.length > BATCH_LIMITS.maxEnzymes) throw new MolbioInputError('enzymes has ' + enzymes.length + ' entries; the limit is ' + BATCH_LIMITS.maxEnzymes);
+    for (const name of enzymes) {
+      if (!ENZYME_NAMES.includes(name)) throw new MolbioInputError('unknown enzyme ' + JSON.stringify(name) + '; use molbio_enzyme_lookup to list names');
+    }
+    const maxFiles = args.max_files ?? 50;
+    if (!Number.isInteger(maxFiles) || maxFiles < 1 || maxFiles > BATCH_LIMITS.maxFiles) throw new MolbioInputError('max_files must be an integer between 1 and ' + BATCH_LIMITS.maxFiles);
+    const maxFileMb = args.max_file_mb ?? 50;
+    if (typeof maxFileMb !== 'number' || !Number.isFinite(maxFileMb) || maxFileMb < 1 || maxFileMb > 200) throw new MolbioInputError('max_file_mb must be a number between 1 and 200');
+    if (wantsOrf) {
+      const orfMin = args.orf_min_aa ?? 30;
+      if (!Number.isInteger(orfMin) || orfMin < 1 || orfMin > 100000) throw new MolbioInputError('orf_min_aa must be an integer between 1 and 100000');
+    }
+    const { fs, files, truncated, maxBytes } = await batchFileList(ctx, exec, args, policy, root);
+    const rows = [];
+    for (const file of files) {
+      const format = detectBatchFormat(file.label, '');
+      try {
+        const info = file.size === undefined ? await fs.stat(file.target) : { size: file.size };
+        if (info?.size !== undefined && info.size > maxBytes) {
+          rows.push(batchErrorRow(file.label, format, 'file is ' + info.size + ' bytes, above the ' + maxBytes + '-byte batch limit'));
+          continue;
+        }
+        const text = format === 'snapgene' ? undefined : await fs.readText(file.target, exec?.signal);
+        const bytes = format === 'snapgene' ? await fs.readBytes(file.target, exec?.signal, maxBytes) : undefined;
+        rows.push(analyzeSequenceFile({
+          path: file.label,
+          format,
+          text,
+          bytes,
+          enzymes,
+          orfMinAa: wantsOrf ? args.orf_min_aa ?? 30 : 0,
+          circular: args.circular === true,
+          codonTable: args.codon_table ?? 'standard',
+        }));
+      } catch (error) {
+        rows.push(batchErrorRow(file.label, format, error));
+      }
+    }
+    const columns = batchColumns({ orfs: wantsOrf, enzymes });
+    const delimiter = args.format === 'tsv' ? '\t' : ',';
+    const defaultName = args.format === 'tsv' ? 'batch-report.tsv' : 'batch-report.csv';
+    const outputPath = workspaceFilePath(args.output_path ?? defaultName, exec, root);
+    await writeWorkspaceFile(fs, outputPath, batchTable(rows, columns, delimiter), policy);
+    const notes = [
+      'A file that could not be parsed is an error row in the table; the other files were still analysed.',
+      'Enzyme site counts use the file topology when GenBank/SnapGene declares one, otherwise the circular option.',
+      wantsOrf ? 'ORFs use the selected genetic code and the standard ATG-start rule; a long ORF is not evidence of a real gene.' : 'ORF analysis was not requested.',
+      'The table is the deliverable; use the single-file tools when their detailed output is needed.',
+    ];
+    return {
+      analysis,
+      format: args.format ?? 'csv',
+      file_count: files.length,
+      analyzed_count: rows.filter((row) => row.error === '').length,
+      error_count: rows.filter((row) => row.error !== '').length,
+      truncated,
+      columns,
+      files: rows,
+      output_path: outputPath,
+      notes,
+    };
+  },
+});
+
+const silentSiteTool = define({
+  name: 'molbio_silent_site_mutagenesis',
+  description: 'Add or remove a restriction site by changing CODONS ONLY to synonyms, so the protein sequence is unchanged. Give a coding sequence, the enzyme and action=remove|add: the tool enumerates synonymous codons for every codon overlapping the site, keeps the variants that destroy/create the site, and returns the exact base changes, the mutation texts (for molbio_mutagenesis_primers) and the mutated sequence. frame selects the reading frame (1-3); host ranks synonymous choices by that host\'s codon usage. Only enzymes with an unambiguous A/C/G/T recognition site are supported; a degenerate site (e.g. GGTNACC) is refused instead of guessed. A silent change is silent for the protein, not necessarily for mRNA structure, splicing or codon usage — review the note before ordering.',
+  parameters: {
+    type: 'object',
+    required: ['sequence', 'enzyme'],
+    properties: {
+      sequence: requiredString('Coding sequence (IUPAC; must resolve to A/C/G/T only).'),
+      enzyme: requiredString('Enzyme name from the catalogue, e.g. EcoRI, BamHI, HindIII.'),
+      action: { type: 'string', enum: ['remove', 'add'], description: 'Remove an existing site or add a new one (default remove).' },
+      frame: { type: 'integer', description: 'Reading frame of the coding sequence: 1, 2 or 3 (default 1).' },
+      codon_table: { type: 'string', enum: GENETIC_CODES, description: 'Genetic code (default standard).' },
+      host: { type: 'string', enum: CODON_HOSTS, description: 'Optional host for ranking synonymous codons by usage (e_coli/yeast/human).' },
+      region_start: { type: 'integer', description: '1-based start of the region to search (default whole sequence).' },
+      region_end: { type: 'integer', description: '1-based inclusive end of the region.' },
+      max_solutions: { type: 'integer', description: 'Solutions returned (1-20, default 5).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['enzyme', 'site', 'display', 'action', 'frame', 'codon_table', 'host', 'sites_before', 'solutions', 'notes'],
+    properties: {
+      enzyme: { type: 'string' },
+      site: { type: 'string', description: 'Recognition sequence without the cut mark.' },
+      display: { type: 'string', description: 'Recognition sequence with the cut mark.' },
+      action: { type: 'string', enum: ['remove', 'add'] },
+      frame: { type: 'integer' },
+      codon_table: { type: 'string', enum: GENETIC_CODES },
+      host: { type: 'string' },
+      sites_before: { type: 'integer', description: 'Physical recognition sites before the change (palindromic sites counted once).' },
+      solutions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['site_start', 'site_end', 'strand', 'site', 'change_count', 'codon_usage_penalty', 'changes', 'mutation_texts', 'mutated_sequence', 'remaining_sites'],
+          properties: {
+            site_start: { type: 'integer' },
+            site_end: { type: 'integer' },
+            strand: { type: 'string', enum: ['forward', 'reverse'] },
+            site: { type: 'string', description: 'Site sequence as it reads on the top strand (forward or reverse-complemented).' },
+            change_count: { type: 'integer' },
+            codon_usage_penalty: { type: 'number', description: 'Sum of host codon-preference ranks (lower is better; 0 without a host).' },
+            changes: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['position', 'from', 'to', 'codon_index', 'codon_before', 'codon_after', 'amino_acid'],
+                properties: {
+                  position: { type: 'integer', description: '1-based position in the input sequence.' },
+                  from: { type: 'string' },
+                  to: { type: 'string' },
+                  codon_index: { type: 'integer', description: '1-based codon number in the selected frame.' },
+                  codon_before: { type: 'string' },
+                  codon_after: { type: 'string' },
+                  amino_acid: { type: 'string' },
+                },
+              },
+            },
+            mutation_texts: { type: 'array', items: { type: 'string' }, description: 'Forms like A123G, directly accepted by molbio_mutagenesis_primers.' },
+            mutated_sequence: { type: 'string' },
+            remaining_sites: { type: 'integer' },
+          },
+        },
+      },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [
+      value.enzyme + ' (' + value.display + ') ' + value.action + ': ' + value.sites_before + ' site(s) before; ' + value.solutions.length + ' silent solution(s), frame ' + value.frame + ', code ' + value.codon_table + (value.host === '' ? '' : ', host ' + value.host),
+    ];
+    for (const [index, solution] of value.solutions.entries()) {
+      lines.push('#' + (index + 1) + ' site ' + solution.site_start + '-' + solution.site_end + ' (' + solution.strand + ', ' + solution.site + '), ' + solution.change_count + ' base change(s), remaining site(s) ' + solution.remaining_sites);
+      for (const change of solution.changes) {
+        lines.push('    ' + change.from + change.position + change.to + ': codon ' + change.codon_index + ' ' + change.codon_before + ' -> ' + change.codon_after + ' (' + change.amino_acid + ')');
+      }
+      lines.push('    mutation texts: ' + solution.mutation_texts.join(' ') + '  (feed to molbio_mutagenesis_primers)');
+      lines.push('    mutated sequence: ' + solution.mutated_sequence);
+    }
+    for (const note of value.notes) lines.push('note: ' + note);
+    return lines.join('\n');
+  },
+  execute(args) {
+    return designSilentSite(args.sequence, {
+      enzyme: args.enzyme,
+      action: args.action ?? 'remove',
+      frame: args.frame ?? 1,
+      codonTable: args.codon_table ?? 'standard',
+      host: args.host,
+      regionStart: args.region_start,
+      regionEnd: args.region_end,
+      maxSolutions: args.max_solutions ?? 5,
+    });
+  },
+});
 
 const extractRegionTool = (ctx) => define({
   safe: (args) => args.output_path === undefined || args.output_path === '',
@@ -6974,16 +7509,16 @@ const paperRemoveTool = (ctx) => define({
 
 const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available with the molbio_* prefix:
 - Sequence math: molbio_reverse_complement, molbio_gc_content, molbio_translate, molbio_restriction_sites, molbio_methylation_check (which enzymes a Dam/Dcm-methylated template blocks, plus the enzymes that survive), molbio_double_digest (two enzymes: per-enzyme and combined fragments + whether they share a buffer).
-- Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check, molbio_design_taqman (hydrolysis-probe assay: primer pair + probe with the no-5'-G / probe-Tm-margin rules), molbio_multiplex_check (whether several primer pairs can share one tube: cross-dimers, cross-template annealing, gel-resolvable amplicon sizes).
+- Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check, molbio_design_taqman (hydrolysis-probe assay: primer pair + probe with the no-5'-G / probe-Tm-margin rules; probe_chemistry='mgb' for shorter MGB probes with an explicitly unmodified NN Tm, and save_path for an ordering CSV of F/R/P with modifications/scale/purification), molbio_multiplex_check (whether several primer pairs can share one tube: cross-dimers, cross-template annealing, gel-resolvable amplicon sizes, plus an annealing-temperature recommendation and a size-balanced starting primer-concentration plan).
 - qPCR and bench math: molbio_qpcr_analysis, molbio_lab_math.
 - Plasmids: molbio_parse_genbank (GenBank text), molbio_parse_snapgene (SnapGene .dna files — researchers usually have .dna files, so when the user names a .dna path use this), molbio_plasmid_map_file (reads a .dna/.gb file and writes the map SVG directly into the workspace in one call), molbio_plasmid_map (same, from a sequence + features). Both map tools WRITE the .svg file themselves and return svg_path — never try to reproduce SVG text in the conversation. Every image-writing tool (maps, plots, virtual gels, qPCR standard curves, clone/Golden Gate maps) opens the generated SVG automatically with the OS default application (auto_view defaults to true; the result's auto_viewed field says whether the hand-off worked), so there is normally nothing for the user to open manually; pass auto_view: false only when the caller explicitly wants no viewer window.
-- Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_golden_gate (type IIS multi-fragment assembly: the tool designs the 4 bp junctions and the fragments-to-order, and simulates the final plasmid — use it for BsaI-style Golden Gate instead of reasoning about overhangs by hand), molbio_enzyme_lookup (enzyme catalog: recognition/cut geometry/overhang, plus every cut of a sequence in both strand orientations), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers).
+- Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_golden_gate (type IIS multi-fragment assembly: the tool designs the 4 bp junctions and the fragments-to-order, and simulates the final plasmid — use it for BsaI-style Golden Gate instead of reasoning about overhangs by hand), molbio_enzyme_lookup (enzyme catalog: recognition/cut geometry/overhang, plus every cut of a sequence in both strand orientations), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers), molbio_silent_site_mutagenesis (add or remove a restriction site with synonymous codons only, keeping the protein unchanged; the returned mutation_texts feed molbio_mutagenesis_primers).
 - Verification: molbio_verify_sanger (read .ab1/.seq traces, align to the reference plasmid — circular-aware — and report mismatches/indels/amino-acid changes).
 - Proteins: molbio_protein_props (MW/pI/A280/GRAVY — estimates), molbio_peptide_digest (trypsin etc. for MS), molbio_codon_optimize (E. coli/yeast/human, can avoid restriction sites), molbio_helical_wheel (Schiffer-Edmundson wheel + Eisenberg hydrophobic moment, written as an SVG), molbio_hydropathy_plot (Kyte-Doolittle sliding-window profile with the 1.6 threshold peaks, written as an SVG).
 - Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (experiment-data charts written to files), molbio_virtual_gel (expected band pattern as an SVG gel image with a size ladder).
 - molbio_plot kinds: bar (labelled values + optional SD error bars) and scatter (x/y + optional least-squares line) take their arrays directly in the call; the table kinds read a workspace CSV/TSV — pass data_path plus columns naming which column plays which role, or pass data with the table text inline. Use a table kind whenever the numbers are already in a file: do NOT retype a column into the call. line = one series per group_column; histogram = distribution of one column (bins default to Freedman-Diaconis unless you pass bins); box = Q1-Q3 box, median, 1.5xIQR whiskers, outliers as dots; violin = the same samples as a kernel-density silhouette with the box summary inside (use it when the SHAPE matters, not just the five numbers); volcano = effect size against significance from a log2-fold-change column and a p column, with dashed thresholds — it computes no statistics of its own, so the p-values must already be in the table; heatmap = a row x column matrix, one cell per value plus a colour bar, accepting either a wide table (first column = row labels, the rest = samples) or the long form (columns.row/column/value), with scale row_zscore|log2 as an explicitly-reported DISPLAY transform. The result carries the computed statistics (medians, quartiles, outliers, bin counts, axis ranges, significance counts, matrix extent), so quote THOSE instead of estimating values off the picture.
-- Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_sequence_logo (draws the same alignment as a sequence logo SVG — pass the molbio_msa_align output rows as the alignment argument; letters are sized by per-position information content), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
-- CRISPR: molbio_grna_design (SpCas9-style guide RNAs over a sequence or plasmid file: both strands scanned for the PAM, guides filtered on GC/poly-T/self-complementarity and ranked, with a mismatch-tolerant off-target search over the same sequence — reaching a whole genome simply means passing it as the target). Pass the top candidates on for ordering with save_path (CSV) or map_path (SVG map); the ranking is a heuristic and says so, so present it as candidate ranking, never as a validated efficiency prediction.
+- Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_sequence_logo (draws the same alignment as a sequence logo SVG — pass the molbio_msa_align output rows as the alignment argument; letters are sized by per-position information content), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_batch_analyze (run one summary/ORF/enzyme analysis over every matching FASTA/FASTQ/GenBank/.dna file in a directory and write one CSV/TSV table), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
+- CRISPR: molbio_grna_design (family-aware guide RNAs over a sequence or plasmid file: cas_family spcas9/sacas9/cas12a/cas13a/cas13b/cas13d selects the PAM side, crRNA length, seed and target type — Cas12a uses a 5' TTTV PAM and 23 nt crRNA; Cas13 targets RNA and reports a PFS preference rather than a PAM. Both strands are scanned for DNA families, the sense strand by default for Cas13; guides are filtered on GC/poly-T/self-complementarity and ranked, with a mismatch-tolerant off-target search over the same sequence — reaching a whole genome simply means passing it as the target). Pass the top candidates on for ordering with save_path (CSV) or map_path (SVG map); the ranking is a heuristic and says so, so present it as candidate ranking, never as a validated efficiency prediction.
 - Map extras: pass gc_skew: true for the GC skew ring, show_unique_cutters: true to mark single-cutting enzymes on the map.
 - Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — works only when the deployment provides web fetch), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
 - Bench analysis (v19): molbio_fastq_qc (read-level QC for a FASTQ file: per-base quality with quartiles, per-read quality, base content, GC distribution, length, exact duplication, over-represented sequences, adapter screen, plus a report SVG — use it for "is this run good"), molbio_codon_usage (CAI/RSCU/Nc/GC3, rare-codon list and CDS CpG against E. coli/yeast/human — use it for "will this gene express"; it explains, molbio_codon_optimize rewrites), molbio_phylogenetic_tree (distance method: p-distance/JC/K2P/Tamura-Nei, UPGMA or neighbour-joining, bootstrap support, consensus, Newick file and an SVG tree — it is NOT a maximum-likelihood or Bayesian analysis, and bootstrap percentages are not p-values), molbio_pcr_simulate (where a primer pair amplifies: product sizes and coordinates on both strands, mismatch detail, the 3'-end exact-match requirement, circular templates, screening other templates, and an expected gel — use it for "what band will I see"), molbio_gc_composition (sliding-window GC, CpG islands under the Gardiner-Garden or Takai criteria, GC/AT skew with the cumulative-skew origin/terminus indication, dinucleotide obs/exp, entropy, complexity, N50/L50, plus a figure — use it for "is this a promoter or an origin").
@@ -7014,7 +7549,7 @@ export function apply(ctx) {
     labMathTool,
     designPrimersTool,
     intronPrimersTool(ctx),
-    taqmanTool,
+    taqmanTool(ctx),
     multiplexTool,
     methylationTool,
     doubleDigestTool,
@@ -7027,6 +7562,7 @@ export function apply(ctx) {
     goldenGateTool(ctx),
     clonePrimersTool(ctx),
     mutagenesisTool,
+    silentSiteTool,
     verifySangerTool(ctx),
     proteinPropsTool,
     peptideDigestTool,
@@ -7043,6 +7579,7 @@ export function apply(ctx) {
     sequenceLogoTool(ctx),
     grnaDesignTool(ctx),
     fastaFastqTool(ctx),
+    batchAnalyzeTool(ctx),
     fastqQcTool(ctx),
     codonUsageTool,
     phylogeneticTreeTool(ctx),

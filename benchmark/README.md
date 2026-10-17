@@ -76,11 +76,11 @@ Measured, and printed so the answer can be audited:
 
 ```
 $ touch crispr.mjs && node benchmark/run.mjs --list --changed
-1 of 56 task(s) selected — --tools molbio_grna_design --changed
+1 of 61 task(s) selected — --tools molbio_grna_design --changed
   (from --changed; 2 module(s) affected: crispr.mjs, index.mjs)
 
 $ touch lib.mjs && node benchmark/run.mjs --list --changed
-55 of 56 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
+55 of 61 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
 ```
 
 `lib.mjs` selecting nearly everything is the **correct** answer, not a failure to
@@ -102,7 +102,7 @@ you changed, so its task runs even if it is full-only.
 | `--tools a,b,c` / `primer_*` | the union | you changed a few |
 | `--changed --tools X` | the INTERSECTION | "of what I changed, test X" |
 | (default) | **core** — 14 tasks | a broad smoke of the catalog |
-| `--tier full` | all 56, 58/58 tools | before a release |
+| `--tier full` | all 61, 60/60 tools | before a release |
 
 The two `--tools` operators are stated because confusing them is the difference
 between testing what you changed and testing **less** than that: alone it unions,
@@ -125,7 +125,7 @@ widens to the full suite, with the reason printed.
 | a module **only** imported by other modules (`svgio.mjs`) | partial — its importers' tasks |
 | docs, changelog, `test/`, `benchmark/`, config | **`none`: nothing to run** |
 
-`none` is deliberately NOT `full`. A documentation commit that triggers 56 model
+`none` is deliberately NOT `full`. A documentation commit that triggers 61 model
 calls is how a `--changed` default gets switched off and the full suite goes back
 to running every time — the exact behaviour this option exists to prevent. It is
 only reachable with an explicit `--changed`, so everything else still fails safe,
@@ -134,7 +134,7 @@ and `test/benchmark-changed.mjs` asserts both directions.
 ### The part that still runs in full, on purpose
 
 A model run with `--changed` or `--tools` first executes the **whole** offline
-gate: all 56 tasks' `where: "tool"` expectations are recomputed against the shipped
+gate: all 61 tasks' `where: "tool"` expectations are recomputed against the shipped
 tools (no model, a few hundred milliseconds). That is what makes partial runs safe
 — the expected values are re-proven for the tasks you skipped, so "skipped because
 unchanged" is a checked claim, not a remembered one.
@@ -168,7 +168,7 @@ asserting whatever the tool happened to emit.
 
 Two guards make "someone forgot" fail loudly instead of quietly:
 
-- `test/benchmark-coverage.mjs` asserts **58/58 registered tools are covered by
+- `test/benchmark-coverage.mjs` asserts **60/60 registered tools are covered by
   at least one task**. Adding a tool without a task is a red build. It also
   asserts the fixtures' premises (the Golden Gate backbone is BsaI-free, the
   mutagenesis template still admits a primer pair), that a `covers` entry names a
@@ -209,7 +209,7 @@ recorded tool text, and it says so instead of silently scoring empty text).
 
 ## The headless profile (`benchmark/profile.mjs`)
 
-The model-facing way to get the 58 tools is the **Molecular Biology Lab** agent
+The model-facing way to get the 60 tools is the **Molecular Biology Lab** agent
 preset. The benchmark cannot use it, and the reason is structural rather than
 configurational — `dsh-headless/lib/index.js` refuses an adoption whose session
 records a preset:
@@ -367,6 +367,25 @@ measurements.
 These are recorded rather than scored, because each one is a question about the
 plugin or the harness, not about the model. The first is a **measured plugin
 defect**.
+
+### `molbio_extract_region` advertised `sequence`, but the resolver only read `vector`
+
+The 0.20.0 full run (61 tasks) failed `region-extract` on **arguments**: the model
+called `molbio_extract_region` with the parameter the schema advertises
+(`sequence`), and the tool answered "provide either vector (a sequence) or
+vector_path". The schema/reality split was the defect: `resolveVector` read only
+`args.vector`, so `sequence` was silently ignored. **Fixed in 0.20.0** by
+accepting every declared inline alias (`vector`/`sequence`/`reference`), with a
+smoke regression that calls the tool through the advertised `sequence` argument.
+
+The same run also showed four **assertion** failures rather than product defects:
+`plasmid-digest` (the model wrote `2,840`, the assertion `2840`),
+`protein-props` (`3,935` vs `3935`), `codon-optimize` (the model said
+`EcoRI-free`, the assertion demanded `no EcoRI`), and `chart-volcano` (the task
+asked for `de.svg`, the assertion pinned `volcano.svg`). `--replay` turns all four
+to PASS; the region-extract live rerun was blocked by the DSH sandbox approval
+for headless subprocesses, so the last measured score is **60/61**, with the
+underlying bug fixed and pinned by smoke.
 
 ### `molbio_design_primers` prints the forward/reverse roles reversed
 
@@ -548,7 +567,7 @@ implementation happens to return for one set of arguments.**
   and `args_ok` both true is a *reporting* finding, not a tool bug.
 - **Multimodal hand-off.** `attach_image` is exercised as an argument at most; no
   assertion inspects a decoded PNG (that is `svgpng.mjs` and `contract.mjs`).
-- **Most of the toolset is now covered, but shallowly.** 56 tasks touch all 58
+- **Most of the toolset is now covered, but shallowly.** 61 tasks touch all 60
   tools; most tools appear in exactly one task, and several appearances are a
   single argument check rather than a full workflow. Breadth is asserted by
   `test/benchmark-coverage.mjs`; depth is not, and cannot be.

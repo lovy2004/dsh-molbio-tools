@@ -73,6 +73,7 @@ const FILE_SETUPS = {
   'chart-violin': { 'ct.csv': FIXTURES.CT_CSV },
   'chart-volcano': { 'de.csv': FIXTURES.DE_CSV },
   'chart-heatmap': { 'expression.tsv': FIXTURES.HEATMAP_TSV },
+  'batch-analysis': { 'pUC118.gb': GENBANK_TEXT },
 };
 
 /**
@@ -187,6 +188,9 @@ export function invocationsFor(task) {
     'taqman-assay': () => [
       { tool: 'molbio_design_taqman', args: { sequence: QPCR_TEMPLATE, probe_tm_min: 60, probe_tm_max: 72, max_amplicons: 1, max_probes_per_amplicon: 1 } },
     ],
+    'taqman-mgb': () => [
+      { tool: 'molbio_design_taqman', args: { sequence: makeTemplate(400, 7), probe_chemistry: 'mgb', save_path: at('mgb-order.csv') } },
+    ],
     'intron-qpcr': () => [
       {
         tool: 'molbio_design_intron_primers',
@@ -220,6 +224,9 @@ export function invocationsFor(task) {
     ],
     mutagenesis: () => [
       { tool: 'molbio_mutagenesis_primers', args: { template: FIXTURES.MUTAGENESIS_TEMPLATE, mutations: [FIXTURES.MUTAGENESIS_MUTATION], tm_min: 60, tm_max: 90, max_results: 1 } },
+    ],
+    'silent-site': () => [
+      { tool: 'molbio_silent_site_mutagenesis', args: { sequence: NAMED_SEQUENCES.silent_cds, enzyme: 'EcoRI', action: 'remove', max_solutions: 5 } },
     ],
     'clone-primers': () => [
       { tool: 'molbio_clone_primers', args: { template: FIXTURES.CLONE_INSERT, mode: 'restriction', enzymes: ['EcoRI', 'HindIII'] } },
@@ -271,7 +278,7 @@ export function invocationsFor(task) {
       { tool: 'molbio_plot', args: { kind: 'violin', data_path: at('ct.csv'), columns: { value: 'ct', group: 'strain' }, output_path: at('ct-violin.svg'), title: 'Ct by strain', y_label: 'Ct' } },
     ],
     'chart-volcano': () => [
-      { tool: 'molbio_plot', args: { kind: 'volcano', data_path: at('de.csv'), columns: { x: 'log2fc', y: 'p', label: 'gene' }, label_top: 2, output_path: at('volcano.svg'), title: 'Differential expression' } },
+      { tool: 'molbio_plot', args: { kind: 'volcano', data_path: at('de.csv'), columns: { x: 'log2fc', y: 'p', label: 'gene' }, label_top: 2, output_path: at('de.svg'), title: 'Differential expression' } },
     ],
     'chart-heatmap': () => [
       { tool: 'molbio_plot', args: { kind: 'heatmap', data_path: at('expression.tsv'), scale: 'row_zscore', output_path: at('heatmap.svg'), title: 'Expression by gene' } },
@@ -310,10 +317,19 @@ export function invocationsFor(task) {
     'composition-skew': () => [
       { tool: 'molbio_gc_composition', args: { sequence: FIXTURES.CONSTRUCT, window: 100, step: 50 } },
     ],
+    'batch-analysis': () => [
+      { tool: 'molbio_batch_analyze', args: { paths: [at('pUC118.gb'), at('pUC118.dna')], analysis: 'summary', output_path: at('batch-report.csv') } },
+    ],
 
     // crispr
     'crispr-guide': () => [
       { tool: 'molbio_grna_design', args: { sequence: plasmid(), max_guides: 3 } },
+    ],
+    'crispr-cas12a': () => [
+      { tool: 'molbio_grna_design', args: { sequence: NAMED_SEQUENCES.cas12a_target, cas_family: 'cas12a', check_off_target: false, max_guides: 3 } },
+    ],
+    'crispr-cas13': () => [
+      { tool: 'molbio_grna_design', args: { sequence: NAMED_SEQUENCES.cas13_target, cas_family: 'cas13a', region_start: 5, region_end: 32, check_off_target: false, max_guides: 3 } },
     ],
     // records
     'lab-notebook': () => [

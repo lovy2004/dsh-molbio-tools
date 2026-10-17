@@ -9,12 +9,40 @@
 import { MolbioInputError } from './lib.mjs';
 
 /**
+ * Safety limits, exported so the tools, their descriptions and the tests share
+ * one source.
+ *
+ * Local alignment allocates the WHOLE dynamic-programming matrix up front — a
+ * scoring array and a direction array of `(len(a)+1) * (len(b)+1)` cells, both
+ * filled before a single backtrace step. The cost is quadratic in the input, and
+ * the only cap upstream is `normalizeSequence`'s 1,000,000 bases, so without a
+ * budget here one call with two unremarkable few-hundred-kb sequences asks for
+ * tens of gigabytes and takes the host process down with it. Measured on the
+ * development machine: 8,000 x 8,000 costs ~237 MB and 0.5 s, so 50e6 cells is
+ * ~250 MB and ~2 s.
+ *
+ * `msa.mjs`, `phylo.mjs` and `align-post.mjs` each carry a budget of their own;
+ * this covers the pairwise path, which had none.
+ */
+export const ALIGN_LIMITS = {
+  /** DP cells (length(a) * length(b)) one local alignment may allocate. */
+  maxCells: 50_000_000,
+};
+
+/**
  * Smith-Waterman local alignment of `a` against `b`.
  * @returns {object} aligned strings, start offsets, identity, and a unified
  *   difference list (kind: mismatch|deletion|insertion; ref positions 1-based
  *   relative to `b`).
  */
 export function smithWaterman(a, b, { match = 2, mismatch = -2, gap = -1 } = {}) {
+  const cells = a.length * b.length;
+  if (cells > ALIGN_LIMITS.maxCells) {
+    throw new MolbioInputError(
+      `alignment of ${a.length} x ${b.length} bases needs ${cells} matrix cells (limit ${ALIGN_LIMITS.maxCells}); `
+      + 'align a window instead — an exact 21-mer anchor keeps a read-vs-reference alignment linear in practice (see molbio_verify_sanger)',
+    );
+  }
   const m = a.length + 1;
   const n = b.length + 1;
   const H = new Int32Array(m * n);

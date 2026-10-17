@@ -12,236 +12,523 @@
       "id": "protein-props",
       "category": "protein",
       "tier": "full",
-      "covers": ["molbio_protein_props"],
+      "covers": [
+        "molbio_protein_props"
+      ],
       "instruction": "I have a peptide and I need its basic physico-chemical parameters before I order it: molecular weight, isoelectric point, and the extinction coefficient I should use for a A280 measurement.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
       "timeout_ms": 180000,
-      "expect_tools": ["molbio_protein_props"],
+      "expect_tools": [
+        "molbio_protein_props"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "33 aa · MW 3935\\.62 Da · pI 10\\.63" },
-        { "where": "tool", "pattern": "A280 extinction: 1490 M⁻¹cm⁻¹" },
-        { "where": "tool", "pattern": "GRAVY -0\\.403" },
-        { "where": "answer", "pattern": "3935|3936" },
-        { "where": "answer", "pattern": "10\\.6" },
-        { "where": "answer", "pattern": "1490" }
+        {
+          "where": "tool",
+          "pattern": "33 aa · MW 3935\\.62 Da · pI 10\\.63"
+        },
+        {
+          "where": "tool",
+          "pattern": "A280 extinction: 1490 M⁻¹cm⁻¹"
+        },
+        {
+          "where": "tool",
+          "pattern": "GRAVY -0\\.403"
+        },
+        {
+          "where": "answer",
+          "pattern": "3[,.]?935|3[,.]?936",
+          "note": "the peptide MW; accepts the decimal/thousands formatting a human writes"
+        },
+        {
+          "where": "answer",
+          "pattern": "10\\.6"
+        },
+        {
+          "where": "answer",
+          "pattern": "1490"
+        }
       ]
     },
     {
       "id": "peptide-digest",
       "category": "protein",
       "tier": "full",
-      "covers": ["molbio_peptide_digest"],
+      "covers": [
+        "molbio_peptide_digest"
+      ],
       "instruction": "Plan a trypsin digest of this peptide for mass spectrometry, with no missed cleavages, and give me the monoisotopic [M+H]+ mass of every peptide.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
       "timeout_ms": 180000,
-      "expect_tools": ["molbio_peptide_digest"],
+      "expect_tools": [
+        "molbio_peptide_digest"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "trypsin digest, 0 missed cleavage\\(s\\), monoisotopic \\[M\\+H\\]\\+ masses: 7 peptide\\(s\\)" },
+        {
+          "where": "tool",
+          "pattern": "trypsin digest, 0 missed cleavage\\(s\\), monoisotopic \\[M\\+H\\]\\+ masses: 7 peptide\\(s\\)"
+        },
         {
           "where": "tool",
           "pattern": "1-2 MK \\[M\\+H\\]\\+ 278\\.1533",
           "note": "one space, not the two the raw render uses: every regex is matched against whitespace-COLLAPSED text, so a pattern built from the un-collapsed output cannot match. The first version of this assertion carried the raw double space and failed offline."
         },
-        { "where": "tool", "pattern": "27-33 LGLIEVQ \\[M\\+H\\]\\+ 771\\.4611" },
-        { "where": "answer", "pattern": "\\b7\\b|seven" },
-        { "where": "answer", "pattern": "278\\.15" },
-        { "where": "answer", "pattern": "771\\.46" }
+        {
+          "where": "tool",
+          "pattern": "27-33 LGLIEVQ \\[M\\+H\\]\\+ 771\\.4611"
+        },
+        {
+          "where": "answer",
+          "pattern": "\\b7\\b|seven"
+        },
+        {
+          "where": "answer",
+          "pattern": "278\\.15"
+        },
+        {
+          "where": "answer",
+          "pattern": "771\\.46"
+        }
       ]
     },
     {
       "id": "helical-wheel",
       "category": "protein",
       "tier": "full",
-      "covers": ["molbio_helical_wheel"],
+      "covers": [
+        "molbio_helical_wheel"
+      ],
       "instruction": "Is this 14-residue peptide amphipathic? Draw the helical wheel projection and give me the hydrophobic moment and the residue-class breakdown.\n\nLKKLLKKLLKKLLK",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_helical_wheel"],
+      "expect_tools": [
+        "molbio_helical_wheel"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "helical wheel for residues 1-14 \\(14 residues, 100°/residue, 3\\.6 per turn\\)" },
-        { "where": "tool", "pattern": "hydrophobic moment μH 0\\.758" },
-        { "where": "tool", "pattern": "residue classes: hydrophobic 7, polar 0, acidic 0, basic 7" },
-        { "where": "tool", "pattern": "candidate amphipathic helix", "note": "the tool's own verdict word" },
-        { "where": "answer", "pattern": "0\\.75|0\\.76" },
-        { "where": "answer", "pattern": "amphipathic" }
+        {
+          "where": "tool",
+          "pattern": "helical wheel for residues 1-14 \\(14 residues, 100°/residue, 3\\.6 per turn\\)"
+        },
+        {
+          "where": "tool",
+          "pattern": "hydrophobic moment μH 0\\.758"
+        },
+        {
+          "where": "tool",
+          "pattern": "residue classes: hydrophobic 7, polar 0, acidic 0, basic 7"
+        },
+        {
+          "where": "tool",
+          "pattern": "candidate amphipathic helix",
+          "note": "the tool's own verdict word"
+        },
+        {
+          "where": "answer",
+          "pattern": "0\\.75|0\\.76"
+        },
+        {
+          "where": "answer",
+          "pattern": "amphipathic"
+        }
       ]
     },
     {
       "id": "hydropathy",
       "category": "protein",
       "tier": "full",
-      "covers": ["molbio_hydropathy_plot"],
+      "covers": [
+        "molbio_hydropathy_plot"
+      ],
       "instruction": "Plot the Kyte-Doolittle hydropathy profile of this peptide with the standard window and tell me whether it contains a candidate transmembrane stretch. Report the GRAVY value too.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_hydropathy_plot"],
+      "expect_tools": [
+        "molbio_hydropathy_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "Kyte-Doolittle hydropathy: 33 aa, window 9, threshold 1\\.6" },
-        { "where": "tool", "pattern": "GRAVY -0\\.4" },
-        { "where": "tool", "pattern": "no window average reaches the 1\\.6 threshold" },
-        { "where": "answer", "pattern": "-0\\.4" },
-        { "where": "answer", "pattern": "no .{0,20}(peak|stretch|span|transmembrane)|not .{0,20}(hydrophobic|membrane)" }
+        {
+          "where": "tool",
+          "pattern": "Kyte-Doolittle hydropathy: 33 aa, window 9, threshold 1\\.6"
+        },
+        {
+          "where": "tool",
+          "pattern": "GRAVY -0\\.4"
+        },
+        {
+          "where": "tool",
+          "pattern": "no window average reaches the 1\\.6 threshold"
+        },
+        {
+          "where": "answer",
+          "pattern": "-0\\.4"
+        },
+        {
+          "where": "answer",
+          "pattern": "no .{0,20}(peak|stretch|span|transmembrane)|not .{0,20}(hydrophobic|membrane)"
+        }
       ]
     },
     {
       "id": "codon-optimize",
       "category": "bench-analysis",
       "tier": "full",
-      "covers": ["molbio_codon_optimize"],
+      "covers": [
+        "molbio_codon_optimize"
+      ],
       "instruction": "Optimize this coding sequence for E. coli expression and tell me the GC content of the result and how long it is. Also remove any EcoRI site from it while you are at it, since I want to clone with EcoRI.\n\n{seq:cds}",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_codon_optimize"],
+      "expect_tools": [
+        "molbio_codon_optimize"
+      ],
       "assertions": [
         {
           "where": "tool",
           "pattern": "e_coli codon-optimized DNA: [0-9]+ bp, GC [0-9.]+%",
           "note": "the optimized construct's own reported length and GC. The VALUES are not pinned: the task asks for the EcoRI-avoidance pass, and passing `avoid_enzymes` legitimately changes which synonymous codons are chosen, hence both numbers. The first version pinned the no-avoidance result (261 bp / 84.3%) and failed a correct `avoid_enzymes` answer — and 84.3% GC would in fact be a poor answer to give a user who wants to express the protein."
         },
-        { "where": "answer", "pattern": "GC|gc content" },
-        { "where": "answer", "pattern": "avoid|no EcoRI|without EcoRI|EcoRI site" }
+        {
+          "where": "answer",
+          "pattern": "GC|gc content"
+        },
+        {
+          "where": "answer",
+          "pattern": "avoid|no EcoRI|without EcoRI|EcoRI site|EcoRI-free|free of EcoRI",
+          "note": "the model may say EcoRI-free rather than 'no EcoRI'"
+        }
       ]
     },
     {
       "id": "reading-frames",
       "category": "bench-analysis",
       "tier": "full",
-      "covers": ["molbio_translate"],
+      "covers": [
+        "molbio_translate"
+      ],
       "instruction": "I do not know which frame this ORF is in. Translate all six frames and report every open reading frame of at least 20 amino acids, with the frame it is in and its coordinates.\n\nGGG{seq:cds}",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_translate"],
+      "expect_tools": [
+        "molbio_translate"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "ORFs \\(>= min_orf_aa\\):" },
-        { "where": "tool", "pattern": "frame 1, bases 4-90, 28 aa: MAAAEEEFFFKKKGGGRRRYYYDDDLLL" },
-        { "where": "tool", "pattern": "frame -1 \\(30 aa, 0 stop\\(s\\), no stop\\)", "note": "a reverse-strand frame with no stop codon — the reason all six were requested" },
-        { "where": "answer", "pattern": "MAAAEEEFFFKKKGGGRRRYYYDDDLLL" },
-        { "where": "answer", "pattern": "\\b28\\b" },
-        { "where": "answer", "pattern": "-1|reverse" }
+        {
+          "where": "tool",
+          "pattern": "ORFs \\(>= min_orf_aa\\):"
+        },
+        {
+          "where": "tool",
+          "pattern": "frame 1, bases 4-90, 28 aa: MAAAEEEFFFKKKGGGRRRYYYDDDLLL"
+        },
+        {
+          "where": "tool",
+          "pattern": "frame -1 \\(30 aa, 0 stop\\(s\\), no stop\\)",
+          "note": "a reverse-strand frame with no stop codon — the reason all six were requested"
+        },
+        {
+          "where": "answer",
+          "pattern": "MAAAEEEFFFKKKGGGRRRYYYDDDLLL"
+        },
+        {
+          "where": "answer",
+          "pattern": "\\b28\\b"
+        },
+        {
+          "where": "answer",
+          "pattern": "-1|reverse"
+        }
       ]
     },
     {
       "id": "qpcr-efficiency",
       "category": "qpcr",
       "tier": "full",
-      "covers": ["molbio_qpcr_efficiency"],
+      "covers": [
+        "molbio_qpcr_efficiency"
+      ],
       "instruction": "Here is a qPCR standard curve: dilution factors 1, 10, 100, 1000 with Ct values 15.0, 18.3, 21.6, 24.9. Fit the curve, give me the slope, the R² and the amplification efficiency, and tell me whether the efficiency is good enough to trust the assay.\n\n",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_qpcr_efficiency"],
+      "expect_tools": [
+        "molbio_qpcr_efficiency"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "standard curve from 4 points: Ct = 15 \\+ -3\\.3·log10\\(relative quantity\\)" },
-        { "where": "tool", "pattern": "R² = 1 · efficiency = 100\\.92%" },
-        { "where": "answer", "pattern": "-3\\.3" },
-        { "where": "answer", "pattern": "100\\.9|101\\b" },
-        { "where": "answer", "pattern": "R²|R2|R\\^2" }
+        {
+          "where": "tool",
+          "pattern": "standard curve from 4 points: Ct = 15 \\+ -3\\.3·log10\\(relative quantity\\)"
+        },
+        {
+          "where": "tool",
+          "pattern": "R² = 1 · efficiency = 100\\.92%"
+        },
+        {
+          "where": "answer",
+          "pattern": "-3\\.3"
+        },
+        {
+          "where": "answer",
+          "pattern": "100\\.9|101\\b"
+        },
+        {
+          "where": "answer",
+          "pattern": "R²|R2|R\\^2"
+        }
       ]
     },
     {
       "id": "plotting",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "I have fold-change data from two conditions: control = 1 with SD 0.1, knockdown = 6.65 with SD 0.9. Draw me a bar chart with error bars, and then draw a second scatter chart of x = 1,2,3,4 against y = 2.1,3.9,6.2,7.8 with a fitted line. Name the files fold.svg and fit.svg.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "fold\\.svg \\(bar\\): 2 points" },
-        { "where": "tool", "pattern": "fit\\.svg \\(scatter\\): 4 points" },
-        { "where": "answer", "pattern": "fold\\.svg" },
-        { "where": "answer", "pattern": "fit\\.svg" }
+        {
+          "where": "tool",
+          "pattern": "fold\\.svg \\(bar\\): 2 points"
+        },
+        {
+          "where": "tool",
+          "pattern": "fit\\.svg \\(scatter\\): 4 points"
+        },
+        {
+          "where": "answer",
+          "pattern": "fold\\.svg"
+        },
+        {
+          "where": "answer",
+          "pattern": "fit\\.svg"
+        }
       ]
     },
     {
       "id": "chart-box-plot",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "The qPCR run is in the workspace as ct.csv (columns sample, strain, ct). Compare the two strains as a box plot — I want to see the spread and any wells that failed, and I need the median Ct of each strain. Write it to ct-box.svg.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "ct-box\\.svg \\(box\\): 2 series, 12 values" },
-        { "where": "tool", "pattern": "wt: 6 values, median 22\\.5", "note": "the per-series summary the tool renders" },
-        { "where": "tool", "pattern": "ko: 6 values, median 19\\.5" },
-        { "where": "tool", "pattern": "outliers 34\\.5", "note": "the failed well is reported as an outlier, not folded into the whisker" },
-        { "where": "answer", "pattern": "22\\.5" },
-        { "where": "answer", "pattern": "19\\.5" },
-        { "where": "answer", "pattern": "outlier|34\\.5" }
+        {
+          "where": "tool",
+          "pattern": "ct-box\\.svg \\(box\\): 2 series, 12 values"
+        },
+        {
+          "where": "tool",
+          "pattern": "wt: 6 values, median 22\\.5",
+          "note": "the per-series summary the tool renders"
+        },
+        {
+          "where": "tool",
+          "pattern": "ko: 6 values, median 19\\.5"
+        },
+        {
+          "where": "tool",
+          "pattern": "outliers 34\\.5",
+          "note": "the failed well is reported as an outlier, not folded into the whisker"
+        },
+        {
+          "where": "answer",
+          "pattern": "22\\.5"
+        },
+        {
+          "where": "answer",
+          "pattern": "19\\.5"
+        },
+        {
+          "where": "answer",
+          "pattern": "outlier|34\\.5"
+        }
       ]
     },
     {
       "id": "chart-line-series",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "growth.csv in the workspace has time_h, strain and od600 columns for three strains. Plot the growth curves as one line chart with a line per strain, and tell me which strain grew least. Write it to growth.svg.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "growth\\.svg \\(line\\): 3 series, 12 points", "note": "the group column must split the table into three series, not plot one jumbled line" },
-        { "where": "tool", "pattern": "y 0\\.04 to 1\\.41", "note": "the y extent of the real table, so the tool was given the data and not an empty frame" },
-        { "where": "answer", "pattern": "mutA" },
-        { "where": "answer", "pattern": "0\\.52|0\\.5\\b" }
+        {
+          "where": "tool",
+          "pattern": "growth\\.svg \\(line\\): 3 series, 12 points",
+          "note": "the group column must split the table into three series, not plot one jumbled line"
+        },
+        {
+          "where": "tool",
+          "pattern": "y 0\\.04 to 1\\.41",
+          "note": "the y extent of the real table, so the tool was given the data and not an empty frame"
+        },
+        {
+          "where": "answer",
+          "pattern": "mutA"
+        },
+        {
+          "where": "answer",
+          "pattern": "0\\.52|0\\.5\\b"
+        }
       ]
     },
     {
       "id": "chart-histogram",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "From the same ct.csv, show me the distribution of all twelve Ct values as a histogram so I can see how the run behaved overall. Write it to ct-hist.svg.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "ct-hist\\.svg \\(histogram\\): 12 values in \\d+ bins", "note": "the bin count is chosen by the tool's own rule, so only its shape is pinned" },
-        { "where": "tool", "pattern": "freedman-diaconis", "note": "the default binning rule is named in the output" },
-        { "where": "tool", "pattern": "range 19\\.1 to 34\\.5", "note": "the sample's real extent" },
-        { "where": "answer", "pattern": "19\\.1" },
-        { "where": "answer", "pattern": "34\\.5" }
+        {
+          "where": "tool",
+          "pattern": "ct-hist\\.svg \\(histogram\\): 12 values in \\d+ bins",
+          "note": "the bin count is chosen by the tool's own rule, so only its shape is pinned"
+        },
+        {
+          "where": "tool",
+          "pattern": "freedman-diaconis",
+          "note": "the default binning rule is named in the output"
+        },
+        {
+          "where": "tool",
+          "pattern": "range 19\\.1 to 34\\.5",
+          "note": "the sample's real extent"
+        },
+        {
+          "where": "answer",
+          "pattern": "19\\.1"
+        },
+        {
+          "where": "answer",
+          "pattern": "34\\.5"
+        }
       ]
     },
     {
       "id": "chart-violin",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "For the same ct.csv, I want to see the SHAPE of the distribution per strain, not just a box — one of the strains has a failed well that a box hides. Draw it as a violin plot with the median and IQR marked, write it to ct-violin.svg, and tell me each strain's median and whether the outlier changes the shape.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "ct-violin\\.svg \\(violin\\): 2 series, 12 values" },
-        { "where": "tool", "pattern": "wt: 6 values, median 22\\.5" },
-        { "where": "tool", "pattern": "ko: 6 values, median 19\\.5" },
-        { "where": "tool", "pattern": "outliers 34\\.5" },
-        { "where": "answer", "pattern": "22\\.5" },
-        { "where": "answer", "pattern": "19\\.5" },
-        { "where": "answer", "pattern": "outlier|34\\.5|spike|tail" }
+        {
+          "where": "tool",
+          "pattern": "ct-violin\\.svg \\(violin\\): 2 series, 12 values"
+        },
+        {
+          "where": "tool",
+          "pattern": "wt: 6 values, median 22\\.5"
+        },
+        {
+          "where": "tool",
+          "pattern": "ko: 6 values, median 19\\.5"
+        },
+        {
+          "where": "tool",
+          "pattern": "outliers 34\\.5"
+        },
+        {
+          "where": "answer",
+          "pattern": "22\\.5"
+        },
+        {
+          "where": "answer",
+          "pattern": "19\\.5"
+        },
+        {
+          "where": "answer",
+          "pattern": "outlier|34\\.5|spike|tail"
+        }
       ]
     },
     {
       "id": "chart-volcano",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "de.csv in the workspace has a differential-expression table with gene, log2fc and p columns. Draw a volcano plot to de.svg and tell me which genes are both significantly changed AND substantially changed — I do not want genes that only move a little, or only look good on one of the two axes.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "volcano\\.svg \\(volcano\\): 6 points, 4 significant", "note": "MYC (big fold, useless p) and PTEN (good p, no fold) must NOT be counted" },
-        { "where": "tool", "pattern": "2 up, 2 down" },
-        { "where": "answer", "pattern": "KRAS" },
-        { "where": "answer", "pattern": "TP53" },
-        { "where": "answer", "pattern": "MYC|PTEN", "note": "the two genes the model must EXCLUDE — naming them as excluded is fine, so this only requires they were considered" }
+        {
+          "where": "tool",
+          "pattern": "de\\.svg \\(volcano\\): 6 points, 4 significant",
+          "note": "the task asked for de.svg; the old assertion pinned volcano.svg, so a correct model failed on the filename"
+        },
+        {
+          "where": "tool",
+          "pattern": "2 up, 2 down"
+        },
+        {
+          "where": "answer",
+          "pattern": "KRAS"
+        },
+        {
+          "where": "answer",
+          "pattern": "TP53"
+        },
+        {
+          "where": "answer",
+          "pattern": "MYC|PTEN",
+          "note": "the two genes the model must EXCLUDE — naming them as excluded is fine, so this only requires they were considered"
+        }
       ]
     },
     {
       "id": "chart-heatmap",
       "category": "visualisation",
       "tier": "full",
-      "covers": ["molbio_plot"],
+      "covers": [
+        "molbio_plot"
+      ],
       "instruction": "expression.tsv is a wide table: the first column is the gene name and the rest are samples. Draw it as a heatmap to heatmap.svg, row-scaled so the genes are comparable, and tell me which genes separate the control columns from the kd columns.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_plot"],
+      "expect_tools": [
+        "molbio_plot"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "heatmap\\.svg \\(heatmap\\): 4 rows x 6 columns, 24 cells" },
-        { "where": "tool", "pattern": "scale row_zscore", "note": "the requested display transform is named in the output" },
-        { "where": "tool", "pattern": "colour divergingRedBlue", "note": "negative values select the diverging ramp automatically" },
-        { "where": "answer", "pattern": "KRAS" },
-        { "where": "answer", "pattern": "TP53" }
+        {
+          "where": "tool",
+          "pattern": "heatmap\\.svg \\(heatmap\\): 4 rows x 6 columns, 24 cells"
+        },
+        {
+          "where": "tool",
+          "pattern": "scale row_zscore",
+          "note": "the requested display transform is named in the output"
+        },
+        {
+          "where": "tool",
+          "pattern": "colour divergingRedBlue",
+          "note": "negative values select the diverging ramp automatically"
+        },
+        {
+          "where": "answer",
+          "pattern": "KRAS"
+        },
+        {
+          "where": "answer",
+          "pattern": "TP53"
+        }
       ]
     }
   ]

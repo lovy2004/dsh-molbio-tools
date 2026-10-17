@@ -16,13 +16,29 @@ import { MolbioInputError } from './lib.mjs';
 
 // ── minimal XML scanner ─────────────────────────────────────────────────────
 
+/**
+ * Whether a numeric entity names a character this decoder may emit.
+ *
+ * `String.fromCodePoint` THROWS a RangeError above U+10FFFF, and a RangeError
+ * raised from inside a `replace` callback escapes the whole parser as an error
+ * type no caller handles — a crafted `&#999999999;` in a SnapGene feature
+ * qualifier (or in a PubMed response) turned `molbio_parse_snapgene` into a
+ * crash instead of a MolbioInputError. Surrogates are rejected too: they are not
+ * characters, and emitting a lone one would corrupt the value rather than
+ * reject the reference. An unreadable entity is left as literal text, which is
+ * what the named-entity branch already does.
+ */
+function isXmlCodePoint(code) {
+  return Number.isInteger(code) && code >= 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff);
+}
+
 function decodeEntities(value) {
   return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity) => {
     if (entity[0] === '#') {
       const code = entity[1] === 'x' || entity[1] === 'X'
         ? parseInt(entity.slice(2), 16)
         : parseInt(entity.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      return isXmlCodePoint(code) ? String.fromCodePoint(code) : match;
     }
     const named = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
     return named[entity] ?? match;

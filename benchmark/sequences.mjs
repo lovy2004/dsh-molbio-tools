@@ -165,6 +165,13 @@ export const NAMED_SEQUENCES = {
   cds: FIXTURES.CDS,
   mutagenesis_template: FIXTURES.MUTAGENESIS_TEMPLATE,
   sanger_read: FIXTURES.SANGER_READ,
+  // v0.20.0: the family-geometry fixtures. The Cas12a target is a 5' TTTV PAM
+  // followed by a 23 nt protospacer; the Cas13a target is a 28 nt spacer with a
+  // 3' H PFS. Keeping them here means the instruction and the offline grader
+  // cannot diverge.
+  cas12a_target: 'AAAATTTAACGTACGTACGTACGTACGTACGCCCCTTTCGGGGGGGGGGG',
+  cas13_target: 'AAAAACGTACGTACGTACGTACGTACGTACGTACCCCCCCCCC',
+  silent_cds: 'ATGGCTGAATTCGGTTAAGCTTAA',
   /**
    * The three FASTQ reads the `fastq-qc` task pastes in.
    *

@@ -12,26 +12,54 @@
       "id": "primer-qc",
       "category": "primers",
       "tier": "full",
-      "covers": ["molbio_primer_check", "molbio_primer_tm"],
+      "covers": [
+        "molbio_primer_check",
+        "molbio_primer_tm"
+      ],
       "instruction": "I have these two primers already ordered and I want to know whether they are any good together before I run them. Report the Tm of the forward primer, and flag anything structurally worrying about the pair.\n\nForward: ATTACTCCTGCTCTTCCCATAC\nReverse: CACTACTCCTCTGTACGCAC",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_primer_check"],
+      "expect_tools": [
+        "molbio_primer_check"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "primer1: 22 bp, GC 45\\.45%", "note": "the forward primer's own metrics" },
-        { "where": "tool", "pattern": "primer2: 20 bp, GC 55%" },
-        { "where": "tool", "pattern": "self-any 7 \\(≤8\\)", "note": "the reverse primer's self-complementarity, right at the Primer3 limit" },
-        { "where": "tool", "pattern": "pair \\(dimer\\): score 14", "note": "the pair's dimer score" },
-        { "where": "answer", "pattern": "53\\.9|54\\b", "note": "the forward primer's Tm, 53.97 °C" }
+        {
+          "where": "tool",
+          "pattern": "primer1: 22 bp, GC 45\\.45%",
+          "note": "the forward primer's own metrics"
+        },
+        {
+          "where": "tool",
+          "pattern": "primer2: 20 bp, GC 55%"
+        },
+        {
+          "where": "tool",
+          "pattern": "self-any 7 \\(≤8\\)",
+          "note": "the reverse primer's self-complementarity, right at the Primer3 limit"
+        },
+        {
+          "where": "tool",
+          "pattern": "pair \\(dimer\\): score 14",
+          "note": "the pair's dimer score"
+        },
+        {
+          "where": "answer",
+          "pattern": "53\\.9|54\\b",
+          "note": "the forward primer's Tm, 53.97 °C"
+        }
       ]
     },
     {
       "id": "taqman-assay",
       "category": "primers",
       "tier": "full",
-      "covers": ["molbio_design_taqman"],
+      "covers": [
+        "molbio_design_taqman"
+      ],
       "instruction": "Design a TaqMan (5' nuclease) assay on this template. I want primers plus a hydrolysis probe between them, and I want the probe to sit at least a few degrees above the primers in Tm.\n\nTemplate:\n{template:400:7}",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_design_taqman"],
+      "expect_tools": [
+        "molbio_design_taqman"
+      ],
       "assertions": [
         {
           "where": "tool",
@@ -48,21 +76,39 @@
           "pattern": "vs the hotter primer",
           "note": "the probe-vs-primer Tm margin, which the tool reports per candidate"
         },
-        { "where": "answer", "pattern": "probe|Probe" }
+        {
+          "where": "answer",
+          "pattern": "probe|Probe"
+        }
       ]
     },
     {
       "id": "intron-qpcr",
       "category": "primers",
       "tier": "full",
-      "covers": ["molbio_design_intron_primers"],
+      "covers": [
+        "molbio_design_intron_primers"
+      ],
       "instruction": "I need a qPCR assay that will NOT amplify contaminating genomic DNA. Here is the genomic sequence and the two exon coordinates — design a pair where the forward primer spans the exon-exon junction. Tell me the spliced amplicon size and how far apart the primers sit on the genome.\n\n{seq:intron_genomic}\n\nExons: 1-400 and 701-1100 (1-based).",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_design_intron_primers"],
+      "expect_tools": [
+        "molbio_design_intron_primers"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "forward primer spans an exon-exon junction", "note": "the property that makes the assay genomic-DNA-proof" },
-        { "where": "tool", "pattern": "spliced amplicon 320-406 \\(87 bp\\), genomic span 387 bp" },
-        { "where": "tool", "pattern": "junction 12\\+6 bp", "note": "bases contributed on each side of the junction" },
+        {
+          "where": "tool",
+          "pattern": "forward primer spans an exon-exon junction",
+          "note": "the property that makes the assay genomic-DNA-proof"
+        },
+        {
+          "where": "tool",
+          "pattern": "spliced amplicon 320-406 \\(87 bp\\), genomic span 387 bp"
+        },
+        {
+          "where": "tool",
+          "pattern": "junction 12\\+6 bp",
+          "note": "bases contributed on each side of the junction"
+        },
         {
           "where": "answer",
           "pattern": "splic|junction|genomic|intron|87|387",
@@ -74,12 +120,19 @@
       "id": "multiplex-panel",
       "category": "primers",
       "tier": "full",
-      "covers": ["molbio_multiplex_check"],
-      "instruction": "I want to run these two primer pairs in the same multiplex tube. The first pair is on target A (template below), the second on target B. Check them against each other and tell me whether they interfere — dimers, unintended annealing, or bands I will not be able to tell apart.\n\nTarget A template:\n{template:400:7}\n\nPair A: forward ATTACTCCTGCTCTTCCCATAC (Tm 58.4), reverse CACTACTCCTCTGTACGCAC (Tm 58.9)\nPair B: forward GGGTTTCCCAAATTTGGGCCCA, reverse TTTGGGCCCAAATTTGGGAAAC\nTemplate B:\n{template:400:8}",
+      "covers": [
+        "molbio_multiplex_check"
+      ],
+      "instruction": "I want to run these two primer pairs in the same multiplex tube. The first pair is on target A (template below), the second on target B. Check them against each other and tell me whether they interfere — dimers, unintended annealing, or bands I will not be able to tell apart. Also give me the recommended annealing temperature for the panel and a starting primer concentration for each pair.\n\nTarget A template:\n{template:400:7}\n\nPair A: forward ATTACTCCTGCTCTTCCCATAC (Tm 58.4), reverse CACTACTCCTCTGTACGCAC (Tm 58.9)\nPair B: forward GGGTTTCCCAAATTTGGGCCCA, reverse TTTGGGCCCAAATTTGGGAAAC\nTemplate B:\n{template:400:8}",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_multiplex_check"],
+      "expect_tools": [
+        "molbio_multiplex_check"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "multiplex panel: 2 target\\(s\\) on 2 template\\(s\\), 4 primer\\(s\\)" },
+        {
+          "where": "tool",
+          "pattern": "multiplex panel: 2 target\\(s\\) on 2 template\\(s\\), 4 primer\\(s\\)"
+        },
         {
           "where": "tool",
           "pattern": "primer-primer interactions above the dimer threshold: [0-9]+",
@@ -94,6 +147,66 @@
           "where": "answer",
           "pattern": "dimer|interfere|conflict|anneal",
           "note": "the panel verdict. Note the measured behaviour this task must tolerate: a model that FIRST checks each pair on its own template often finds — correctly — that a pair as written does not amplify at all, and answers that instead. That is a better answer than 'no dimer conflict', not a worse one."
+        },
+        {
+          "where": "tool",
+          "pattern": "annealing temperature: [0-9.]+ °C \\(range [0-9.]+-[0-9.]+ °C\\)",
+          "note": "the panel-level annealing recommendation (lowest primer Tm minus the offset)"
+        },
+        {
+          "where": "tool",
+          "pattern": "primer concentration plan \\(nM\\):",
+          "note": "the starting primer-concentration plan"
+        },
+        {
+          "where": "answer",
+          "pattern": "anneal|temperature|concentration",
+          "note": "the model reports the new planning outputs, not only the dimer verdict"
+        }
+      ]
+    },
+    {
+      "id": "taqman-mgb",
+      "category": "primers",
+      "tier": "full",
+      "covers": [
+        "molbio_design_taqman"
+      ],
+      "instruction": "Design a TaqMan assay with an MGB probe on this template. Use an MGB probe, write the ordering sheet to mgb-order.csv, and tell me the probe length and Tm window the designer used, the top-ranked probe, and the 5'/3' modifications on its ordering row.\n\nTemplate:\n{template:400:7}",
+      "timeout_ms": 300000,
+      "expect_tools": [
+        "molbio_design_taqman"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "Probe chemistry: TaqMan MGB",
+          "note": "the MGB chemistry is selected, not silently the standard one"
+        },
+        {
+          "where": "tool",
+          "pattern": "13-20 nt, Tm 48-60",
+          "note": "the MGB length/Tm window, on the unmodified NN scale"
+        },
+        {
+          "where": "tool",
+          "pattern": "P TTGCTACGCCTGT",
+          "note": "the top-ranked MGB probe"
+        },
+        {
+          "where": "tool",
+          "pattern": "ordering CSV \\([0-9]+ oligo row\\(s\\)\\) saved to",
+          "note": "the ordering sheet was written"
+        },
+        {
+          "where": "tool",
+          "pattern": "MGB probes: the reported probe Tm is the unmodified DNA NN estimate",
+          "note": "the tool refuses to fabricate a modified Tm"
+        },
+        {
+          "where": "answer",
+          "pattern": "MGB|unmodified|modif",
+          "note": "the model explains the MGB Tm caveat or the modifications"
         }
       ]
     }

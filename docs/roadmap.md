@@ -10,12 +10,12 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.19.0）
+## 1. 当前状态（0.20.0）
 
-- 58 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.1.7-rc.1**。
+- 基线：DSH **0.2.0-rc.2**。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -25,6 +25,8 @@ L = 需要新机制或外部资源）。
   0.18.0 落地小提琴/火山/热力图与连续色带 —— `molbio_plot` 现共 **8 种图表**（见 2.10）。
 - **2.4 与 2.2 已在 0.19.0 交付**：环形/扇形的旋转多行标签（含像素断言），以及
   `molbio_alignment_postprocess`（共识/修剪/同一性矩阵/覆盖度）。
+- **2.3 / 2.5 / 2.7 / 2.8 与 survey #8 已在 0.20.0 交付**：批量分析 CSV、Cas12a/Cas13 家族几何
+  （含反向链脱靶定位修复）、multiplex 退火温度/浓度建议、TaqMan MGB/订购 CSV、静默位点突变。
 
 ---
 
@@ -65,7 +67,10 @@ L = 需要新机制或外部资源）。
 - **共识有三种可辩护的定义**，必须由调用方选：`plurality` / `union` / `strict`。
   `conservationAnalysis` 只是选了其中一种并写明。
 
-### 2.3 批量分析 + 表格导出（M）
+### 2.3 ✅ 已做（0.20.0）批量分析 + 表格导出（M）
+
+新增 `molbio_batch_analyze` + `batch.mjs`：目录/显式 paths、递归、FASTA/FASTQ/GenBank/SnapGene，
+CSV/TSV，坏文件成 error 行而不中断。
 
 survey 第 7 条：对工作区里所有匹配文件跑同一项分析并出 CSV。
 牵连点是"写文件"路径已经齐备（`ctx.fs` + sandboxPolicy），主要是参数设计。
@@ -86,7 +91,10 @@ unsupported），径向分支用**四角是否都在绘图矩形内**做精确�
 ③**折行宽度不能随角度变**——三种角度相关规则实测全部产生窄列或长行柱；
 ④旋转文字的墨迹比几何宽度宽约 1 px（光栅化器用圆角描边画字形），预算要额外留出。
 
-### 2.5 Cas12a/Cas13 等 PAM 家族（M）
+### 2.5 ✅ 已做（0.20.0）Cas12a/Cas13 等 PAM 家族（M）
+
+`CAS_FAMILIES` 表给出 PAM/PFS 侧、crRNA 长度与种子；Cas12a 用 5' TTTV/23 nt/5' 种子，
+Cas13 用 RNA/PFS（不是 PAM）。同时修掉反向链脱靶定位的 19 nt 偏移。
 
 `pam` 参数已能传 `NNRT`，缺**家族特定的评分曲线与几何校验**（PAM 位置、种子区定义、
 crRNA 长度差异）。需要参考表，不需要外部二进制。
@@ -96,12 +104,18 @@ crRNA 长度差异）。需要参考表，不需要外部二进制。
 当前把传入序列当参考。基因组规模需要先建一次索引再复用（索引的生命周期、内存上限、
 跨调用缓存都是新机制），且**不能**引入外部二进制（本包的零依赖约束）。
 
-### 2.7 多重 PCR 的温度梯度/浓度配平建议（S/M）
+### 2.7 ✅ 已做（0.20.0）多重 PCR 的温度梯度/浓度配平建议（S/M）
+
+`checkMultiplex` 输出 `annealing`（最低引物 Tm − offset，含范围/离散警告）与
+`primer_concentrations`（按扩增子大小比例的起始计划）。
 
 `molbio_multiplex_check` 已报告互扰；缺的是"给一组引物建议退火温度与各引物浓度"这类
 可执行结论。纯计算。
 
-### 2.8 TaqMan 的 MGB / 双标记探针与订购 CSV（S/M）
+### 2.8 ✅ 已做（0.20.0）TaqMan 的 MGB / 双标记探针与订购 CSV（S/M）
+
+`probe_chemistry: 'mgb'`（未修饰 NN Tm 明确标注、不施加误导性的 Tm 差值罚分）+ 订购 CSV
+（引物/探针、5'/3' 修饰、规模、纯化）。
 
 v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
 
@@ -152,7 +166,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 56 条任务覆盖 **58/58 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 61 条任务覆盖 **60/60 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。

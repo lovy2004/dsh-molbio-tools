@@ -13,78 +13,221 @@
       "id": "plasmid-map-file",
       "category": "plasmids",
       "tier": "full",
-      "covers": ["molbio_plasmid_map_file"],
+      "covers": [
+        "molbio_plasmid_map_file"
+      ],
       "instruction": "Draw me a circular map of pUC118.dna (in my working directory) and mark the EcoRI and HindIII cut sites. Tell me how long the plasmid is, whether it is circular, and how many annotated features it carries.",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_plasmid_map_file"],
-      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "expect_tools": [
+        "molbio_plasmid_map_file"
+      ],
+      "fixtures": {
+        "pUC118.dna": "test/fixtures/pUC118.dna"
+      },
       "assertions": [
-        { "where": "tool", "pattern": "pUC118, 3162 bp, circular, 10 feature\\(s\\), 2 enzyme cut mark\\(s\\)" },
+        {
+          "where": "tool",
+          "pattern": "pUC118, 3162 bp, circular, 10 feature\\(s\\), 2 enzyme cut mark\\(s\\)"
+        },
         {
           "where": "answer",
           "pattern": "3[,.]?162",
           "note": "the plasmid length. The comma form (`3,162 bp`) is not cosmetic: a model writing a number for a human uses a thousands separator, and the first version's `/3162/` failed an otherwise perfect answer. Same rule as the Unicode minus — normalize what is formatting, grade what is content."
         },
-        { "where": "answer", "pattern": "circular" },
-        { "where": "answer", "pattern": "\\b10\\b|ten" }
+        {
+          "where": "answer",
+          "pattern": "circular"
+        },
+        {
+          "where": "answer",
+          "pattern": "\\b10\\b|ten"
+        }
       ]
     },
     {
       "id": "plasmid-map-draw",
       "category": "plasmids",
       "tier": "full",
-      "covers": ["molbio_plasmid_map"],
+      "covers": [
+        "molbio_plasmid_map"
+      ],
       "instruction": "Render a circular plasmid map from this 512 bp sequence. Call it \"mini\", give it one feature — a CDS from position 10 to 200 labelled testCDS — and mark the EcoRI site. Then tell me what the map shows.\n\n{seq:construct}",
       "timeout_ms": 240000,
-      "expect_tools": ["molbio_plasmid_map"],
+      "expect_tools": [
+        "molbio_plasmid_map"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "mini, 512 bp, circular, 1 feature\\(s\\)" },
-        { "where": "tool", "pattern": "1 restriction enzyme cut site\\(s\\) marked" },
-        { "where": "answer", "pattern": "\\b512\\b" },
-        { "where": "answer", "pattern": "testCDS|CDS" },
-        { "where": "answer", "pattern": "EcoRI" }
+        {
+          "where": "tool",
+          "pattern": "mini, 512 bp, circular, 1 feature\\(s\\)"
+        },
+        {
+          "where": "tool",
+          "pattern": "1 restriction enzyme cut site\\(s\\) marked"
+        },
+        {
+          "where": "answer",
+          "pattern": "\\b512\\b"
+        },
+        {
+          "where": "answer",
+          "pattern": "testCDS|CDS"
+        },
+        {
+          "where": "answer",
+          "pattern": "EcoRI"
+        }
       ]
     },
     {
       "id": "sanger-verify",
       "category": "sequencing",
       "tier": "full",
-      "covers": ["molbio_verify_sanger"],
+      "covers": [
+        "molbio_verify_sanger"
+      ],
       "instruction": "There is a Sanger read in my working directory called read.seq. Check it against this 512 bp reference: first the reference as-is, then the same reference with the base at position 150 changed to an A. Tell me the verdict, the identity, and the difference for each case.\n\nReference:\n{seq:construct}",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_verify_sanger"],
+      "expect_tools": [
+        "molbio_verify_sanger"
+      ],
       "assertions": [
-        { "where": "tool", "pattern": "verdict: match[\\s\\S]*?identity 100%" },
-        { "where": "tool", "pattern": "verdict: differences_found[\\s\\S]*?identity 99\\.67%" },
-        { "where": "tool", "pattern": "mismatch @ref 150: A → G", "note": "the planted difference, reported against the reference" },
-        { "where": "answer", "pattern": "match" },
-        { "where": "answer", "pattern": "99\\.6" },
-        { "where": "answer", "pattern": "\\b150\\b" }
+        {
+          "where": "tool",
+          "pattern": "verdict: match[\\s\\S]*?identity 100%"
+        },
+        {
+          "where": "tool",
+          "pattern": "verdict: differences_found[\\s\\S]*?identity 99\\.67%"
+        },
+        {
+          "where": "tool",
+          "pattern": "mismatch @ref 150: A → G",
+          "note": "the planted difference, reported against the reference"
+        },
+        {
+          "where": "answer",
+          "pattern": "match"
+        },
+        {
+          "where": "answer",
+          "pattern": "99\\.6"
+        },
+        {
+          "where": "answer",
+          "pattern": "\\b150\\b"
+        }
       ]
     },
     {
       "id": "crispr-guide",
       "category": "crispr",
       "tier": "full",
-      "covers": ["molbio_grna_design"],
+      "covers": [
+        "molbio_grna_design"
+      ],
       "instruction": "Design the three best SpCas9 guide RNAs on this plasmid (pUC118.dna is in my working directory). For each, give me the protospacer, its strand and coordinates, the GC content and the score. Tell me how many candidate guides the scan found in total.\n\nReference sequence is the whole circular plasmid.",
       "timeout_ms": 300000,
-      "expect_tools": ["molbio_grna_design"],
-      "fixtures": { "pUC118.dna": "test/fixtures/pUC118.dna" },
+      "expect_tools": [
+        "molbio_grna_design"
+      ],
+      "fixtures": {
+        "pUC118.dna": "test/fixtures/pUC118.dna"
+      },
       "assertions": [
         {
           "where": "tool",
-          "pattern": "391 candidate\\(s\\) for NGG over (sequence|pUC118) \\(3162 bp\\)",
-          "note": "the scan total. The subject label is `sequence` when the model passes the sequence inline and `pUC118` when it passed a file path — both are the same scan, and the first version pinned only the first spelling."
+          "pattern": "391 candidate\\(s\\) for SpCas9 \\[NGG PAM \\(3' of the protospacer\\)\\] over (sequence|pUC118) \\(3162 bp; target DNA, scanning both\\)",
+          "note": "the scan total and the family geometry label. The subject label is `sequence` when the model passes the sequence inline and `pUC118` when it passed a file path — both are the same scan."
         },
-        { "where": "tool", "pattern": "CTGACGGGCTTGTCTGCTCC CGG \\(reverse 85-104\\)", "note": "the top-ranked guide and its strand/coordinates" },
-        { "where": "tool", "pattern": "score 100" },
+        {
+          "where": "tool",
+          "pattern": "CTGACGGGCTTGTCTGCTCC CGG \\(reverse 85-104\\)",
+          "note": "the top-ranked guide and its strand/coordinates"
+        },
+        {
+          "where": "tool",
+          "pattern": "score 100"
+        },
         {
           "where": "answer",
           "pattern": "391|candidate",
           "note": "the scan total or at least the candidate question, in prose. The guide SEQUENCE is not pinned to the answer: the tool can also write the guides to a CSV, and a model that delivers the CSV and summarises it has produced the requested artifact — the tool assertion above already proves the scan ran and what it found."
         },
-        { "where": "answer", "pattern": "reverse|antisense|minus|bottom" }
+        {
+          "where": "answer",
+          "pattern": "reverse|antisense|minus|bottom"
+        }
+      ]
+    },
+    {
+      "id": "crispr-cas12a",
+      "category": "crispr",
+      "tier": "full",
+      "covers": [
+        "molbio_grna_design"
+      ],
+      "instruction": "Design the best Cas12a guide on this 50 bp target. Cas12a uses a 5' TTTV PAM and a 23 nt crRNA. Give me the guide, its PAM, strand and coordinates, and the guide length — do not use SpCas9 NGG geometry.\n\nTarget:\n{seq:cas12a_target}",
+      "timeout_ms": 300000,
+      "expect_tools": [
+        "molbio_grna_design"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "Cas12a \\(Cpf1\\) \\[TTTV PAM \\(5' of the protospacer\\)\\]",
+          "note": "the family geometry is Cas12a's, not SpCas9's"
+        },
+        {
+          "where": "tool",
+          "pattern": "ACGTACGTACGTACGTACGTACG TTTA \\(forward 9-31\\)",
+          "note": "the 23 nt protospacer after the 5' TTTV PAM"
+        },
+        {
+          "where": "answer",
+          "pattern": "Cas12a|TTTV",
+          "note": "the model names the family/PAM it used"
+        }
+      ]
+    },
+    {
+      "id": "crispr-cas13",
+      "category": "crispr",
+      "tier": "full",
+      "covers": [
+        "molbio_grna_design"
+      ],
+      "instruction": "Design a Cas13a guide on this 43 bp target. Cas13a targets RNA, has a 3' H PFS preference instead of a PAM, and uses a 28 nt crRNA. Scan the sense strand; tell me the guide in RNA form, the PFS, and whether it is preferred.\n\nTarget:\n{seq:cas13_target}",
+      "timeout_ms": 300000,
+      "expect_tools": [
+        "molbio_grna_design"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "Cas13a \\(LwaCas13a\\) \\[no PAM \\(Cas13\\)\\]",
+          "note": "Cas13 is modelled as an RNA target with no PAM"
+        },
+        {
+          "where": "tool",
+          "pattern": "PFS preference: 3' H",
+          "note": "the preferred PFS is stated"
+        },
+        {
+          "where": "tool",
+          "pattern": "\\[RNA ACGUACGUACGUACGUACGUACGUACGU\\]",
+          "note": "the guide is reported in RNA form"
+        },
+        {
+          "where": "tool",
+          "pattern": "PFS A",
+          "note": "the observed PFS is reported"
+        },
+        {
+          "where": "answer",
+          "pattern": "Cas13|PFS|RNA",
+          "note": "the model explains the RNA/PFS distinction"
+        }
       ]
     }
   ]

@@ -30,13 +30,13 @@
 
 ## 60 秒速览
 
-- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**58 个 `molbio_*` 工具**（其中
+- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**60 个 `molbio_*` 工具**（其中
   `molbio_plot` 一个工具承载 8 种图表）。
-- **基线**：DSH **0.1.7-rc.1**；`package.json` 版本 0.19.0。
+- **基线**：DSH **0.2.0-rc.2**；`package.json` 版本 0.20.0。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
   **两个独立的 npm 条目、两条独立的版本线**，必须分别发布。
 - **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 是**空列表**，
-  58 个工具由 preset 层承载，只会挂进 "Molecular Biology Lab" 模式。
+  60 个工具由 preset 层承载，只会挂进 "Molecular Biology Lab" 模式。
 - **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`/`charts`）+ 客户端四套件 +
   DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
   发布守卫（`release`）+ benchmark 的 profile 守卫与**离线期望值校验**。
@@ -44,14 +44,14 @@
   `build/release-preflight.mjs`，然后用 **OIDC 可信发布**（仓库里没有任何长期 token）分两步发
   两个 npm 条目，最后用 CHANGELOG 该版本段落建 GitHub Release。**首次发布必须手动做一次**
   （可信发布要求包已存在），完整步骤见 [workflow.md](workflow.md) 第 4 节的 CD 段。
-- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 56 题），分
+- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 61 题），分
   `tools_ok` / `args_ok` / `answer_ok` 三项判分；`npm run bench:offline` 零成本校验期望值。
 
 包内目录结构：
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 58 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 60 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
@@ -66,11 +66,13 @@ dsh-molbio-tools/
 ├── msa.mjs          # 多序列渐进式比对与保守性分析
 ├── align-post.mjs   # 比对后处理：共识/缺口修剪/同一性矩阵/逐列覆盖度
 ├── logo.mjs         # 序列标识图（信息量 + SVG）
-├── crispr.mjs       # CRISPR gRNA 设计（PAM 扫描、评分、脱靶搜索）
+├── crispr.mjs       # CRISPR gRNA 设计（SpCas9/SaCas9/Cas12a/Cas13 家族几何、评分、脱靶搜索）
 ├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
+├── silent-site.mjs  # 静默酶切位点突变（同义密码子内添加/移除位点）
 ├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证
 ├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶
 ├── seqio.mjs        # FASTA/FASTQ 解析与统计
+├── batch.mjs        # 批量文件分析：同一套摘要/ORF/酶切位点 → CSV/TSV
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储
 ├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开

@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import { findHarnessRoot, importPackage } from '../benchmark/harness.mjs';
 
@@ -52,7 +52,36 @@ const memFs = {
     return { path };
   },
   async stat(target) {
-    return this.files.has(target.path) ? { size: 1 } : undefined;
+    const path = String(target.path).replaceAll('\\', '/');
+    const value = this.files.get(path) ?? this.files.get(target.path);
+    if (value !== undefined) return { type: 'file', size: typeof value === 'string' ? Buffer.byteLength(value) : value.length };
+    const prefix = path.replace(/\/$/, '') + '/';
+    for (const key of this.files.keys()) {
+      if (String(key).replaceAll('\\', '/').startsWith(prefix)) return { type: 'directory' };
+    }
+    return undefined;
+  },
+  async listDir(target) {
+    const dir = String(target.path).replaceAll('\\', '/').replace(/\/$/, '');
+    const prefix = dir + '/';
+    const entries = new Map();
+    for (const [key, value] of this.files) {
+      const normalized = String(key).replaceAll('\\', '/');
+      if (!normalized.startsWith(prefix)) continue;
+      const rest = normalized.slice(prefix.length);
+      if (rest === '') continue;
+      const parts = rest.split('/');
+      const name = parts[0];
+      if (!entries.has(name)) {
+        entries.set(name, {
+          name,
+          type: parts.length > 1 ? 'directory' : 'file',
+          target: { path: prefix + name },
+          ...parts.length > 1 ? {} : { size: typeof value === 'string' ? Buffer.byteLength(value) : value.length },
+        });
+      }
+    }
+    return [...entries.values()].sort((a, b) => a.name.localeCompare(b.name));
   },
   async readText(target) {
     if (!this.files.has(target.path)) throw new Error('ENOENT');
@@ -945,6 +974,18 @@ function makeTemplate(n, seed = 42) {
 }
 
 {
+  // A numeric entity above U+10FFFF made `String.fromCodePoint` throw a bare
+  // RangeError out of a `replace` callback, which escaped the whole parser —
+  // the one place in the package that broke the "every failure is a
+  // MolbioInputError" contract. Unreadable references are literal text now,
+  // exactly like an unknown named entity.
+  assert.equal(snapgene.parseXml('<r>&#999999999;</r>').children[0].text, '&#999999999;');
+  assert.equal(snapgene.parseXml('<r>&#xD800;</r>').children[0].text, '&#xD800;', 'a surrogate is not a character');
+  assert.equal(snapgene.parseXml('<r>&#65;</r>').children[0].text, 'A', 'a valid reference still decodes');
+  assert.equal(snapgene.parseXml('<r>&#x1F600;</r>').children[0].text, '\u{1F600}', 'including an astral-plane one');
+}
+
+{
   // regression: genetic-code fixes — vertebrate mitochondrial AGA/AGG are
   // stop codons (NCBI table 2); bacterial TGA is Trp (NCBI table 11)
   const mito = lib.translateFrames('AGAAGGATA', '1', 'mitochondrial_vertebrate');
@@ -1096,6 +1137,19 @@ function makeTemplate(n, seed = 42) {
   const perfect = await run('molbio_align', { sequence1: a, sequence2: a });
   assert.equal(perfect.identity_percent, 100);
   assert.equal(perfect.differences.length, 0);
+
+  // The DP matrix is quadratic and nothing upstream caps it below 1,000,000
+  // bases, so two 10 kb inputs asked for 1e8 cells (~500 MB) before this guard
+  // existed — and two 100 kb ones asked for 37 GB, which is the host process
+  // dying rather than a slow call. The refusal has to arrive BEFORE the
+  // allocation: a rejection that comes after the memory is gone is not a guard.
+  await assert.rejects(
+    () => run('molbio_align', { sequence1: 'ACGT'.repeat(2500), sequence2: 'ACGT'.repeat(2500) }),
+    /matrix cells/,
+  );
+  // ...and the ceiling must not shrink the ordinary case it is protecting.
+  const modest = await run('molbio_align', { sequence1: 'ACGT'.repeat(15), sequence2: 'ACGT'.repeat(15) });
+  assert.equal(modest.identity_percent, 100);
 }
 
 // ── v15: multiple sequence alignment and conservation ───────────────────────
@@ -1381,6 +1435,13 @@ function makeTemplate(n, seed = 42) {
   const byCoord = await run('molbio_extract_region', { source_path: at('pUC118.dna'), start: 1, end: 20, output_path: at('first20.fa') });
   assert.equal(byCoord.sequence.length, 20);
   assert.ok(memFs.files.get(at('first20.fa')).toString('utf8').includes('pUC118_1-20'));
+  // The tool advertises an inline `sequence`; resolveVector used to look only at
+  // `vector`, so the documented parameter was ignored and the call failed with
+  // "provide either vector or vector_path". The 0.20.0 benchmark caught it as an
+  // argument failure; this pins the alias at the tool boundary.
+  const inline = await run('molbio_extract_region', { sequence: byCoord.sequence, start: 1, end: 20 });
+  assert.equal(inline.source, 'sequence');
+  assert.equal(inline.sequence, byCoord.sequence);
 }
 
 {
@@ -1449,6 +1510,9 @@ function makeTemplate(n, seed = 42) {
   assert.equal(tool('molbio_experiment_log').isConcurrencySafe({}), false);
   assert.equal(tool('molbio_plasmid_map').isConcurrencySafe({}), false);
   assert.equal(tool('molbio_plot').isConcurrencySafe({}), false);
+  // Same rule for the logo: it writes logo.svg (a shared default path) and may
+  // open the viewer. It was the only picture tool that defaulted to safe.
+  assert.equal(tool('molbio_sequence_logo').isConcurrencySafe({}), false);
   assert.equal(tool('molbio_clone_simulate').isConcurrencySafe({}), true);
   assert.equal(tool('molbio_clone_simulate').isConcurrencySafe({ save_path: at('x.fa') }), false);
   assert.equal(tool('molbio_fasta_fastq').isConcurrencySafe({ action: 'stats' }), true);
@@ -2280,7 +2344,7 @@ function splicedToGenomic(splicedPos, exons) {
   assert.equal(files.map_path, at('grna-map.svg'));
   const csv = memFs.files.get(at('guides.csv')).toString('utf8');
   const csvLines = csv.trim().split('\n');
-  assert.equal(csvLines[0], 'rank,sequence,pam,strand,start,end,gc_percent,tm_celsius,self_any,self_end,longest_t_run,off_target_count,score');
+  assert.equal(csvLines[0], 'rank,cas_family,sequence,rna_sequence,pam,pfs,pfs_ok,strand,start,end,gc_percent,tm_celsius,self_any,self_end,longest_t_run,off_target_count,score');
   assert.equal(csvLines.length, 5, 'header + four guides');
   assert.ok(csv.includes(guide));
   const mapSvg = memFs.files.get(at('grna-map.svg')).toString('utf8');
@@ -2304,6 +2368,253 @@ function splicedToGenomic(splicedPos, exons) {
   await assert.rejects(() => run('molbio_grna_design', { sequence: target, max_mismatches: 9 }), /max_mismatches must be an integer between 0 and 4/);
   await assert.rejects(() => run('molbio_grna_design', { sequence: target, gc_min: 80, gc_max: 20 }), /must not exceed gc_max/);
   await assert.rejects(() => run('molbio_grna_design', { sequence: target, guide_length: 12 }), /guide_length must be an integer between 15 and 30/);
+}
+
+{
+  // 0.20.0: reverse-strand off-targets were silently under-counted. The index
+  // stores a k-mer at its TOP-strand start for both tables, but the old
+  // finalizeSites subtracted guideLength-1 for reverse hits — shifting them 19 nt
+  // and dropping most as out of bounds. This fixture has one guide at a forward
+  // site and a perfect reverse-strand copy with a CCN PAM, so a correct search
+  // must report exactly one reverse off-target with 0 mismatches.
+  const guide = 'GAGTCCGAGCAGAAGAAGAA';
+  const reverseCopy = reverseComplementOf(guide);
+  const twoSites = `AAAAA${guide}TGGAAAAACCG${reverseCopy}AAAAA`;
+  const offTargetDesign = await run('molbio_grna_design', {
+    sequence: twoSites,
+    pam: 'NGG',
+    guide_length: 20,
+    check_off_target: true,
+    max_mismatches: 2,
+    max_guides: 20,
+  });
+  const forwardGuide = offTargetDesign.guides.find((candidate) => candidate.sequence === guide && candidate.strand === 'forward');
+  assert.ok(forwardGuide, 'the forward guide survives');
+  assert.equal(forwardGuide.off_target_count, 1, 'the reverse-strand perfect copy is an off-target');
+  assert.equal(forwardGuide.off_target_sites[0].strand, 'reverse');
+  assert.equal(forwardGuide.off_target_sites[0].mismatches, 0);
+  assert.equal(forwardGuide.off_target_sites[0].pam, 'CGG', 'the reverse PAM is read on the guide strand');
+
+  // 0.20.0: Cas12a is a 5' TTTV PAM with a 23 nt crRNA and a PAM-proximal 5'
+  // seed. The default SpCas9 geometry would find nothing on this fixture, and
+  // the old assertPamPattern rejected TTTV outright because it demanded an N
+  // at the 5' end of the PAM.
+  const cas12aGuide = 'ACGTACGTACGTACGTACGTACG';
+  const cas12aTarget = `AAAA${'TTTA'}${cas12aGuide}CCCCTTTCGGGGGGGGGGG`;
+  const cas12a = await run('molbio_grna_design', {
+    sequence: cas12aTarget,
+    cas_family: 'cas12a',
+    check_off_target: false,
+    max_guides: 5,
+  });
+  assert.equal(cas12a.cas_family, 'cas12a');
+  assert.equal(cas12a.pam, 'TTTV');
+  assert.equal(cas12a.pam_side, '5prime');
+  assert.equal(cas12a.target, 'DNA');
+  assert.equal(cas12a.guide_length, 23);
+  const found12a = cas12a.guides.find((candidate) => candidate.sequence === cas12aGuide);
+  assert.ok(found12a, 'the 23 nt protospacer is found downstream of the 5\' TTTV PAM');
+  assert.equal(found12a.pam, 'TTTA');
+  assert.equal(found12a.start, 9);
+  assert.equal(found12a.end, 31);
+  // The same guide also exists as a reverse-strand copy with a 5' top-strand
+  // TAAA PAM (guide-strand TTTA). The off-target search must localize it at
+  // 36-58, not at the 19 nt-shifted position the old reverse formula produced.
+  const cas12aTwoSites = `AAAA${'TTTA'}${cas12aGuide}CCCC${reverseComplementOf(cas12aGuide)}TAAA`;
+  const cas12aOff = await run('molbio_grna_design', { sequence: cas12aTwoSites, cas_family: 'cas12a', check_off_target: true, max_mismatches: 2, max_guides: 10 });
+  const cas12aForward = cas12aOff.guides.find((candidate) => candidate.sequence === cas12aGuide && candidate.strand === 'forward');
+  assert.ok(cas12aForward, 'the forward Cas12a guide survives');
+  assert.equal(cas12aForward.off_target_count, 1);
+  assert.equal(cas12aForward.off_target_sites[0].strand, 'reverse');
+  assert.equal(cas12aForward.off_target_sites[0].start, 36);
+  assert.equal(cas12aForward.off_target_sites[0].end, 58);
+  assert.equal(cas12aForward.off_target_sites[0].pam, 'TTTA');
+
+  // 0.20.0: Cas13a is an RNA target with a 3' H PFS preference, not a PAM.
+  const cas13Guide = 'ACGTACGTACGTACGTACGTACGTACGT';
+  const cas13Target = `AAAA${cas13Guide}A${'C'.repeat(10)}`;
+  const cas13 = await run('molbio_grna_design', {
+    sequence: cas13Target,
+    cas_family: 'cas13a',
+    check_off_target: false,
+    max_guides: 50,
+  });
+  assert.equal(cas13.cas_family, 'cas13a');
+  assert.equal(cas13.pam, '');
+  assert.equal(cas13.pam_side, 'none');
+  assert.equal(cas13.target, 'RNA');
+  assert.equal(cas13.guide_length, 28);
+  assert.match(cas13.pfs, /3' H/);
+  const found13 = cas13.guides.find((candidate) => candidate.sequence === cas13Guide);
+  assert.ok(found13, 'the 28 nt Cas13a guide is found');
+  assert.equal(found13.rna_sequence, cas13Guide.replaceAll('T', 'U'));
+  assert.equal(found13.pfs, 'A');
+  assert.equal(found13.pfs_ok, true);
+  assert.equal(found13.tm_celsius, null, 'Cas13 reports no DNA Tm for an RNA guide');
+
+  // Cas13b has a two-sided PFS (5' D and 3' NAN); Cas13d has none. Both must
+  // report the right geometry and never fabricate a DNA Tm.
+  const cas13bGuide = 'ACGTACGTACGTACGTACGTACGTACGTAC';
+  const cas13bTarget = `A${cas13bGuide}CAC`;
+  const cas13b = await run('molbio_grna_design', { sequence: cas13bTarget, cas_family: 'cas13b', region_start: 2, region_end: 31, check_off_target: false, max_guides: 5 });
+  assert.equal(cas13b.cas_family, 'cas13b');
+  assert.equal(cas13b.guide_length, 30);
+  assert.match(cas13b.pfs, /5' D/);
+  const found13b = cas13b.guides.find((candidate) => candidate.sequence === cas13bGuide);
+  assert.ok(found13b, 'the Cas13b 30 nt guide is found');
+  assert.equal(found13b.pfs, 'A/CAC');
+  assert.equal(found13b.pfs_ok, true);
+  assert.equal(found13b.tm_celsius, null);
+
+  const cas13dGuide = 'ACGTACGTACGTACGTACGTAC';
+  const cas13d = await run('molbio_grna_design', { sequence: `AAAA${cas13dGuide}CCCCCCCCCC`, cas_family: 'cas13d', check_off_target: false, max_guides: 10 });
+  assert.equal(cas13d.cas_family, 'cas13d');
+  assert.equal(cas13d.guide_length, 22);
+  assert.equal(cas13d.pfs, '', 'Cas13d has no PFS preference');
+  const found13d = cas13d.guides.find((candidate) => candidate.sequence === cas13dGuide);
+  assert.ok(found13d, 'the Cas13d 22 nt guide is found');
+  assert.equal(found13d.pfs, undefined);
+  assert.equal(found13d.tm_celsius, null);
+
+  // Requiring the PFS filters the same window when the 3' base is not H.
+  const badPfs = await run('molbio_grna_design', {
+    sequence: `AAAA${cas13Guide}G${'C'.repeat(10)}`,
+    cas_family: 'cas13a',
+    region_start: 5,
+    region_end: 32,
+    require_pfs: true,
+    check_off_target: false,
+  });
+  assert.equal(badPfs.candidate_count, 1);
+  assert.equal(badPfs.guides.length, 0, 'the non-preferred G PFS is rejected when require_pfs is on');
+  assert.equal(badPfs.rejected_count, 1);
+
+  // Family-specific errors are reported as themselves, not as "no guide found".
+  await assert.rejects(
+    () => run('molbio_grna_design', { sequence: cas12aTarget, cas_family: 'cas12a', pam: 'NGG' }),
+    /5' PAM must end with a degenerate position/,
+  );
+  await assert.rejects(
+    () => run('molbio_grna_design', { sequence: cas13Target, cas_family: 'cas13a', pam: 'NGG' }),
+    /has no PAM/,
+  );
+  await assert.rejects(
+    () => run('molbio_grna_design', { sequence: cas13Target, cas_family: 'cas13d', require_pfs: true }),
+    /has no PFS to require/,
+  );
+}
+
+{
+  // 0.20.0: batch analysis over a directory. The fixture deliberately mixes a
+  // FASTA, a GenBank-style text file, a .dna and a corrupt .dna so the test
+  // covers format detection, the shared parsers, ORF/site columns, and the
+  // rule that one bad file becomes an error ROW rather than failing the batch.
+  memFs.files.set(at('batch/a.fa'), '>a1\nATGAAATAA\n>a2\nGCGC\n');
+  memFs.files.set(at('batch/b.fa'), '>b1\nGAATTCATGAAATAA\n');
+  memFs.files.set(at('batch/bad.dna'), new Uint8Array([1, 2, 3, 4]));
+  memFs.files.set(at('batch/sub/nested.fa'), '>n1\nACGTACGT\n');
+  memFs.files.set(at('batch/pUC118.dna'), puc118Bytes);
+
+  const batch = await run('molbio_batch_analyze', {
+    directory: 'batch',
+    pattern: '*.fa',
+    analysis: 'all',
+    enzymes: ['EcoRI'],
+    orf_min_aa: 1,
+    output_path: at('batch-report.csv'),
+  });
+  assert.equal(batch.file_count, 2, 'the non-recursive scan sees the two .fa files');
+  assert.equal(batch.analyzed_count, 2);
+  assert.equal(batch.error_count, 0);
+  assert.deepEqual(batch.files.map((row) => row.path), ['batch/a.fa', 'batch/b.fa']);
+  assert.deepEqual(batch.files.map((row) => [row.entries, row.total_bases, row.gc_percent]), [[2, 13, 38.46], [1, 15, 20]]);
+  assert.deepEqual(batch.files.map((row) => row.orf_count), [1, 1]);
+  assert.deepEqual(batch.files.map((row) => row.longest_orf_aa), [2, 2]);
+  assert.deepEqual(batch.files.map((row) => row.enzyme_sites), [[{ name: 'EcoRI', sites: 0 }], [{ name: 'EcoRI', sites: 1 }]]);
+  assert.ok(batch.columns.includes('EcoRI_sites'));
+  assert.equal(batch.saved_to, undefined);
+  assert.equal(batch.output_path, at('batch-report.csv'));
+  const batchCsv = memFs.files.get(at('batch-report.csv')).toString('utf8').trim().split(/\r?\n/);
+  assert.match(batchCsv[0], /^path,format,topology,entries,total_bases,gc_percent,n_percent,feature_count,mean_length,orf_count,longest_orf_aa,orf_skipped,EcoRI_sites,error$/);
+  assert.equal(batchCsv.length, 3);
+
+  // The .dna path goes through the binary parser and reports its declared
+  // topology and feature count; the corrupt .dna is an error row, not a crash.
+  const batchDna = await run('molbio_batch_analyze', {
+    paths: [at('batch/pUC118.dna'), at('batch/bad.dna')],
+    analysis: 'summary',
+    output_path: at('batch-dna.csv'),
+  });
+  assert.equal(batchDna.file_count, 2);
+  assert.equal(batchDna.analyzed_count, 1);
+  assert.equal(batchDna.error_count, 1);
+  const goodDna = batchDna.files.find((row) => row.path.endsWith('pUC118.dna'));
+  assert.equal(goodDna.format, 'snapgene');
+  assert.equal(goodDna.topology, 'circular');
+  assert.equal(goodDna.total_bases, 3162);
+  assert.equal(goodDna.feature_count, 10);
+  assert.ok(batchDna.files.find((row) => row.path.endsWith('bad.dna')).error.length > 0);
+
+  // Recursion is opt-in; the nested file appears only with recursive: true.
+  const flat = await run('molbio_batch_analyze', { directory: 'batch', pattern: '*.fa', output_path: at('flat.csv') });
+  assert.deepEqual(flat.files.map((row) => row.path), ['batch/a.fa', 'batch/b.fa']);
+  const nested = await run('molbio_batch_analyze', { directory: 'batch', pattern: '*.fa', recursive: true, output_path: at('nested.csv') });
+  assert.ok(nested.files.some((row) => row.path === 'batch/sub/nested.fa'));
+
+  // A limit is reported, not silently applied.
+  const limited = await run('molbio_batch_analyze', { directory: 'batch', pattern: '*.fa', max_files: 1, output_path: at('limited.csv') });
+  assert.equal(limited.file_count, 1);
+  assert.equal(limited.truncated, true);
+
+  await assert.rejects(() => run('molbio_batch_analyze', { directory: 'batch', analysis: 'enzymes' }), /non-empty enzymes array/);
+  await assert.rejects(() => run('molbio_batch_analyze', { directory: 'batch', analysis: 'enzymes', enzymes: ['NotAnEnzyme'] }), /unknown enzyme/);
+}
+
+{
+  // 0.20.0: remove an EcoRI site silently. GAATTC is palindromic and spans the
+  // GAA (Glu) and TTC (Phe) codons; changing C12T (TTC -> TTT) or A9G
+  // (GAA -> GAG) destroys the site without changing the protein.
+  const cds = 'ATGGCTGAATTCGGTTAAGCTTAA';
+  const removed = await run('molbio_silent_site_mutagenesis', { sequence: cds, enzyme: 'EcoRI', action: 'remove', max_solutions: 5 });
+  assert.equal(removed.enzyme, 'EcoRI');
+  assert.equal(removed.site, 'GAATTC');
+  assert.equal(removed.action, 'remove');
+  assert.equal(removed.sites_before, 1, 'a palindromic site is one physical site');
+  assert.ok(removed.solutions.length > 0);
+  for (const solution of removed.solutions) {
+    assert.ok(!solution.mutated_sequence.includes('GAATTC'), 'every solution destroys the site');
+    assert.ok(solution.changes.length >= 1);
+    for (const change of solution.changes) {
+      assert.equal(change.codon_before.length, 3);
+      assert.equal(change.codon_after.length, 3);
+      assert.equal(lib.CODON_TABLE.standard[change.codon_before], change.amino_acid, 'the original codon translates to the reported amino acid');
+      assert.equal(lib.CODON_TABLE.standard[change.codon_after], change.amino_acid, 'the changed codon is synonymous');
+    }
+    assert.match(solution.mutation_texts[0], /^[ACGT]\d+[ACGT]$/);
+  }
+  assert.equal(removed.solutions[0].change_count, 1, 'the minimal silent change is one base');
+  assert.ok(['C12T', 'A9G'].includes(removed.solutions[0].mutation_texts[0]));
+  assert.equal(removed.solutions[0].remaining_sites, 0);
+
+  // Add a BamHI site silently: TCT (Ser) -> TCC (Ser) turns GGA TCT into GGA TCC.
+  const added = await run('molbio_silent_site_mutagenesis', { sequence: 'ATGGGATCTGGTTAA', enzyme: 'BamHI', action: 'add', max_solutions: 3 });
+  assert.equal(added.sites_before, 0);
+  assert.ok(added.solutions.length > 0);
+  const addedBest = added.solutions[0];
+  assert.equal(addedBest.mutation_texts[0], 'T9C');
+  assert.ok(addedBest.mutated_sequence.includes('GGATCC'), 'the added site is present in the mutated sequence');
+  assert.equal(addedBest.remaining_sites, 1, 'the added site is one physical site');
+  assert.equal(lib.CODON_TABLE.standard[addedBest.changes[0].codon_after], addedBest.changes[0].amino_acid);
+
+  // A host preference only re-ranks the same silent variants.
+  const hosted = await run('molbio_silent_site_mutagenesis', { sequence: cds, enzyme: 'EcoRI', host: 'e_coli', max_solutions: 5 });
+  assert.equal(hosted.host, 'e_coli');
+  assert.ok(hosted.solutions.every((solution) => Number.isFinite(solution.codon_usage_penalty)));
+
+  // Degenerate recognition sites are refused rather than guessed.
+  await assert.rejects(() => run('molbio_silent_site_mutagenesis', { sequence: cds, enzyme: 'BstEII' }), /unambiguous A\/C\/G\/T recognition site/);
+  await assert.rejects(() => run('molbio_silent_site_mutagenesis', { sequence: cds, enzyme: 'NotAnEnzyme' }), /unknown enzyme/);
+  await assert.rejects(() => run('molbio_silent_site_mutagenesis', { sequence: cds, enzyme: 'EcoRI', frame: 4 }), /frame must be 1, 2 or 3/);
 }
 
 // ── v17: TaqMan probes, multiplex, protein plots, methylation digests ───────
@@ -2415,6 +2726,38 @@ function splicedToGenomic(splicedPos, exons) {
   await assert.rejects(() => run('molbio_design_taqman', { sequence: slice, probe_min_distance_from_primer: 20 }), /probe_min_distance_from_primer must be an integer between 0 and 12/);
   await assert.rejects(() => run('molbio_design_taqman', { sequence: slice, primer_options: { tm_min: 70, tm_max: 60 } }), /tm_min must be lower than tm_max/);
 
+  // 0.20.0: MGB probes are shorter and are judged on the unmodified NN Tm,
+  // not on a fabricated "MGB-corrected" number. The ordering CSV must carry
+  // one row per oligo and name the 5'/3' modifications explicitly.
+  const mgb = await run('molbio_design_taqman', { sequence: slice, probe_chemistry: 'mgb', save_path: at('mgb-order.csv') });
+  assert.equal(mgb.probe_chemistry, 'mgb');
+  assert.deepEqual(mgb.probe_options.length, [13, 20]);
+  assert.deepEqual(mgb.probe_options.tm, [48, 60]);
+  assert.equal(mgb.probe_options.min_tm_delta_vs_primer, 0);
+  assert.equal(mgb.probe_options.chemistry, 'mgb');
+  assert.ok(mgb.assays.length > 0, 'the shorter MGB window finds assays on this slice');
+  for (const assay of mgb.assays) {
+    assert.equal(assay.probe.chemistry, 'mgb');
+    assert.match(assay.probe.tm_model, /unmodified/);
+    assert.equal(assay.probe.tm_delta_vs_primer, undefined, 'no misleading unmodified-Tm margin for an MGB probe');
+  }
+  assert.equal(mgb.order.length, mgb.assays.length * 3, 'three oligo rows per assay');
+  const mgbProbeRow = mgb.order.find((row) => row.role === 'probe');
+  assert.equal(mgbProbeRow.modification, "5' FAM / 3' NFQ-MGB", 'MGB defaults to an NFQ-MGB quencher');
+  assert.match(mgbProbeRow.notes, /MGB/);
+  assert.equal(mgb.saved_to, at('mgb-order.csv'));
+  const mgbCsv = memFs.files.get(at('mgb-order.csv')).toString('utf8').trim().split(/\r?\n/);
+  assert.equal(mgbCsv[0], 'assay,role,name,sequence,length,tm_celsius,gc_percent,modification,scale,purification,notes');
+  assert.equal(mgbCsv.length, 1 + mgb.order.length);
+
+  // The standard chemistry keeps its old numbers but gains the same order sheet.
+  const ordered = await run('molbio_design_taqman', { sequence: slice, save_path: at('taqman-order.csv'), reporter: 'HEX', quencher: 'BHQ1' });
+  assert.equal(ordered.probe_chemistry, 'taqman');
+  assert.deepEqual(ordered.probe_options.length, [18, 27]);
+  assert.equal(ordered.order.length, ordered.assays.length * 3);
+  assert.equal(ordered.order.find((row) => row.role === 'probe').modification, "5' HEX / 3' BHQ1");
+  assert.equal(ordered.assays[0].probe.sequence, best.probe.sequence, 'the standard design is unchanged by the ordering options');
+
   // ── multiplex compatibility ───────────────────────────────────────────────
   // Four real primer pairs designed on the same slice; the last two amplicons
   // are 164 and 168 bp, which is the gel-resolvability defect a multiplexer has
@@ -2450,6 +2793,35 @@ function splicedToGenomic(splicedPos, exons) {
   assert.ok(panel.advice.some((line) => line.includes('not resolvable')), 'the size conflict produces redesign advice');
   assert.ok(!panel.advice.some((line) => line.includes('differ by only 20 bp')), 'a merely close pair is not called unresolvable');
   assert.ok(panel.notes.some((line) => line.includes('not modelled here')), 'the panel states what it does not model');
+  // 0.20.0: one annealing temperature for the whole panel, derived from the
+  // lowest primer Tm, plus a size-based starting concentration plan.
+  assert.ok(panel.annealing !== null);
+  const panelTms = panel.primers.map((primer) => primer.tm);
+  assert.equal(panel.annealing.min_primer_tm, Math.min(...panelTms));
+  assert.equal(panel.annealing.max_primer_tm, Math.max(...panelTms));
+  assert.equal(panel.annealing.spread_c, Math.round((Math.max(...panelTms) - Math.min(...panelTms)) * 100) / 100);
+  assert.equal(panel.annealing.recommended_c, Math.round((Math.min(...panelTms) - 3) * 100) / 100);
+  assert.deepEqual(panel.annealing.range_c, [Math.round((panel.annealing.recommended_c - 1) * 100) / 100, Math.round((panel.annealing.recommended_c + 1) * 100) / 100]);
+  const limiting = panel.primers.reduce((best, primer) => (primer.tm < best.tm ? primer : best));
+  assert.equal(panel.annealing.limiting_primer, `${limiting.target}/${limiting.role}`);
+  assert.equal(panel.annealing.tm_spread_ok, panel.annealing.spread_c <= 5);
+  assert.ok(panel.advice.some((line) => line.includes('annealing temperature around')));
+  assert.ok(panel.notes.some((line) => line.includes('rule of thumb')));
+  // 83 vs 168 bp is a 2.02x ratio, so the shortest pair is lowered and the
+  // longest raised; the two middle targets stay at the 200 nM default.
+  assert.deepEqual(panel.primer_concentrations.map((entry) => [entry.target, entry.recommended_nm]), [
+    ['amp1', 200], ['amp2', 200], ['amp3', 300], ['amp4', 150],
+  ]);
+  assert.match(panel.concentration_note, /2\.02x/);
+
+  const cooled = await run('molbio_multiplex_check', { targets: multiplexTargets, annealing_offset_c: 5, annealing_window_c: 0 });
+  assert.equal(cooled.annealing.recommended_c, Math.round((Math.min(...panelTms) - 5) * 100) / 100);
+  assert.equal(cooled.annealing.range_c[0], cooled.annealing.recommended_c);
+  assert.equal(cooled.annealing.range_c[1], cooled.annealing.recommended_c);
+
+  const noPrimers = await run('molbio_multiplex_check', { targets: [{ name: 'lonely', sequence: 'ACGTACGTACGTACGTACGT' }] });
+  assert.equal(noPrimers.annealing, null, 'no primer sequence means no Tm-based annealing recommendation');
+  assert.deepEqual(noPrimers.primer_concentrations, [{ target: 'lonely', recommended_nm: 200, rationale: 'panel default; no size-based adjustment applies' }]);
   for (const primer of panel.primers) {
     assert.ok(['forward', 'reverse'].includes(primer.role));
     assert.ok(primer.tm > 40 && primer.tm < 80, 'primer Tms are plausible');
@@ -2497,6 +2869,8 @@ function splicedToGenomic(splicedPos, exons) {
   await assert.rejects(() => run('molbio_multiplex_check', { targets: [{ name: 'x' }] }), /targets\[0\]\.sequence": missing/);
   await assert.rejects(() => run('molbio_multiplex_check', { targets: [{ name: 'x', sequence: slice, forward: 'ACGTACGTACGTACGTAC' }] }), /must give both forward and reverse primers/);
   await assert.rejects(() => run('molbio_multiplex_check', { targets: multiplexTargets, dimer_tm_threshold: 0 }), /dimer_tm_threshold must be a positive/);
+  await assert.rejects(() => run('molbio_multiplex_check', { targets: multiplexTargets, annealing_offset_c: 20 }), /annealing_offset_c must be a number between 0 and 15/);
+  await assert.rejects(() => run('molbio_multiplex_check', { targets: multiplexTargets, primer_concentration_nm: 5 }), /primer_concentration_nm must be a number between 20 and 1000/);
 
   // ── helical wheel ─────────────────────────────────────────────────────────
   const wheel = await run('molbio_helical_wheel', { sequence: 'INLKALAALAKKIL' });

@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **58 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **60 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 58 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 60 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：专属模式 preset（2 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**58 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**60 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。
 
 ```powershell
@@ -86,9 +86,9 @@ dsh plugin --profile web update dsh-molbio-tools
 | 层 | 作用 |
 | --- | --- |
 | `cordis.patch.yml` | 只插一行**惰性宿主锚点**（`./host.mjs`），不注册任何工具 |
-| `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，58 个工具在这一层里 |
+| `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，60 个工具在这一层里 |
 
-所以 58 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+所以 60 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
 > **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
@@ -104,7 +104,7 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 只要浏览器面板（可选）
 
-如果只想要图形面板、不想让该 profile 装 58 个工具（连模式都不装），装面板专用包即可
+如果只想要图形面板、不想让该 profile 装 60 个工具（连模式都不装），装面板专用包即可
 （见[浏览器面板](#浏览器面板)）：
 
 ```powershell
@@ -115,7 +115,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 
 ## 它会做什么
 
-58 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+60 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
 ### 1. 序列分析与酶切（7）
@@ -136,10 +136,10 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | --- | --- |
 | `molbio_design_primers` | **自动设计 PCR 引物对**：Tm（SantaLucia 1998 最近邻模型，盐/浓度可调）、GC、GC clamp、run/发夹/自互补/二聚体约束、错配容差、非特异结合检查、3' 目标位置偏好（SNP/定点设计），按罚分排序给出多组候选 |
 | `molbio_design_intron_primers` | **跨内含子 qPCR 引物**：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点，基因组 DNA 不会扩增（可设最小基因组间距） |
-| `molbio_design_taqman` | **TaqMan（水解探针）测定设计**：引物对 + 探针一次给出（探针 5' 端非 G、Tm 比引物高 5 °C 起、无 run/重复、不与引物二聚化），每条候选附逐项罚分 |
+| `molbio_design_taqman` | **TaqMan（水解探针）测定设计**：引物对 + 探针一次给出（探针 5' 端非 G、Tm 比引物高 5 °C 起、无 run/重复、不与引物二聚化），每条候选附逐项罚分；支持 **MGB 化学**（更短、按未修饰 NN Tm 报告并明确标注修饰未建模）和**订购 CSV**（引物/探针、5'/3' 修饰、规模、纯化） |
 | `molbio_primer_tm` | 单条引物 Tm 估算（Na⁺/Mg²⁺/dNTP 盐校正） |
 | `molbio_primer_check` | 引物结构筛查：重复序列、3' 端加权的自互补、发夹、引物对二聚体，以及 Primer3 同款热力学指标 |
-| `molbio_multiplex_check` | **多重 PCR 互扰检查**：面板内所有引物对的二聚体、3' 尾的脱靶与跨模板退火、扩增子是否能在胶上分辨，并给出重设计建议 |
+| `molbio_multiplex_check` | **多重 PCR 互扰检查**：面板内所有引物对的二聚体、3' 尾的脱靶与跨模板退火、扩增子是否能在胶上分辨，并给出重设计建议；另给出**退火温度建议**（最低引物 Tm − offset，含范围与 Tm 离散警告）和**引物浓度起始计划**（按扩增子大小比例配平） |
 
 ### 3. 质粒与图谱（4）
 
@@ -150,7 +150,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_plasmid_map_file` | **一步成图**：直接读 `.dna`/`.gb`/`.gbk` → 把 SVG 图谱**写入工作区**并自动打开 |
 | `molbio_plasmid_map` | 从序列 + 特征数组渲染环形/线形图谱（可选 GC skew 环、单切酶标记） |
 
-### 4. 克隆构建（6）
+### 4. 克隆构建（7）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -159,6 +159,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_golden_gate` | **Golden Gate 多片段组装**：自动设计 4 bp 突出端、检查酶不切片段、给出可直接下单的片段序列、拼出最终质粒 |
 | `molbio_clone_primers` | 给插入片段加酶切位点 + 保护碱基（内置推荐表）或 Gibson 同源臂，并复检全长 Tm/GC/二聚体 |
 | `molbio_mutagenesis_primers` | QuickChange 式定点突变引物（`A123G`/`123A>G`/`123_125del`/`after123insGCT`），报告氨基酸变化 |
+| `molbio_silent_site_mutagenesis` | **静默酶切位点突变**：在同义密码子范围内添加/移除限制性位点，保持蛋白序列不变；输出逐碱基变化、可直接喂给 `molbio_mutagenesis_primers` 的 mutation texts、突变后序列；只支持识别序列无简并碱基的酶 |
 | `molbio_extract_region` | 从质粒文件按特征名（如 "AmpR"、"MCS"）或坐标提取子序列，可选反向互补与存 FASTA |
 
 ### 5. 测序与实验数据（6）
@@ -182,7 +183,7 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_helical_wheel` | **螺旋轮投影**：残基按 3.6 残基/圈落在圆周上、按性质着色，给出疏水矩 μH（判断是否两亲性），出 SVG |
 | `molbio_hydropathy_plot` | **Kyte-Doolittle 疏水性图**：滑动窗口曲线 + GRAVY + 达到跨膜阈值的峰，出 SVG |
 
-### 7. 比对与保守性（6）
+### 7. 比对与保守性（7）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -192,12 +193,13 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | `molbio_alignment_postprocess` | **比对后处理**：共识（plurality/union/strict 三选一）、按缺口比例修剪（报原始 1-based 列号）、两两同一性矩阵、逐列覆盖度 |
 | `molbio_sequence_logo` | **序列标识图**：把保守性画成 SVG logo（字母高度 = 信息量 bits） |
 | `molbio_fasta_fastq` | 工作区 FASTA/FASTQ：条目统计、按 id 提取、FASTQ→FASTA、FASTQ 质量报告 |
+| `molbio_batch_analyze` | **批量文件分析 + CSV/TSV**：对目录（或显式 paths）里所有匹配的 FASTA/FASTQ/GenBank/.dna 跑同一套摘要/ORF/酶切位点分析；单个坏文件是一行 error，不会中断整批 |
 
 ### 8. CRISPR（1）
 
 | 工具 | 用途 |
 | --- | --- |
-| `molbio_grna_design` | **gRNA 设计**（默认 SpCas9 `NGG` PAM）：双链扫描、GC/poly-T/自互补/发夹等质量指标、逐项公开的启发式评分，以及**同序列内的错配容差脱靶搜索**（种子区不许错配）；可出订购 CSV 与带标记的图谱 |
+| `molbio_grna_design` | **gRNA 设计**（默认 SpCas9 `NGG` PAM，亦可 SaCas9/Cas12a/Cas13a/Cas13b/Cas13d）：按家族选择 PAM/PFS 侧、crRNA 长度和种子定义（Cas12a 是 5' TTTV + 5' 种子，Cas13 是 RNA 靶标 + PFS 偏好而非 PAM）；双链扫描、GC/poly-T/自互补/发夹等质量指标、逐项公开的启发式评分，以及**同序列内的错配容差脱靶搜索**；可出订购 CSV 与带标记的图谱 |
 
 ### 9. 文献与实验记录（12）
 
@@ -252,6 +254,11 @@ dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-p
 | "这对引物除了目标还会在哪扩增？预期几条带" | `molbio_pcr_simulate(template, primer_pairs:[…])` → 产物大小 + 凝胶图 |
 | "这几条序列谁跟谁最近，这个结论有信心吗" | `molbio_phylogenetic_tree(sequences:[…], bootstrap:100)` → 支持度 + Newick |
 | "这段是不是启动子/CPG 岛？复制起点在哪" | `molbio_gc_composition(sequence)` → CpG 岛区间 + 累积 GC skew 的 ori/ter 提示 |
+| "把这 60 个质粒/reads 一起做个汇总表" | `molbio_batch_analyze(directory, pattern, analysis:'all', enzymes:[…])` → 一张 CSV/TSV |
+| "把 EcoRI 位点静默去掉，蛋白不能变" | `molbio_silent_site_mutagenesis(sequence, enzyme:'EcoRI', action:'remove')` → mutation texts → `molbio_mutagenesis_primers` |
+| "用 Cas12a 设计 gRNA（5' TTTV PAM）" | `molbio_grna_design(sequence, cas_family:'cas12a')` |
+| "用 Cas13a 敲低这个转录本" | `molbio_grna_design(sequence, cas_family:'cas13a', target_strand:'forward')` → 看 PFS 与 require_pfs |
+| "TaqMan 用 MGB 探针，并出一张订购表" | `molbio_design_taqman(sequence, probe_chemistry:'mgb', save_path:'order.csv')` |
 | "搜一下 KRAS G12D 抑制剂的最新文献并存进阅读库" | `molbio_pubmed_search` → `molbio_paper_add` |
 
 ---
@@ -409,6 +416,12 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   snake_case 键（`region_start`/`tm_min`/`amplicon_max`/`na_mm`…），未知键会明确报错。
 - `tm_delta_vs_primer`（探针 Tm − 较热引物 Tm）为负时探针仍会给出，但在 `notes` 里点名该
   扩增子——看到这条就说明这套测定该换个区域。
+- **MGB（0.20.0）**：`probe_chemistry: "mgb"` 用 13–20 nt、未修饰 NN Tm 48–60 °C 的窗口。
+  MGB 修饰会把真实 Tm 抬高，但**NN 模型不预测这个增量**，所以报告的是未修饰 Tm，并在
+  `tm_model`/notes 里要求向供应商复核；也不会用"探针 Tm 必须高于引物"的未修饰差值去惩罚每个
+  MGB 候选。
+- **订购 CSV（0.20.0）**：`save_path` 写出每条 assay 的 F/R/P 三行，含 5'/3' 修饰、合成规模与
+  纯化；不传路径时只返回结构化 `order`。探针默认 5' FAM、3' 按化学（MGB 默认 NFQ-MGB）。
 
 ### 多重 PCR 互扰（v17）
 
@@ -420,6 +433,11 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 - 大小分辨：差 < 20 bp（`min_size_separation_bp`）= 胶上不可分辨，< 40 bp = 偏近。
 - `compatible` 为 `false` 只由三类阻断项决定：**跨 target 二聚体 / 跨模板退火 / 不可分辨的
   扩增子大小**。
+- **退火温度（0.20.0）**：`annealing.recommended_c` = 最低引物 Tm − `annealing_offset_c`
+  （默认 3 °C），`range_c` 按其 ±window 给范围；`spread_c` 超过阈值时明确说"一个温度不可能对
+  所有引物最优"。这是规则性起点，不是热循环优化。
+- **引物浓度（0.20.0）**：默认 200 nM；当已知扩增子大小比 ≥ 2 时，最短的降到 150 nM、最长的
+  升到 300 nM。`rationale` 逐 target 说明属于哪种情形，notes 写明这是起始点而非实测最优。
 
 ### 甲基化与双酶切（v17）
 
@@ -483,14 +501,38 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 
 ### CRISPR
 
-- 几何按 SpCas9 约定：protospacer 是紧邻 PAM **5' 侧**的 20 nt；`start`/`end` 是**顶链 1-based
-  闭区间**，`sequence` 始终是按 5'→3' 下单的序列，`pam` 始终读在 **guide 靶向的那条链**上。
+- **几何按家族**（0.20.0）：SpCas9 是 3' NGG / 20 nt / 3' 种子；SaCas9 是 3' NNGRRT / 21 nt；
+  **Cas12a 是 5' TTTV / 23 nt crRNA / 5' 端种子**；**Cas13a/b/d 是 RNA 靶标 + PFS 偏好**（不是 PAM：
+  Cas13a 3' H / 28 nt，Cas13b 5' D + 3' NAN / 30 nt，Cas13d 无 PFS / 22 nt）。`start`/`end` 仍是
+  顶链 1-based 闭区间，`sequence` 是按 5'→3' 下单的 DNA 序列（Cas13 另给 `rna_sequence`），
+  `pam` 读在 guide 靶向的那条链上（Cas13 为空）。
+- **PFS 不是 PAM**：Cas13 的 PFS 缺失只扣分并标注，只有 `require_pfs: true` 才过滤；Cas13 不报
+  DNA NN Tm（返回 null），因为 guide 是 RNA。
+- **反向链脱靶**（0.20.0 修复）：旧 `finalizeSites` 对反向命中减了 `guideLength-1`，使反向脱靶
+  偏移 19 nt 并大多被丢弃；现在两种链都从 top-strand 起点算，PAM 按 5'/3' 侧与链向取窗口。
 - 评分逐项公开（GC 偏差、Tm 偏差、poly-T 与同聚、自互补、种子自互补、发夹 Tm、**每个脱靶
   8 分**、PAM 前一位为 G 时 +4），起点 100。**这是排序用的启发式，不是切割效率或特异性的
   预测值。**
-- 脱靶搜索只建模**替换**（无 bulge/indel）、要求 PAM 完好、种子末端 2 位不允许错配；默认只搜
-  得分最高的若干候选。想在基因组尺度搜索，需要把基因组序列作为 target 传入（当前实现的规模
-  上限就是单次调用的序列长度）。
+- 脱靶搜索只建模**替换**（无 bulge/indel）、要求 PAM 完好、**家族对应的种子端**不允许错配
+  （SpCas9/SaCas9 3' 末 2 位，Cas12a 5' 起 2 位，Cas13 无硬种子）；默认只搜得分最高的若干候选。
+  想在基因组尺度搜索，需要把基因组序列作为 target 传入（当前实现的规模上限就是单次调用的
+  序列长度；Cas13 另有候选窗口上限并提示缩小 region）。
+
+### 批量分析（0.20.0）
+
+- 目录扫描默认不递归；`recursive: true` 才进子目录（深度上限 8）。`paths` 与 `directory` 二选一，
+  显式 paths 优先。
+- 每个文件独立解析，**坏文件是一行 `error`**，不会让整批失败；`truncated` 表示触到文件数/字节上限。
+- 拓扑以 GenBank/SnapGene 声明为准（环状质粒的酶切位点计数不会按线性处理），没有声明时才用
+  `circular` 参数。ORF 用所选遗传密码与 ATG 起始规则；长 ORF 不等于真基因。
+
+### 静默位点突变（0.20.0）
+
+- 只在**同义密码子**内枚举：蛋白序列按构造不变；`changes` 逐碱基给出位置/前后碱基/密码子/氨基酸。
+- `mutation_texts` 是 `A123G` 形式，可直接传给 `molbio_mutagenesis_primers`；`mutated_sequence`
+  是改完的 CDS。
+- 只支持识别序列**无简并碱基**的酶（`GGTNACC` 这类直接拒绝）；`host` 只影响同义密码子的排序，
+  不改变"是否静默"这一事实。静默是蛋白层面的，mRNA 结构/剪接/密码子使用仍可能变化。
 
 ### 文献与记录
 
@@ -615,13 +657,13 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 56 题（覆盖 58/58 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 61 题（覆盖 60/60 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
 > `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
 > （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
-> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 58/58 覆盖），
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 60/60 覆盖），
 > `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
@@ -647,7 +689,7 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 58 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 60 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
@@ -662,12 +704,14 @@ dsh-molbio-tools/
 ├── msa.mjs          # 多序列渐进式比对与保守性分析
 ├── align-post.mjs   # 比对后处理：共识/缺口修剪/同一性矩阵/逐列覆盖度
 ├── logo.mjs         # 序列标识图（信息量 + SVG）
-├── crispr.mjs       # CRISPR gRNA 设计（PAM 扫描、评分、脱靶搜索）
+├── crispr.mjs       # CRISPR gRNA 设计（SpCas9/SaCas9/Cas12a/Cas13 家族几何、评分、脱靶搜索）
 ├── cloning.mjs      # 克隆模拟：选酶/酶切连接/Gibson/Golden Gate/克隆引物/突变引物
+├── silent-site.mjs  # 静默酶切位点突变（同义密码子内添加/移除位点）
 ├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证
 ├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶
 ├── charts.mjs       # 实验数据图表：CSV/TSV 读取 + 折线/直方图/箱型/小提琴/火山/热力图（基于 svgio）
 ├── seqio.mjs        # FASTA/FASTQ 解析与统计
+├── batch.mjs        # 批量文件分析：同一套摘要/ORF/酶切位点 → CSV/TSV
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储
 ├── view.mjs         # auto-view：把 SVG 交给系统默认应用打开

@@ -304,6 +304,20 @@ check('the published tarball would carry the client half and the panel package',
     assert.ok(files.includes(entry), `the files allowlist carries ${entry}`);
     assert.ok(existsSync(join(packageRoot, entry)), `and ${entry} exists on disk`);
   }
+
+  // ...but "carries build/" is not the same rule as "carries benchmark/". A
+  // directory entry ships whatever is on the PUBLISHER'S DISK, and this
+  // repository deliberately keeps generated measurements out of git: the
+  // .gitignore excludes benchmark/reports/ because "a report measures one model
+  // on one day; it is not a source artifact". `files: ["benchmark"]` shipped
+  // them anyway — ~1.4 MB of one machine's runs in a 4.4 MB tarball — and no
+  // earlier check could see it, because every file on disk was legitimate and
+  // only the allowlist was too broad. Name subpaths here, never the directory.
+  assert.ok(
+    !files.includes('benchmark'),
+    'the files allowlist must name benchmark subpaths ("benchmark/*.mjs", "benchmark/tasks"), never "benchmark" itself: that ships gitignored local reports',
+  );
+  assert.ok(files.includes('benchmark/tasks'), 'the task definitions still ship (the suite runs from an unpacked tarball)');
   assert.ok(existsSync(join(packageRoot, 'lib', 'client.js')), 'the client artifact is inside an allowlisted directory');
   const panelRoot = join(packageRoot, 'packages', 'molbio-panel');
   if (existsSync(panelRoot)) {

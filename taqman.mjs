@@ -56,6 +56,40 @@ export const PROBE_DEFAULTS = {
   maxAmplicons: 5,
 };
 
+/**
+ * Probe chemistries the designer knows about.
+ *
+ * A standard TaqMan probe is dual-labelled (5' reporter, 3' quencher) and is
+ * designed at 18-27 nt with a Tm 5 °C above the primers. An MGB probe carries a
+ * minor-groove binder that raises the Tm substantially, so the SAME unmodified
+ * NN estimate must be compared with a lower window and the shorter length
+ * window. The modification's Tm contribution is NOT modelled: the reported Tm
+ * is the unmodified DNA estimate, and the result says so. Claiming a modified
+ * Tm from the NN model would be a fabricated number.
+ */
+export const PROBE_CHEMISTRY = {
+  taqman: {
+    label: 'TaqMan (standard dual-labelled)',
+    probeLenMin: 18,
+    probeLenMax: 27,
+    probeTmMin: 58,
+    probeTmMax: 72,
+    minTmDelta: 5,
+    defaultQuencher: 'BHQ1',
+    tmModel: 'unmodified DNA nearest-neighbour estimate',
+  },
+  mgb: {
+    label: 'TaqMan MGB (minor-groove binder)',
+    probeLenMin: 13,
+    probeLenMax: 20,
+    probeTmMin: 48,
+    probeTmMax: 60,
+    minTmDelta: 0,
+    defaultQuencher: 'NFQ-MGB',
+    tmModel: 'unmodified DNA nearest-neighbour estimate; the MGB modification raises Tm by an amount this model does not predict — verify with the supplier',
+  },
+};
+
 const round2 = (value) => Math.round(value * 100) / 100;
 
 function pairTm(pair) {
@@ -109,7 +143,8 @@ function safeDimerAnyTm(a, b, ctMolar) {
  * Evaluate one probe candidate: thermodynamics, structure, and the heuristic
  * flags a designer must know before ordering it.
  */
-export function evaluateProbe(seq, { tmOpts, ctMolar, primerTmMax, maxRun, maxSelfAny }) {
+export function evaluateProbe(seq, { tmOpts, ctMolar, primerTmMax, maxRun, maxSelfAny, chemistry = 'taqman' }) {
+  const chemistrySpec = PROBE_CHEMISTRY[chemistry] ?? PROBE_CHEMISTRY.taqman;
   const lower = seq.toUpperCase();
   const tm = primerTm(lower, tmOpts).tm_celsius;
   const gc = gcPercent(lower);
@@ -119,6 +154,7 @@ export function evaluateProbe(seq, { tmOpts, ctMolar, primerTmMax, maxRun, maxSe
   const selfAny = safeSelfAny(lower);
   const selfEnd = safeSelfEnd(lower);
   const notes = [];
+  if (chemistry === 'mgb') notes.push(`MGB probe: Tm ${round2(tm)} °C is the unmodified DNA NN estimate; the MGB modification raises it, so verify the modified Tm with the supplier`);
   if (lower[0] === 'G') notes.push('5\' terminal G: the guanine quenches the reporter even before cleavage — move the probe or pick the reverse strand');
   if (lower[lower.length - 1] === 'G') notes.push('3\' terminal G: a short probe is extended by the polymerase without cleavage — prefer a different 3\' base');
   if (runs.length > 0) notes.push(`mononucleotide run >= ${maxRun + 1} bases (${runs.map((run) => `${run.base}${run.count}`).join(', ')})`);
@@ -140,9 +176,12 @@ export function evaluateProbe(seq, { tmOpts, ctMolar, primerTmMax, maxRun, maxSe
   return {
     sequence: lower,
     length: lower.length,
+    chemistry,
+    chemistry_label: chemistrySpec.label,
+    tm_model: chemistrySpec.tmModel,
     tm: round2(tm),
     gc_percent: gc,
-    tm_delta_vs_primer: tmDelta,
+    ...tmDelta === undefined ? {} : { tm_delta_vs_primer: tmDelta },
     hairpin_tm: round2(hairpin),
     self_any: selfAny,
     self_end: selfEnd,
@@ -200,6 +239,11 @@ export function probeCandidates(template, forwardInterval, reverseInterval, opts
   // outward from, and the 3' end the reported distance is measured against.
   const stem = forwardUpstream ? forwardInterval : reverseInterval;
   const work = reverse ? reverseComplement(template) : template;
+  // An MGB probe's unmodified Tm is lower than its primers' by design; the
+  // minor-groove binder supplies the missing stability. Comparing the raw NN Tm
+  // with the primer Tm would penalise every MGB candidate, so the margin is not
+  // applied to that chemistry (the MGB Tm window is the constraint instead).
+  const tmReference = opts.chemistry === 'mgb' ? undefined : primerTmMax;
   // On `work`, a top-strand interval [s, e] corresponds to [n-1-e, n-1-s].
   const windowStart = reverse ? n - 1 - gap[1] : gap[0] + minGap;
   const windowEnd = reverse ? n - 1 - gap[0] - minGap : gap[1] - minGap;
@@ -210,9 +254,10 @@ export function probeCandidates(template, forwardInterval, reverseInterval, opts
       const evaluated = evaluateProbe(sequence, {
         tmOpts: opts.tmOpts,
         ctMolar: opts.ctMolar,
-        primerTmMax,
+        primerTmMax: tmReference,
         maxRun: opts.maxRun,
         maxSelfAny: opts.maxSelfAny,
+        chemistry: opts.chemistry,
       });
       if (evaluated.gc_percent < opts.probeGcMin || evaluated.gc_percent > opts.probeGcMax) continue;
       if (evaluated.tm < opts.probeTmMin || evaluated.tm > opts.probeTmMax) continue;
@@ -262,9 +307,22 @@ export function probeCandidates(template, forwardInterval, reverseInterval, opts
  */
 export function designTaqmanProbes(rawTemplate, rawOptions = {}) {
   const template = normalizeSequence(rawTemplate);
-  const opts = { ...PROBE_DEFAULTS };
+  const chemistry = rawOptions.probeChemistry ?? 'taqman';
+  const chemistrySpec = PROBE_CHEMISTRY[chemistry];
+  if (chemistrySpec === undefined) {
+    throw new MolbioInputError(`unknown probe_chemistry ${JSON.stringify(chemistry)}; known: ${Object.keys(PROBE_CHEMISTRY).join(', ')}`);
+  }
+  const opts = {
+    ...PROBE_DEFAULTS,
+    probeLenMin: chemistrySpec.probeLenMin,
+    probeLenMax: chemistrySpec.probeLenMax,
+    probeTmMin: chemistrySpec.probeTmMin,
+    probeTmMax: chemistrySpec.probeTmMax,
+    minTmDelta: chemistrySpec.minTmDelta,
+    chemistry,
+  };
   for (const [key, value] of Object.entries(rawOptions)) {
-    if (value !== undefined && value !== null) opts[key] = value;
+    if (value !== undefined && value !== null && key !== 'probeChemistry') opts[key] = value;
   }
   // A hydrolysis-probe assay is deliberately short (the amplicon is the stretch
   // the polymerase must traverse before it reaches and cleaves the probe), so
@@ -370,7 +428,11 @@ export function designTaqmanProbes(rawTemplate, rawOptions = {}) {
       tm: [primerOpts.tmMin, primerOpts.tmMax],
       gc: [primerOpts.gcMin, primerOpts.gcMax],
     },
+    probe_chemistry: chemistry,
     probe_options: {
+      chemistry,
+      chemistry_label: chemistrySpec.label,
+      tm_model: chemistrySpec.tmModel,
       length: [opts.probeLenMin, opts.probeLenMax],
       tm: [opts.probeTmMin, opts.probeTmMax],
       gc: [opts.probeGcMin, opts.probeGcMax],
@@ -445,9 +507,22 @@ export function primerEngineOptions(raw = {}) {
  * that will run them.
  */
 export function resolveProbeOptions(raw = {}) {
-  const opts = { ...PROBE_DEFAULTS };
+  const chemistry = raw.probeChemistry ?? 'taqman';
+  const chemistrySpec = PROBE_CHEMISTRY[chemistry];
+  if (chemistrySpec === undefined) {
+    throw new MolbioInputError(`unknown probe_chemistry ${JSON.stringify(chemistry)}; known: ${Object.keys(PROBE_CHEMISTRY).join(', ')}`);
+  }
+  const opts = {
+    ...PROBE_DEFAULTS,
+    probeLenMin: chemistrySpec.probeLenMin,
+    probeLenMax: chemistrySpec.probeLenMax,
+    probeTmMin: chemistrySpec.probeTmMin,
+    probeTmMax: chemistrySpec.probeTmMax,
+    minTmDelta: chemistrySpec.minTmDelta,
+    chemistry,
+  };
   for (const [key, value] of Object.entries(raw)) {
-    if (value !== undefined && value !== null && key !== 'primer_options') opts[key] = value;
+    if (value !== undefined && value !== null && key !== 'primer_options' && key !== 'probeChemistry') opts[key] = value;
   }
   if (!Number.isInteger(opts.probeLenMin) || opts.probeLenMin < 12) throw new MolbioInputError('probe_len_min must be an integer >= 12');
   if (!Number.isInteger(opts.probeLenMax) || opts.probeLenMax > 40 || opts.probeLenMax < opts.probeLenMin) throw new MolbioInputError('probe_len_max must be an integer between probe_len_min and 40');
@@ -462,4 +537,85 @@ export function resolveProbeOptions(raw = {}) {
   // Reuse the primer engine's own validation for the nested primer options.
   resolveDesignOptions(primerEngineOptions(raw.primer_options ?? {}));
   return opts;
+}
+
+/** Quote one CSV field; ordering sheets contain commas in probe notes. */
+function csvField(value) {
+  const text = value === undefined || value === null ? '' : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+/**
+ * Build the oligo rows a synthesis order needs: one row per primer and probe.
+ *
+ * The modification column is deliberately explicit rather than implied by the
+ * chemistry name: a lab ordering sheet has separate 5' and 3' modification
+ * fields, and an MGB probe without an NFQ-MGB quencher is a different molecule.
+ */
+export function taqmanOrderRows(assays, options = {}) {
+  const chemistry = options.chemistry ?? 'taqman';
+  const spec = PROBE_CHEMISTRY[chemistry] ?? PROBE_CHEMISTRY.taqman;
+  const reporter = options.reporter ?? 'FAM';
+  const quencher = options.quencher ?? spec.defaultQuencher;
+  const primerScale = options.primerScale ?? '25nm';
+  const probeScale = options.probeScale ?? '25nm';
+  const primerPurification = options.primerPurification ?? 'standard';
+  const probePurification = options.probePurification ?? 'hplc';
+  const rows = [];
+  for (const [index, assay] of assays.entries()) {
+    const id = `assay${index + 1}`;
+    for (const [role, primer] of [['forward', assay.forward], ['reverse', assay.reverse]]) {
+      rows.push({
+        assay: index + 1,
+        role,
+        name: `${id}_${role === 'forward' ? 'F' : 'R'}`,
+        sequence: primer.sequence,
+        length: primer.length,
+        tm_celsius: primer.tm,
+        gc_percent: primer.gc_percent,
+        modification: '',
+        scale: primerScale,
+        purification: primerPurification,
+        notes: '',
+      });
+    }
+    const probe = assay.probe;
+    const noteParts = [spec.label, probe.tm_model, ...(probe.notes ?? [])];
+    if (chemistry === 'mgb' && quencher !== 'NFQ-MGB') {
+      noteParts.push('an MGB probe is normally ordered with an NFQ-MGB quencher; a different quencher is a different molecule');
+    }
+    rows.push({
+      assay: index + 1,
+      role: 'probe',
+      name: `${id}_P`,
+      sequence: probe.sequence,
+      length: probe.length,
+      tm_celsius: probe.tm,
+      gc_percent: probe.gc_percent,
+      modification: `5' ${reporter} / 3' ${quencher}`,
+      scale: probeScale,
+      purification: probePurification,
+      notes: noteParts.filter((part) => part !== undefined && part !== '').join('; '),
+    });
+  }
+  return rows;
+}
+
+/** Render the ordering rows as CSV text. */
+export function taqmanOrderCsv(rows) {
+  const header = 'assay,role,name,sequence,length,tm_celsius,gc_percent,modification,scale,purification,notes';
+  const lines = rows.map((row) => [
+    row.assay,
+    row.role,
+    row.name,
+    row.sequence,
+    row.length,
+    row.tm_celsius,
+    row.gc_percent,
+    row.modification,
+    row.scale,
+    row.purification,
+    row.notes,
+  ].map(csvField).join(','));
+  return `${[header, ...lines].join('\n')}\n`;
 }
