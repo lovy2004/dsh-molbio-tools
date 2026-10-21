@@ -44,21 +44,35 @@
 
 需要一台已装好 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的机器。
 
-### 推荐：专属模式 preset（2 步）
+### 推荐：在 DSH 插件页安装（3 步）
 
 装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**60 个工具只在这个模式里出现**，
-不会污染你其它会话（这点很重要：工具多了会占提示预算）。
+不会污染你其它会话（这点很重要：工具多了会占提示预算）。**右栏的 Molbio / Papers 两个面板也随这个包
+一起装好**，不需要再装 `dsh-molbio-panel`。
 
-```powershell
-# 1. 把包装进你的 profile（web 是默认 profile 名，按需替换）
-dsh plugin --profile web add D:\path\to\dsh-molbio-tools
+1. 打开 DSH Web GUI，点侧栏的 **插件**（Plugins）。
+2. 点 **添加插件**（Add plugin），在「包名或地址」里输入 `dsh-molbio-tools`，点 **安装**（Install）；
+   装完点 **立即启用**（Enable now）——关掉对话框只会装好、不会启用，之后也可以在插件页打开它的开关。
+3. 重启该 profile，然后在预设选择器里选 "Molecular Biology Lab" 新建会话。
 
-# 2. 重启该 profile，然后在预设选择器里选 "Molecular Biology Lab" 新建会话
+### 次选：命令行安装
+
+没有图形界面时（例如服务器上只用 CLI），用这条命令；它和插件页安装等价，都从 npm registry 取包：
+
+```bash
+# web 是默认 profile 名，按需替换；装完同样要重启该 profile
+dsh plugin --profile web add dsh-molbio-tools
 ```
 
-**升级**同样只有一条命令，不用重新复制、也不用改配置：
+> 只有在改本仓库源码、还没发布到 npm 时，才需要从本地目录安装
+> （路径按实际情况替换，Windows 示例）：
+> ```powershell
+> dsh plugin --profile web add D:\path\to\dsh-molbio-tools
+> ```
 
-```powershell
+**升级**（图形界面装的也适用）同样只有一条命令，不用重新复制、也不用改配置：
+
+```bash
 dsh plugin --profile web update dsh-molbio-tools
 ```
 
@@ -102,14 +116,19 @@ dsh plugin --profile web update dsh-molbio-tools
 > 如果你确实想要"工具对所有会话全局可见"，那需要把工具行加到宿主层——但那不是本包的设计，
 > 且会让专属模式里的同一行变成死行（0.1.7 上表现为选择器显示"加载失败"）。
 
-### 只要浏览器面板（可选）
+### 只要浏览器面板
 
 如果只想要图形面板、不想让该 profile 装 60 个工具（连模式都不装），装面板专用包即可
-（见[浏览器面板](#浏览器面板)）：
+（见[浏览器面板](#浏览器面板可选)）。**它和 `dsh-molbio-tools` 二选一**：两者注册同一组右栏 tab
+（`dsh-molbio-tools` / `dsh-molbio-tools/papers`），同时装会重复注册并报
+`tab type id ... is already registered`。同样在 **插件 → 添加插件** 里输入 `dsh-molbio-panel`，
+**安装** → **立即启用**。命令行等价于：
 
-```powershell
-dsh plugin --profile <profile> add D:\path\to\dsh-molbio-tools\packages\molbio-panel
+```bash
+dsh plugin --profile <profile> add dsh-molbio-panel
 ```
+
+> 从本地源码目录安装时，把包名换成 `<包目录>/packages/molbio-panel`。
 
 ---
 
