@@ -17,6 +17,9 @@ benchmark/_probe-workspace/
 # with a custom cwd) and for anything the tools write during development: the
 # list is the full set of extensions the toolset can emit.
 /*.svg
+# The package's own plugin icon is the one root SVG that is a source artifact,
+# not a generated plot: package.json exports it as "./icon" for the plugin manager.
+!/icon.svg
 /*.fasta
 /*.fa
 /*.fq
