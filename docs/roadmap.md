@@ -10,12 +10,12 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.20.0）
+## 1. 当前状态（0.21.0）
 
 - 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.0-rc.2**。
+- 基线：DSH **0.2.1-rc.2**。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -27,6 +27,11 @@ L = 需要新机制或外部资源）。
   `molbio_alignment_postprocess`（共识/修剪/同一性矩阵/覆盖度）。
 - **2.3 / 2.5 / 2.7 / 2.8 与 survey #8 已在 0.20.0 交付**：批量分析 CSV、Cas12a/Cas13 家族几何
   （含反向链脱靶定位修复）、multiplex 退火温度/浓度建议、TaqMan MGB/订购 CSV、静默位点突变。
+- **0.21.0 是纯适配版**：基线 0.2.0-rc.2 → 0.2.1-rc.2。preset 行清单按上游**逐行重抄**
+  （+`time-context` / `tool-schedule` / `tool-plugin-market`；−两个可选 subagent provider 与
+  `tool-ralph`；去掉 persona `suffix` 与两处 `backgroundMode`），`contract` 两条断言从上游
+  minified 字面量改挂到**行为**，两条 suspended 的 benchmark 记录用真实模型重录。
+  工具数与插件行为零变化。
 
 ---
 

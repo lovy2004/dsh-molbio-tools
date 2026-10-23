@@ -10,6 +10,76 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.21.0] — 2026-10-23（DSH 0.2.1-rc.2 适配；两条 benchmark 欠账清零）
+
+**工具数不变（60），插件行为零改动。** 这是一次"只跟上游走"的版本：0.20.1 之后本机 harness
+升到 0.2.1-rc.2，`npm test` 立刻红了三处——组合漂移、契约断言、以及一条依赖旧 fixture 的
+漂移探针。三处都不是插件退化，但每一处都属于**守卫在说谎**，所以按发布阻断处理。
+
+### 1. preset 行清单按 0.2.1-rc.2 逐行重抄（12 处结构差异）
+
+- 上游 `standard` **新增** `time-context`、`tool-schedule`、`tool-plugin-market`；
+- **删除** `tool-subagent-codex` / `tool-subagent-claude-code`（两个 `disabled: true` 的可选
+  provider）与 `tool-ralph`；
+- **去掉** persona 的 `suffix: Your working directory is {{cwd}}.`，以及 `tool-subagent` /
+  `tool-subagent-fork` 的 `backgroundMode: continuable`；
+- plan-mode 的段落文案改为 "until the user approves your plan through exit_plan_mode…"。
+
+`agent.cordis.yml` 现在是上游 `config.plugins:` 块的**整体去缩进** + 末尾一行 `tool-molbio`；
+0.2.1 的上游文件不带行内注释，因此行内注释随之消失，来源与升级规则集中写在文件头部。
+`preset.patch.yml` 由 `build/preset-patch.mjs` 重新生成。
+
+### 2. `test/contract.mjs`：两条断言不再锚在 minified 字面量上
+
+- **client 入口**：改为按包自己的 `exports["./client"]`（`browser` 条件）解析。
+  0.2.1-rc.2 把 `@deepseek-ai/dsh-client-connection` 移到 `lib/client.browser.js`，旧断言
+  硬编码 `lib/client.js`，会把一个加载正常的包判死；同时 Web shell 已是打包产物、不再出现
+  `require("包名")`，"seeded into the shell" 兜底只剩代码路径。新增两个对照：没有
+  `./client` 导出的包必须解析为 `undefined`，以及移动过的入口必须解析到真实文件。
+- **`presentationMeta`**：0.2.1 删除了 `exec.parent === void 0` 闸门（投影移进
+  `createSuccessResult`，对每次成功执行都做）。断言改挂到卡片真正消费的东西：投影被
+  `snapshotProjection` 记录、并以 `meta` 附到成功结果上。
+
+### 3. `drift-probe`：突变样本换成上游仍存在的行
+
+上游删掉 `tool-ralph` 后，那条"上游 `disabled: true` 被丢掉"的突变在**空转**（`withRow`
+找不到目标，什么也没改，守卫却"通过"）。改用上游仍以 `disabled: true` 发布的
+`tool-plugin-manager`；14 条突变全部仍能被抓住。
+
+### 4. benchmark：profile 重建、两条欠账清零
+
+- preset 新增的两行宿主可承载行（`time-context`、`tool-schedule`）进入 headless profile，
+  `benchmark/profile.mjs` 重建 `molbio-bench`：**12 行宿主行，仍注册 60 个工具**。
+- `methylation-block` 与 `qpcr-primers` 的冻结响应停在 0.16.0 之前，`benchmark-score` 每次
+  都点名。本版用一次完整真实模型跑重录，并用 `_freeze-trace.mjs --replace` **只替换这两条**，
+  其余 47 条保持原样；`run.amendments` 记录每条替换来自哪一次跑分。fixture 现为
+  **49 条记录、0 条 suspended**。
+- 完整跑分（2026-10-23，DSH 0.2.1-rc.2，61 题）：**58/61** 通过，tool selection **60/61**、
+  arguments **60/61**、final answer **59/61**；11.2M tokens / 2161 s。
+  - `protein-props` 的失败是**断言不认千分位逗号**（答案写 `1,490`，断言写 `/1490/`）——
+    与 0.20.0 修过的 `/3935/` 同一类，当时漏了这一条。已改为 `1[,.]?490`，`--replay` 后
+    **59/61**。
+  - 剩余两条是**真实的模型遗漏**，不是产品缺陷：`dilution-math` 答案正确（50 µL + 950 µL）
+    却从未调用 `molbio_lab_math`；`batch-analysis` 写出了 CSV，但最终回答只说"报告已生成"，
+    没有报出指令要求的长度/特征数。
+- `_freeze-trace.mjs` 新增 `--replace id[,id…]`：只重录被修复作废的条目，其余记录与顺序原样
+  保留，并在 `run.amendments` 里写明每条替换的来源跑分——**替换的是真实录制，不是手改**。
+
+### 5. 未做 / 边界
+
+- **`png_path` 仍然不做**：`contract` 的"工作区仍不能存二进制文件"断言在 0.2.1-rc.2 上**仍然
+  通过**，说明上游 fs 缝依旧是 text-only；触发条件未到。
+- **面板版本保持 0.1.3**：`lib/client.js` 逐字节未变，`release-preflight` 复核为
+  "already published with identical bytes"，因此不 bump。
+
+### 6. 版本与验证
+
+- 根包 `0.20.1 → 0.21.0`；DSH 基线钉 **0.2.1-rc.2**（`.github/workflows/{test,release}.yml`、
+  preset 头注、`docs/workflow.md`、`docs/roadmap.md`、`docs/maintainer.md`）。
+- `npm test` 全绿：contract 16/16、drift-probe 14 条突变、preset-health 30 行全过、release
+  13 项、benchmark profile/score/coverage/changed、`bench --offline` 61 题。
+- 文档：roadmap 状态、history 的 v0.21.0 段（三条教训）、workflow 的升级提示同步。
+
 ## [0.20.1] — 2026-10-18（插件专属图标）
 
 **工具数不变（60），运行时零改动；包内只多一个 746 B 的 SVG。**

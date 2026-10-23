@@ -425,7 +425,7 @@ git status --short           # lib/client.js 与 packages/molbio-panel/lib/clien
 `standard`** 逐行对比——0.1.7-alpha.1 起上游基线是
 `<harness>/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`
 （旧的 `@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml` 已随该包一并消失）。
-只应剩 `skill-filesystem`、`tool-skill`、`tool-molbio` 这三行差异。
+只应剩 `tool-molbio` 这一行差异（0.2.1-rc.2 起上游自己也带 `skill-filesystem` 与 `tool-skill`）。
 
 客户端半的改动还有两条**专门针对"会弄坏 GUI"**的确认：
 
@@ -456,15 +456,17 @@ git status --short           # lib/client.js 与 packages/molbio-panel/lib/clien
 ### DSH 升级后：preset 组合的维护（必做）
 
 `preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的**行清单**副本 + 末尾一行
-`tool-molbio`（当前基线：**dsh 0.2.0-rc.2**）。它不会自动跟随 DSH 升级，因此每次升级
+`tool-molbio`（当前基线：**dsh 0.2.1-rc.2**）。它不会自动跟随 DSH 升级，因此每次升级
 DSH 后：
 
 1. 取新版的 shipped `standard`：
    `<harness>/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`；
 2. 与 `preset/molbio-lab/agent.cordis.yml` 对比（把上游的 `config.plugins:` 块与我们的行清单
    对齐看），**逐行吸收上游改动**（新增/删除的行、注释、key 顺序、配置契约变化），只保留
-   `skill-filesystem` / `tool-skill` / `tool-molbio` 这几处有意差异与头部注释。**照抄上游文本，
-   不要手写"看起来等价"的行**——上游在 0.1.6-alpha.1 用 `workflow-worker-thread` 教过一次；
+   `tool-molbio` 这一处有意差异与头部注释。**照抄上游文本，不要手写"看起来等价"的行**——
+   上游在 0.1.6-alpha.1 用 `workflow-worker-thread` 教过一次。上游这份文件**不一定带行内
+   注释**（0.2.1-rc.2 就是纯行清单）：照抄即可，别把我们自己的解释混进去；`preset-health`
+   只比结构，注释漂移抓不住，但下一次人工 diff 会；
 3. 跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`；
 4. 跑 `node test/preset-health.mjs` 直到 `OK`（它把任何结构差异当**发布阻断**，不只是打印
    note），再跑 `node test/drift-probe.mjs` 确认守卫仍能抓到漂移；

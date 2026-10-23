@@ -44,7 +44,8 @@
         },
         {
           "where": "answer",
-          "pattern": "1490"
+          "pattern": "1[,.]?490",
+          "note": "the extinction coefficient; the same thousands-separator tolerance the MW assertion already carries (0.20.0 fixed /3935/, not this one)"
         }
       ]
     },

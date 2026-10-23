@@ -16,6 +16,8 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.21.0 | — | **DSH 0.2.1-rc.2 适配**：preset 行清单逐行重抄；contract 两条断言重锚到行为；两条 suspended 记录用真实模型重录 | 60 |
+| 0.20.1 | — | 插件专属图标（透明底双螺旋 SVG），运行时零改动 | 60 |
 | 0.20.0 | — | **Cas 家族几何**（SpCas9/SaCas9/Cas12a/Cas13a/b/d）+ 反向链脱靶定位修复；TaqMan MGB/订购 CSV；multiplex 退火温度/浓度；批量分析 CSV；静默位点突变；并入 0.19.1 硬化 | 60 |
 | 0.19.0 | — | 环形/扇形的**旋转多行标签**（画面正确性）；新增 `molbio_alignment_postprocess`（共识/修剪/同一性矩阵/覆盖度） | 58 |
 | 0.16.0 | — | **修掉 benchmark 交出的前两条缺陷**：引物朝向、甲基化参考表（各带串联/来源回归） | 57 |
@@ -40,6 +42,36 @@
 | — | v12–v14 | Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view | — |
 
 ---
+
+## v0.21.0（2026-10-23，包 0.21.0）
+
+纯适配版：DSH 0.2.0-rc.2 → 0.2.1-rc.2。工具行为零变化，但上游动了三样本仓库**以为不会动**的东西，
+每条教训对应一道守卫。
+
+**(1) 上游可以在 patch 级版本里重写 preset 行清单。**
+0.2.1-rc.2 的 `standard` 比 0.2.0-rc.2 少了 `tool-subagent-codex` / `tool-subagent-claude-code` /
+`tool-ralph`，少了 persona 的 `suffix` 与两处 `backgroundMode`，多了 `time-context` /
+`tool-schedule` / `tool-plugin-market`，还改了 plan-mode 的文案——12 处结构差异。`preset-health`
+把这些当**发布阻断**，所以第一分钟就红了；但 `drift-probe` 里那条"上游 `disabled` 被丢掉"的
+突变仍拿 `tool-ralph` 当样本，**守卫自己**先失效（上游已经没有这一行）。教训：**fixture 也要
+跟着上游走**——突变样本必须取自当前上游仍然存在、且仍为 `disabled` 的行，否则"证明了守卫会失败"
+会变成空话。
+
+**(2) 把 contract 断言锚在 minified 字面量上，会把"上游改了写法"报成"产品坏了"。**
+`dsh-tools` 的 `exec.parent === void 0` 在 0.2.1 消失：`presentationMeta` 的投影移进
+`createSuccessResult`，不再按父调用过滤。面板依赖的东西（`meta` 落到成功结果上）没变，变的
+是我们测量它的方式。同源的第二条：`@deepseek-ai/dsh-client-connection` 的 client 入口从
+`lib/client.js` 改成条件导出 `lib/client.browser.js`，而 Web shell 变成打包产物、不再有
+`require("包名")` 字样——"seeded into the shell"这条兜底判据因此整体失效。教训：断言要问**行为**
+（入口文件存在、`meta` 附在结果上），不要问上游当前的拼写；文件名与导出形状应当**读包清单**，
+而不是猜。
+
+**(3) 两条欠账不是"记着"，是"花一次 token 消掉"。**
+`methylation-block` 与 `qpcr-primers` 的冻结响应停在 0.16.0 之前，`benchmark-score` 每次运行
+都点名它们。这一版用一次完整真实模型跑（61 题）重录，并以 `_freeze-trace --replace` 只替换这两条
+（其余 47 条不动，`run.amendments` 记下来源），悬挂条目归零；这次跑分同时作为 0.21.0 的发布证据。
+**fs 侧仍然不能写二进制**，所以 `png_path` 依旧不做——`contract` 里那条断言仍然是绿的，
+这就是"触发条件没到"的证据。
 
 ## v0.20.0（2026-10-17，包 0.20.0）
 

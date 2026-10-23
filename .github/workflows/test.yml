@@ -58,7 +58,7 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.2
 
       # Every guard resolves the harness through `benchmark/harness.mjs`. Say
       # exactly what was installed rather than leaving each probe to guess: on a

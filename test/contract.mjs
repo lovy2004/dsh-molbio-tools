@@ -67,6 +67,29 @@ function packageDir(pkg) {
   return join(harnessRoot, 'node_modules', ...pkg.split('/'));
 }
 
+/**
+ * Resolve a package's client entry the way the boot scan does: read its OWN
+ * `exports["./client"]` and take the `browser` condition (the shell is the
+ * browser), then `default`.
+ *
+ * The path is NOT assumed to be `lib/client.js`. 0.2.1-rc.2 moved
+ * `@deepseek-ai/dsh-client-connection` to `lib/client.browser.js`; a hardcoded
+ * filename reported a package the scanner loads fine, which is a test defect
+ * wearing a contract failure's clothes.
+ *
+ * @param {string} dir the installed package directory.
+ * @returns {string|undefined} an absolute entry path, or undefined when the
+ *   package declares no `./client` export (it is not a client package).
+ */
+function clientEntryPath(dir) {
+  const manifestPath = join(dir, 'package.json');
+  if (!existsSync(manifestPath)) return undefined;
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const entry = manifest.exports?.['./client'];
+  const rel = typeof entry === 'string' ? entry : entry?.browser ?? entry?.default;
+  return typeof rel === 'string' ? join(dir, rel) : undefined;
+}
+
 /** Read one installed client bundle, or undefined when the package is absent. */
 function clientBundle(pkg) {
   const path = join(packageDir(pkg), 'lib', 'client.js');
@@ -263,20 +286,34 @@ check('the package manifest keeps the client declaration the scan keys on', () =
   assert.equal(clientRel, './lib/client.js', 'exports["./client"] points at the artifact');
   assert.ok(existsSync(join(packageRoot, clientRel)), 'the artifact exists');
 
-  // An injected client package must be a boot-graph row — either mounted with
-  // its own bundle on disk, or seeded into the shell (sidebar-right and slots
-  // ship inside the Web frontend, so they have no `lib/client.js` to find here).
+  // An injected client package must be a boot-graph row. Ask the package where
+  // its client entry is (exports["./client"], browser condition) instead of
+  // assuming `lib/client.js`: the scan resolves the manifest, and 0.2.1-rc.2
+  // moved `dsh-client-connection` to `lib/client.browser.js`.
   const shellDir = join(packagesDir, 'dsh-web-frontend', 'dist');
   const shellText = existsSync(shellDir)
     ? filesUnder(shellDir).filter((path) => path.endsWith('.js')).map((path) => readFileSync(path, 'utf8')).join('\n')
     : '';
   for (const dependency of manifest.dsh.client.inject) {
-    const dir = packageDir(dependency);
-    const mounted = existsSync(join(dir, 'lib', 'client.js'));
+    const entry = clientEntryPath(packageDir(dependency));
+    const mounted = entry !== undefined && existsSync(entry);
+    // A package genuinely seeded into the shell has no file of its own. That
+    // fallback is kept, but it is only evidence when the shell actually names
+    // the package — the current shell is a minified bundle that names none.
     const seeded = shellText.includes(`require("${dependency}")`) || shellText.includes(`require('${dependency}')`);
-    assert.ok(mounted || seeded, `${dependency} is either a mounted client package or seeded into the shell`);
-    assert.ok(existsSync(join(dir, 'package.json')) || seeded, `${dependency} resolves as a package or comes from the shell`);
+    assert.ok(mounted || seeded, `${dependency} resolves a ./client entry (declared: ${entry ?? 'none'})`);
   }
+
+  // The resolver must be able to say NO, and must find the entry of the package
+  // that moved — otherwise the loop above could pass on a directory that merely
+  // exists.
+  assert.equal(
+    clientEntryPath(packageDir('@deepseek-ai/dsh-tools')),
+    undefined,
+    'a package with no exports["./client"] resolves to no client entry',
+  );
+  const movedEntry = clientEntryPath(packageDir('@deepseek-ai/dsh-client-connection'));
+  assert.ok(movedEntry !== undefined && existsSync(movedEntry), 'the conditional client entry resolves to a file on disk');
 
   // The panel-only package must carry the same declaration: it is the channel a
   // shared profile installs.
@@ -328,13 +365,21 @@ check('the published tarball would carry the client half and the panel package',
 });
 
 check('the toolview card contract still holds (meta path + keyed seat)', () => {
-  // The card reads the tool-result block's `meta`, which the tool layer fills
-  // from a tool's `output.presentationMeta` — for a ROOT call only.
+  // The card reads the tool-result block's `meta`, filled from a tool's
+  // `output.presentationMeta`. 0.2.1-rc.2 removed the `exec.parent === void 0`
+  // gate this check used to pin: the projection now runs for every successful
+  // execution, and the root call the card reads is a subset of that. So pin the
+  // path that still carries the value — consulted, snapshotted, attached as
+  // `meta` — rather than a literal upstream is free to drop (the panel does not
+  // depend on nested calls being excluded, only on the root call carrying it).
   const tools = hostHalf('@deepseek-ai/dsh-tools');
   assert.ok(tools !== undefined, 'dsh-tools is installed');
   assert.ok(/output\.presentationMeta\s*!==\s*void 0/.test(tools.text), 'the tool layer still consults output.presentationMeta');
-  assert.ok(tools.text.includes('exec.parent === void 0'), 'and calls it for root calls');
   assert.ok(tools.text.includes('snapshotProjection(tool.name, "presentationMeta"'), 'and records the projection on the result');
+  assert.ok(
+    /meta !== void 0 \? \{ meta \} : \{\}/.test(tools.text),
+    'and attaches the snapshot to the success result as `meta`, which is what the card reads',
+  );
   assert.ok(/output \{ schema, render, presentationMeta\? \}/.test(tools.text), 'register() accepts presentationMeta on a raw output');
 
   // The browser side: the seat exists and is keyed by tool name.

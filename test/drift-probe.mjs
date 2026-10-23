@@ -13,8 +13,10 @@
  *     no released DSH installs. The row mounted nothing and the preset died at
  *     load. The id comparison saw a row named `workflow-worker-thread`, noted it
  *     as drift, printed a note, and exited 0.
- *   - The same composition enabled `tool-ralph`, which upstream `standard`
- *     ships with `disabled: true`. Same row id, so the guard was blind to it.
+ *   - The same composition enabled `tool-ralph`, which the then-shipped
+ *     `standard` preset carried with `disabled: true`. Same row id, so the guard
+ *     was blind to it. (0.2.1-rc.2 no longer ships that row; the probe mutates
+ *     `tool-plugin-manager`, which it still ships disabled.)
  *
  * So this file mutates a copy of the composition and asserts the guard reports
  * the mutation, then asserts a clean composition reports NOTHING (a guard that
@@ -125,9 +127,16 @@ check('a phantom provider package is caught (v17: dsh-workflow-worker-thread)', 
   assert.match(text, /extra row "workflow-worker-thread" \(not in shipped standard\)/, text);
 });
 
-check('an upstream `disabled: true` that was dropped is caught (v17: tool-ralph)', () => {
-  const text = driftText(withRow('tool-ralph', { disabled: undefined }));
-  assert.match(text, /row "tool-ralph": upstream ships it disabled and this preset enables it/, text);
+check('an upstream `disabled: true` that was dropped is caught (v17: tool-plugin-manager)', () => {
+  // v17 mutates whichever row the shipped standard carries disabled: the
+  // mechanism is the same, and naming a row upstream has since dropped would
+  // make this probe pass by mutating nothing.
+  const text = driftText(withRow('tool-plugin-manager', { disabled: undefined }));
+  assert.match(
+    text,
+    /row "tool-plugin-manager": upstream ships it disabled and this preset enables it/,
+    text,
+  );
 });
 
 // ── the other ways a copied composition rots ───────────────────────────────

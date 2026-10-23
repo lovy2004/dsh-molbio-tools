@@ -215,7 +215,7 @@ function toolCountDrift(description, registered) {
  * order. Comparing ids alone (the v15–v17 behaviour) misses exactly the two
  * defects that reached a release: a provider package the harness does not
  * install (`workflow-worker-thread`) and an upstream `disabled: true` that had
- * been dropped (`tool-ralph`).
+ * been dropped (v17's `tool-ralph`; 0.2.1-rc.2 ships `tool-plugin-manager` disabled).
  */
 function compositionDrift(standardRows, mineRows) {
   const drift = [];

@@ -159,6 +159,7 @@ benchmark/
 ├── _probe.mjs         record ground truth (original suite)
 ├── _probe-all.mjs     record ground truth (the rest of the catalog)
 └── _freeze-trace.mjs  freeze a run's responses into the scorer's regression fixture
+                     (`--replace id[,id]` re-records only the named entries and keeps the rest)
 ```
 
 A task's expected text lives in `tasks/`; the input that produces it lives in
