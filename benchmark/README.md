@@ -222,7 +222,7 @@ session "…" runs under agent preset "molbio-lab", which the one-shot runner do
 Presets are an agent-plane feature the Web surface composes; the one-shot runner
 drives `agents.create()` directly and never joins one. So the tools must be
 mounted as **host rows**, which is the one shape this package otherwise refuses
-to ship (`cordis.patch.yml` is deliberately an empty list).
+to ship (`cordis.patch.yml` only inserts the inert client anchor).
 
 `benchmark/profile.mjs` therefore generates a dedicated profile
 (`$DSH_HOME/profiles/molbio-bench`) whose patch layer is **derived** from

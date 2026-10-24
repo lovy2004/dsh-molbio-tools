@@ -100,10 +100,7 @@
       }
     },
     "bundle": {
-      "patch": [
-        "./cordis.patch.yml",
-        "./preset/molbio-lab/preset.patch.yml"
-      ]
+      "patch": "./cordis.patch.yml"
     },
     "client": {
       "platform": "web",

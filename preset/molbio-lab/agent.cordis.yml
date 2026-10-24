@@ -9,18 +9,18 @@
 # a `@deepseek-ai/dsh-agent-preset` ROW whose `config.plugins` carries exactly
 # these rows.
 #
-# `build/preset-patch.mjs` wraps this list into that row and writes
-# `preset/molbio-lab/preset.patch.yml`, which `package.json` declares as the
-# second entry of `dsh.bundle.patch`. So the BUNDLE installs the preset:
+# `build/preset-patch.mjs` wraps this list into that row and writes the package's
+# single bundle patch `cordis.patch.yml` (anchor insert + preset insert), which
+# `package.json` declares as `dsh.bundle.patch`. So the BUNDLE installs the preset:
 #
 #     dsh plugin --profile <p> add dsh-molbio-tools
 #
 # Edit THIS file, then run `node build/preset-patch.mjs`.
 #
-# NOTE: the mode is the ONLY place these 60 tools load. The bundle's other patch
-# layer (`cordis.patch.yml`) deliberately inserts nothing — registering the tool
-# at the host level as well would put it in every session and is not what this
-# package is for.
+# NOTE: the mode is the ONLY place these 60 tools load. The same bundle patch's
+# other insert (`molbio-client` → `./host.mjs`) deliberately registers nothing —
+# registering the tool at the host level as well would put it in every session
+# and is not what this package is for.
 #
 # This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
 # standing scope; every session naming it joins by scope parentage, so the

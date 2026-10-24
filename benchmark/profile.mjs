@@ -17,7 +17,8 @@
  * agent-plane feature the Web surface composes; the one-shot runner drives
  * `agents.create()` directly and never joins one. So the tools have to be
  * mounted as HOST rows, which is the one shape this package otherwise refuses
- * to ship (`cordis.patch.yml` is deliberately empty — see the preset's header).
+ * to ship (`cordis.patch.yml` only inserts the inert client anchor — see the
+ * preset's header).
  *
  * ── What keeps the reconstruction honest ────────────────────────────────────
  *

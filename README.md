@@ -79,7 +79,7 @@ dsh plugin --profile web update dsh-molbio-tools
 > **0.7.1 起不再需要"注册 preset 根目录"这一步。**
 > DSH 0.1.7-alpha.1 移除了 `@deepseek-ai/dsh-agent-presets` 及其目录发现机制：preset 现在是
 > bundle patch 里的一个 `@deepseek-ai/dsh-agent-preset` **行**（本包的是
-> `preset/molbio-lab/preset.patch.yml`，由 `dsh.bundle.patch` 声明）。
+> `cordis.patch.yml` 里的第二个 insert，由 `dsh.bundle.patch` 声明）。
 > 因此 preset 随 bundle 一起安装，**装完即出现**。
 >
 > 老版本遗留的两样东西可以清理（`node preset\install.mjs --profile web` 会替你查出来）：
@@ -95,12 +95,12 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 工具只在专属模式里出现（设计如此）
 
-本包的 bundle patch 分两层，分工是固定的：
+本包的 bundle patch 是**一个文件、两层 insert**，分工是固定的：
 
-| 层 | 作用 |
+| 层（同一个 `cordis.patch.yml` 里的两段） | 作用 |
 | --- | --- |
-| `cordis.patch.yml` | 只插一行**惰性宿主锚点**（`./host.mjs`），不注册任何工具 |
-| `preset/molbio-lab/preset.patch.yml` | 声明 **Molecular Biology Lab** 模式，60 个工具在这一层里 |
+| `molbio-client` → `./host.mjs` | 只插一行**惰性宿主锚点**，不注册任何工具 |
+| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，60 个工具在这一层里 |
 
 所以 60 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
@@ -741,11 +741,11 @@ dsh-molbio-tools/
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
-│                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
+│                          #   preset.yml 是选择器文案；两者由生成器写进下面的 cordis.patch.yml
 ├── benchmark/       # 可用性评估：tasks/*.json + 判分器 + headless profile 推导（见其 README）
 ├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查（含 preset 漂移与 benchmark profile 守卫）
 ├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
-└── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
+└── cordis.patch.yml # 唯一 bundle patch（生成物）：锚点 insert + preset insert
 ```
 
 ---

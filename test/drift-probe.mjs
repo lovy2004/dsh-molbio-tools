@@ -74,7 +74,7 @@ const standardPath = standardCandidates.find((path) => existsSync(path));
 assert.ok(standardPath !== undefined, `the shipped standard preset is installed at one of ${standardCandidates.join(', ')}`);
 
 const standardRows = orderedRows(presetPlugins(await readComposition(standardPath, harnessRoot)));
-const mineRows = orderedRows(presetPlugins(await readComposition(join(repoRoot, 'preset', 'molbio-lab', 'preset.patch.yml'), harnessRoot)));
+const mineRows = orderedRows(presetPlugins(await readComposition(join(repoRoot, 'cordis.patch.yml'), harnessRoot)));
 console.log(`harness : ${harnessRoot}`);
 console.log(`standard: ${standardPath}`);
 console.log(`rows    : standard ${standardRows.length}, molbio-lab ${mineRows.length}\n`);

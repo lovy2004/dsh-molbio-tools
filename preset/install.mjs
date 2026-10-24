@@ -15,8 +15,8 @@
  * discovery mechanism. The replacement (`@deepseek-ai/dsh-agent-preset-registry`)
  * "neither scans directories nor accepts preset paths": a preset is now a
  * `@deepseek-ai/dsh-agent-preset` ROW inside a bundle patch. This package ships
- * one (`preset/molbio-lab/preset.patch.yml`, declared as the second entry of
- * `dsh.bundle.patch`), so the BUNDLE installs the preset:
+ * one (`cordis.patch.yml` at the package root, declared as `dsh.bundle.patch`),
+ * so the BUNDLE installs the preset:
  *
  *     dsh plugin --profile <name> add D:\path\to\dsh-molbio-tools
  *
@@ -94,8 +94,8 @@ if (!selected && problems.length === 0) {
     + `  fix: dsh plugin --profile ${profile} add ${manifest.name}`);
 }
 
-// ── 2. the shipped preset patch must exist and declare the row ──────────────
-const patchPath = join(here, 'molbio-lab', 'preset.patch.yml');
+// ── 2. the shipped bundle patch must exist and declare the row ──────────────
+const patchPath = join(here, '..', 'cordis.patch.yml');
 const sourcePath = join(here, 'molbio-lab', 'agent.cordis.yml');
 if (!existsSync(patchPath)) {
   problems.push(`the preset patch is missing: ${patchPath}\n  fix: node build/preset-patch.mjs`);

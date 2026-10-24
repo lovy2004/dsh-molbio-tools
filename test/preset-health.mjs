@@ -303,7 +303,7 @@ async function main() {
     console.error(`preset-health: "${stray}" is not a composition file (.yml/.yaml) — did you mean --dsh "${stray}"?`);
     process.exit(2);
   }
-  const composition = resolve(candidate ?? join(repoRoot, 'preset', 'molbio-lab', 'preset.patch.yml'));
+  const composition = resolve(candidate ?? join(repoRoot, 'cordis.patch.yml'));
   if (!existsSync(composition)) {
     console.error(`preset-health: no composition at ${composition}`);
     process.exit(2);

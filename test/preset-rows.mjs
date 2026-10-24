@@ -6,9 +6,10 @@
  * DSH 0.1.7-alpha.1 moved presets from a scanned `agent.cordis.yml` file into a
  * `@deepseek-ai/dsh-agent-preset` ROW whose `config.plugins` carries the rows.
  * Both sides of every drift comparison are now patch layers — ours
- * (`preset/molbio-lab/preset.patch.yml`) and the harness's shipped
- * `standard` (`dsh-web-app/presets/standard.patch.yml`) — so the two checks that
- * compare them share this one reader rather than each re-implementing the walk.
+ * (`cordis.patch.yml`, which also carries the client anchor insert) and the
+ * harness's shipped `standard` (`dsh-web-app/presets/standard.patch.yml`) — so
+ * the two checks that compare them share this one reader rather than each
+ * re-implementing the walk.
  *
  * `test/preset-health.mjs` imports it directly; `test/drift-probe.mjs` imports
  * it through the re-export there, keeping one URL and one module instance.

@@ -35,8 +35,9 @@
 - **基线**：DSH **0.2.1-rc.2**；`package.json` 版本 0.21.0。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
   **两个独立的 npm 条目、两条独立的版本线**，必须分别发布。
-- **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 是**空列表**，
-  60 个工具由 preset 层承载，只会挂进 "Molecular Biology Lab" 模式。
+- **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 只插一行**惰性宿主锚点**
+  （`molbio-client` → `./host.mjs`），60 个工具由同文件里的 preset insert 承载，
+  只会挂进 "Molecular Biology Lab" 模式。
 - **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`/`charts`）+ 客户端四套件 +
   DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
   发布守卫（`release`）+ benchmark 的 profile 守卫与**离线期望值校验**。
@@ -86,12 +87,12 @@ dsh-molbio-tools/
 ├── lib/client.js    # 客户端产物（exports["./client"]，由 npm run build:client 生成）
 ├── packages/molbio-panel/ # 面板专用包（只面板、不带工具）
 ├── preset/molbio-lab/     # 专属模式 preset：agent.cordis.yml 是行清单（手改这里）
-│                          #   preset.patch.yml 由 build/preset-patch.mjs 生成
+│                          #   preset.yml 是选择器文案；两者由生成器写进根目录的 cordis.patch.yml
 ├── benchmark/       # 可用性评估：tasks/*.json + 判分器 + headless profile 推导
 │                    #   （README.md 是入口；reports/ 与 scratch 工作区不进 git）
 ├── test/            # 冒烟 + 光栅化器 + 客户端/组合检查 + preset 漂移守卫 + 发布守卫 + benchmark profile 守卫
 ├── docs/            # 维护者与实现文档（rules / workflow / roadmap / history 是本目录的骨架）
-└── cordis.patch.yml # bundle 的第一层补丁（当前为空列表；工具由 preset 层承载）
+└── cordis.patch.yml # 唯一 bundle patch（生成物）：client 锚点 insert + preset insert
 ```
 
 ---

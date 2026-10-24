@@ -418,7 +418,7 @@ git status --short           # lib/client.js 与 packages/molbio-panel/lib/clien
 > 「持续交付（CD）：推一个 tag 就发完」。
 
 **改了 preset 的行清单**（`preset/molbio-lab/agent.cordis.yml`，**行清单**）额外一条：
-跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`（bundle patch）；
+跑 `node build/preset-patch.mjs` 重新生成根目录的 `cordis.patch.yml`（唯一 bundle patch）；
 `--check` 会因两者不一致而失败，`npm test` 里没有这一项，别忘。
 
 `preset-health.mjs` 必须报 `OK`。它现在把本包的 preset **行**与**已安装 harness 自带的
@@ -444,7 +444,7 @@ git status --short           # lib/client.js 与 packages/molbio-panel/lib/clien
 
 1. 修改包根代码并跑 `node test/smoke.mjs`（插件）与 `node test/preset-health.mjs`（组合）；
 2. 如果改了 preset 的**行清单**，跑 `node build/preset-patch.mjs` 重新生成
-   `preset/molbio-lab/preset.patch.yml`；**没有版本目录要新建、没有拷贝要同步**——preset
+   根目录的 `cordis.patch.yml`；**没有版本目录要新建、没有拷贝要同步**——preset
    行按包名引用本包，`dsh plugin update` 直接生效；
 3. 更新 `CHANGELOG.md` 并把 `package.json` 的 `version` bump；
 4. commit + push，然后打**带日期的注释 tag**（仓库用 `v<包版本>`，如 `v0.13.0`）：
@@ -467,7 +467,7 @@ DSH 后：
    上游在 0.1.6-alpha.1 用 `workflow-worker-thread` 教过一次。上游这份文件**不一定带行内
    注释**（0.2.1-rc.2 就是纯行清单）：照抄即可，别把我们自己的解释混进去；`preset-health`
    只比结构，注释漂移抓不住，但下一次人工 diff 会；
-3. 跑 `node build/preset-patch.mjs` 重新生成 `preset/molbio-lab/preset.patch.yml`；
+3. 跑 `node build/preset-patch.mjs` 重新生成根目录的 `cordis.patch.yml`；
 4. 跑 `node test/preset-health.mjs` 直到 `OK`（它把任何结构差异当**发布阻断**，不只是打印
    note），再跑 `node test/drift-probe.mjs` 确认守卫仍能抓到漂移；
 5. 更新 `agent.cordis.yml` 头部"Baseline: …"那行里的 DSH 版本号；
