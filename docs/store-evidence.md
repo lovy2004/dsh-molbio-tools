@@ -65,12 +65,16 @@ dsh --profile molbio-tgz-check --dump-config      # 卸载后的组合树
 安装用 **tarball** 而不是目录，因为 tarball 就是发布物本身：它能同时证明 `files`
 白名单带全了运行文件（`host.mjs`、`lib/client.js`、两层 patch、preset）。
 
+tarball 是 **114 个文件 / 988.2 kB**，且 `package/packages/**` 为 **0**：根包不再内嵌
+`packages/molbio-panel`，一个 tarball 里只有一个插件清单（面板包按自己的地址单独发布）。
+面板本身没有因此消失——根包的 `lib/client.js` 就带着它，第 3.2 节的回读可以作证。
+
 ### 3.1 安装
 
 ```
 + dsh-molbio-tools file:D:/.../dsh-molbio-tools-0.21.0.tgz
 Packages: +1
-Done in 562ms
+Done in 510ms
 ```
 
 安装后的 `--dump-config` 出现 bundle 层，且 `host.mjs` 解析到**已安装包内**：
@@ -90,7 +94,7 @@ Done in 562ms
 ### 3.2 启动
 
 ```
-dsh web: http://127.0.0.1:62038/?token=...
+dsh web: http://127.0.0.1:50845/?token=...
 ```
 
 读回结果：`HTTP 200`、37721 字节；页面里的 `window.__DSH_BOOT__` 图包含
@@ -101,7 +105,7 @@ dsh web: http://127.0.0.1:62038/?token=...
 
 ```
 - dsh-molbio-tools file:D:/.../dsh-molbio-tools-0.21.0.tgz
-Done in 402ms
+Done in 403ms
 ```
 
 卸载后四项同时回到初始状态：

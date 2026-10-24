@@ -328,19 +328,33 @@ check('the package manifest keeps the client declaration the scan keys on', () =
   }
 });
 
-check('the published tarball would carry the client half and the panel package', () => {
+check('the published tarball carries the client half and exactly one plugin manifest', () => {
   const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
   const files = manifest.files ?? [];
   assert.ok(Array.isArray(files) && files.length > 0, 'the manifest declares a files allowlist (npm would otherwise ship everything)');
 
   // npm ships exactly the allowlist, so a missing entry is a package that
   // installs WITHOUT the thing it declares. `dsh plugin add` resolves the client
-  // bundle from the installed package, so a missing lib/ or packages/ makes the
-  // panel silently absent for every npm user — and no other test would notice.
-  for (const entry of ['index.mjs', 'lib', 'build', 'packages', 'preset', 'cordis.patch.yml']) {
+  // bundle from the installed package, so a missing lib/, preset/ or
+  // cordis.patch.yml makes the panel silently absent for every npm user — and no
+  // other test would notice.
+  for (const entry of ['index.mjs', 'lib', 'build', 'preset', 'cordis.patch.yml']) {
     assert.ok(files.includes(entry), `the files allowlist carries ${entry}`);
     assert.ok(existsSync(join(packageRoot, entry)), `and ${entry} exists on disk`);
   }
+
+  // ONE PLUGIN MANIFEST PER TARBALL. `packages/molbio-panel` is a SECOND DSH
+  // plugin — its own `dsh` block, its own bundle patch, its own client artifact —
+  // and it is published as its own npm package. Shipping it inside the root
+  // tarball made one published package declare two plugins: DSH STORE's
+  // SUBMISSION_PACKAGE_AMBIGUOUS, plus a duplicate 427 KB client bundle in every
+  // download. The panel does not disappear for npm users: the root package's own
+  // `lib/client.js` already carries it (the panel-only package exists for people
+  // who want the tab without the 60 tools).
+  assert.ok(
+    !files.includes('packages'),
+    'the root tarball must not embed packages/molbio-panel: a second `dsh` manifest inside one package is an ambiguous submission, and the panel is published separately',
+  );
 
   // ...but "carries build/" is not the same rule as "carries benchmark/". A
   // directory entry ships whatever is on the PUBLISHER'S DISK, and this
