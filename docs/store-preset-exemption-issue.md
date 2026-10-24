@@ -6,7 +6,7 @@
 
 ### 技术说明：本 bundle 声明的是官方 Agent preset，不是冒用 `@deepseek-ai/*`
 
-本次已在 `c885265` 把 bundle patch 合并为单个 `cordis.patch.yml`，`SUBMISSION_BUNDLE_PATCH_INVALID`
+本次提交已把 bundle patch 合并为单个 `cordis.patch.yml`，`SUBMISSION_BUNDLE_PATCH_INVALID`
 （`patch` 只接受字符串）已自行解决。剩下两处需要判定：
 
 **1. 保护命名空间正则命中的是 preset 容器行，不是替换**
