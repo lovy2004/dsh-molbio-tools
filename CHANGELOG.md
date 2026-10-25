@@ -20,7 +20,8 @@
 
 环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具：一句 `echo $env:NCBI_API_KEY`
 就能把 key 读进对话；它还会出现在进程环境块、崩溃转储与用户的注册表环境里（Windows 的
-`HKCU\Environment` 是明文）。对一把能读数据、能改状态的云密钥，这常常是不能接受的暴露面。
+`HKCU\Environment` 是明文）。对任何云端凭证这都是不必要的暴露面；NCBI 的 key 虽然只用于
+归属与限速，泄漏仍意味着别人可以用你的配额、顶着你的身份发请求。
 
 DSH 自带的凭据库（`@deepseek-ai/dsh-credentials-local`）就是为这件事存在的：值存在
 `~/.dsh/.credentials.yaml` 里，**不注入环境**、文件仅属主可读、改动热重载，
@@ -39,24 +40,42 @@ DSH 自带的凭据库（`@deepseek-ai/dsh-credentials-local`）就是为这件�
 （启动环境、项目 `.env`、harness home 的 `.env`）也一并继承；provider 不存在或拒绝该引用时
 **静默回退到 `process.env`**，没有凭据库的组合行为不变。
 
-### 3. key 放进凭据库的两种方式
+### 3. key 放进凭据库的三种方式
 
-1. 编辑 `~/.dsh/.credentials.yaml`（产品创建、仅属主可读、热重载）：在 `refs:` 下加一行
+1. **插件详情页（推荐）**：插件 → 已安装插件 → `dsh-molbio-tools` → **PubMed API key** 一节，
+   粘贴后点 **Save**；见 §4。
+2. 编辑 `~/.dsh/.credentials.yaml`（产品创建、仅属主可读、热重载）：在 `refs:` 下加一行
    `NCBI_API_KEY: 你的key`；下一次工具调用即生效，无需重启。
-2. 在 DSH 的设置界面保存同名凭据（该界面只显示“是否已设置/来源”，不显示值）。
+3. 在 DSH 的设置界面保存同名凭据（该界面只显示“是否已设置/来源”，不显示值）。
 
 > **这不是对 agent 的硬隔离。** 凭据库自己的文档写得很清楚：agent 的工具进程以同一个 OS 用户
 > 运行，刻意去读那个文件仍然读得到。它解决的是**自动泄漏**：环境变量会被每个 shell 子进程
 > 无条件继承，而凭据库不会。真正要把密钥挡在 agent 之外，需要换提供方（OS 钥匙串/KMS），
 > 当前产品没有随附这类 provider。
 
-### 4. 边界与验证
+### 4. 图形入口：插件详情页里的 PubMed API key
+
+「改 YAML」对没有计算机基础的用户不是可接受的入口。浏览器半因此注册了一个
+`plugins.detail.section` 条目（`id: molbio-ncbi-key`），只在**本包的 bundle 页**与它声明的**行页**
+上渲染，其它插件返回 `null`：
+
+- 输入框是 `type=password`，只写不读；状态行来自 `ctx.remote.credentials.describe(['NCBI_API_KEY'])`，
+  只显示「已配置 / 未配置 / 来源」，**不回显值**。
+- **Save** 走 `ctx.remote.credentials.set('NCBI_API_KEY', value)`，**Remove** 走 `unset`；
+  保存后输入框立即清空，成功/拒绝消息原样显示（`credential/rejected` 的 provider 原文）。
+- 它和 CLI/工具读的是**同一个**凭据引用，所以两边不需要同步；没有凭据 provider 的部署会显示
+  Unavailable，而工具仍按 §2 的顺序回退到环境变量。
+
+### 5. 边界与验证
 
 - 默认路径（无 key）仍是 web 检索；有 key 仍是 esearch + esummary + efetch，速率上限不变。
-- 面板包不动（客户端字节未变），版本仍是 0.1.5。
+- 客户端产物因此变了：`lib/client.js` 与 `packages/molbio-panel/lib/client.js` 重新构建，
+  面板包 `0.1.5 → 0.1.6`。
 - smoke 新增三条：**凭据库压过环境变量**、**显式参数压过凭据库**、**provider 抛错时回退到环境**；
-  原有的“无 key 不碰 E-utilities”与“坏 key 报错”保留。
-- `npm test` 全绿；`preset-patch --check` / `client-bundle --check` 均不变（这次没有动生成物）。
+  原有的“无 key 不碰 E-utilities”与“坏 key 报错”保留。`test/client.mjs` 新增详情页座位的
+  等待/注册、本包 subject 渲染、其它 subject 返回 null，以及凭据视图/失败信息三个纯函数。
+- `npm test` 全绿；`client-bundle.mjs --check` 与 `preset-patch.mjs --check` 与源一致。
+
 ## [0.22.0] — 2026-10-25（DSH 0.2.1-rc.3 适配；PubMed 官方 API + NCBI API key）
 
 **工具数不变（60）。新增一条通路：`molbio_pubmed_search` / `molbio_pubmed_abstract` 可以带着

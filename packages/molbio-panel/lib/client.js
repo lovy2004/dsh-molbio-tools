@@ -8517,6 +8517,44 @@ window.__ModuleLoader__.load({
 			  return undefined;
 			}
 
+			/** The credential reference the PubMed tools read first. */
+			const NCBI_KEY_REF = 'NCBI_API_KEY';
+
+			/**
+			 * Whether a Plugins-page detail subject is this package's own entry.
+			 *
+			 * Bundles and rows both expose `pkg.name`; the key section is offered on the
+			 * bundle page and on every row page the bundle declares, and on nothing else.
+			 */
+			function isMolbioDetailSubject(subject) {
+			  if (subject === null || typeof subject !== 'object') return false;
+			  if (subject.kind !== 'bundle' && subject.kind !== 'row') return false;
+			  const pkg = subject.pkg;
+			  return pkg !== null && typeof pkg === 'object' && pkg.name === 'dsh-molbio-tools';
+			}
+
+			/**
+			 * The host failure message carried by a Remote result, or '' on success.
+			 * Remote calls answer `{ ok: true, value }` or `{ ok: false, error }`.
+			 */
+			function remoteFailure(response) {
+			  if (response === null || typeof response !== 'object' || response.ok !== false) return '';
+			  const message = response.error?.message;
+			  return typeof message === 'string' && message !== '' ? message : 'the host refused the request';
+			}
+
+			/** One reference's view from a `credentials.describe` response (never the value). */
+			function credentialInfo(response, ref) {
+			  const view = response !== null && typeof response === 'object' && response.ok !== false
+			    ? response.value?.[ref]
+			    : undefined;
+			  return {
+			    configured: view?.configured === true,
+			    writable: view?.writable !== false,
+			    ...typeof view?.source === 'string' && view.source !== '' ? { source: view.source } : {},
+			  };
+			}
+
 			exports.PLASMID_EXTENSIONS = PLASMID_EXTENSIONS;
 			exports.ALIGNMENT_EXTENSIONS = ALIGNMENT_EXTENSIONS;
 			exports.extensionOf = extensionOf;
@@ -8541,6 +8579,10 @@ window.__ModuleLoader__.load({
 			exports.paperFields = paperFields;
 			exports.paperSummary = paperSummary;
 			exports.paperLink = paperLink;
+			exports.NCBI_KEY_REF = NCBI_KEY_REF;
+			exports.isMolbioDetailSubject = isMolbioDetailSubject;
+			exports.remoteFailure = remoteFailure;
+			exports.credentialInfo = credentialInfo;
 			return exports;
 		};
 		__molbio_modules["build/client-entry.mjs"] = () => {
@@ -8577,7 +8619,7 @@ window.__ModuleLoader__.load({
 			 * inside the factory would also have to be torn down by hand on unload.
 			 */
 			const { createElement: h, useEffect, useMemo, useRef, useState } = __ext0;
-			const { LIBRARY_FILE, childPath, classifyEntry, decodeWorkspaceBytes, filterPapers, isOpenable, libraryTags, logoSvg, mapCardSummary, mapCardView, paperFields, paperLink, paperSummary, parseAlignmentFile, parseLibrary, parsePlasmidFile, plasmidSvg, readWorkspaceText, sortEntries } = __molbio_require("build/panel-core.mjs");
+			const { LIBRARY_FILE, NCBI_KEY_REF, childPath, classifyEntry, credentialInfo, isMolbioDetailSubject, remoteFailure, decodeWorkspaceBytes, filterPapers, isOpenable, libraryTags, logoSvg, mapCardSummary, mapCardView, paperFields, paperLink, paperSummary, parseAlignmentFile, parseLibrary, parsePlasmidFile, plasmidSvg, readWorkspaceText, sortEntries } = __molbio_require("build/panel-core.mjs");
 			/** This implementation's identity, and the key its body/title register under. */
 			const PANEL_ID = 'dsh-molbio-tools';
 			/** Type discriminator the tab is opened by. */
@@ -9015,6 +9057,125 @@ window.__ModuleLoader__.load({
 			    h('div', { style: styles.main }, ...detail));
 			}
 
+			/** The state of the PubMed key, read from the host's credential store. */
+			async function readNcbiKey(remote) {
+			  if (remote?.credentials === undefined || typeof remote.credentials.describe !== 'function') {
+			    return { phase: 'error', configured: false, writable: false, message: 'This deployment exposes no credentials Remote (the settings controller is not mounted).' };
+			  }
+			  let response;
+			  try {
+			    response = await remote.credentials.describe([NCBI_KEY_REF]);
+			  } catch (error) {
+			    response = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
+			  }
+			  const failure = remoteFailure(response);
+			  if (failure !== '') return { phase: 'error', configured: false, writable: false, message: failure };
+			  return { phase: 'ready', ...credentialInfo(response, NCBI_KEY_REF), message: '' };
+			}
+
+			const keyStyles = {
+			  section: { borderTop: '1px solid rgba(127, 127, 127, 0.28)', marginTop: 16, paddingTop: 12, display: 'grid', gap: 8 },
+			  title: { margin: 0, fontSize: 14 },
+			  note: { margin: 0, fontSize: 12, opacity: 0.75, lineHeight: 1.5 },
+			  status: { margin: 0, fontSize: 12 },
+			  row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+			  input: { flex: '1 1 240px', minWidth: 200, padding: '4px 8px' },
+			  message: { margin: 0, fontSize: 12 },
+			};
+
+			/**
+			 * The Plugins → installed plugin → detail section that stores the NCBI key.
+			 *
+			 * It renders only for this package's own subject (bundle page, or one of the
+			 * row pages the bundle declares) and returns null everywhere else, which is the
+			 * contract `plugins.detail.section` asks a contribution to honour. The value is
+			 * write-only from here: `credentials.describe` answers whether a key is
+			 * configured and where it came from, never the key itself.
+			 */
+			function NcbiKeySection({ subject, remote }) {
+			  const [draft, setDraft] = useState('');
+			  const [state, setState] = useState({ phase: 'loading', configured: false, writable: true, message: '' });
+			  const subjectToken = isMolbioDetailSubject(subject)
+			    ? `${subject.kind}:${subject.pkg.name}:${subject.row?.rowId ?? ''}`
+			    : '';
+			  useEffect(() => {
+			    if (subjectToken === '') return undefined;
+			    let live = true;
+			    readNcbiKey(remote).then((next) => { if (live) setState(next); });
+			    return () => { live = false; };
+			  }, [remote, subjectToken]);
+			  if (!isMolbioDetailSubject(subject)) return null;
+			  const busy = state.phase === 'saving';
+			  const save = async () => {
+			    const value = draft.trim();
+			    if (value === '') return;
+			    if (remote?.credentials === undefined || typeof remote.credentials.set !== 'function') {
+			      setState((previous) => ({ ...previous, phase: 'error', message: 'This deployment exposes no credentials Remote (the settings controller is not mounted).' }));
+			      return;
+			    }
+			    setState((previous) => ({ ...previous, phase: 'saving', message: '' }));
+			    let response;
+			    try {
+			      response = await remote.credentials.set(NCBI_KEY_REF, value);
+			    } catch (error) {
+			      response = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
+			    }
+			    const failure = remoteFailure(response);
+			    setDraft('');
+			    const next = await readNcbiKey(remote);
+			    setState(failure !== ''
+			      ? { ...next, phase: 'error', message: failure }
+			      : { ...next, message: 'Saved. The next PubMed call uses this key.' });
+			  };
+			  const remove = async () => {
+			    if (remote?.credentials === undefined || typeof remote.credentials.unset !== 'function') {
+			      setState((previous) => ({ ...previous, phase: 'error', message: 'This deployment exposes no credentials Remote (the settings controller is not mounted).' }));
+			      return;
+			    }
+			    setState((previous) => ({ ...previous, phase: 'saving', message: '' }));
+			    let response;
+			    try {
+			      response = await remote.credentials.unset(NCBI_KEY_REF);
+			    } catch (error) {
+			      response = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
+			    }
+			    const failure = remoteFailure(response);
+			    const next = await readNcbiKey(remote);
+			    setState(failure !== ''
+			      ? { ...next, phase: 'error', message: failure }
+			      : { ...next, message: 'Removed. PubMed search falls back to web search.' });
+			  };
+			  const status = state.phase === 'loading'
+			    ? 'Checking the credential store…'
+			    : state.phase === 'error'
+			      ? 'Unavailable'
+			      : state.configured
+			        ? `Configured${state.source === undefined ? '' : ` (source: ${state.source})`}`
+			        : 'Not configured';
+			  return h('section', { 'data-molbio-ncbi-key': '', style: keyStyles.section },
+			    h('h4', { style: keyStyles.title }, 'PubMed API key'),
+			    h('p', { style: keyStyles.note }, 
+			      'Stored in the harness credential store. molbio_pubmed_search and molbio_pubmed_abstract use it for the official PubMed E-utilities API; without it they fall back to web search.'),
+			    h('p', { 'data-molbio-key-status': state.phase, style: keyStyles.status }, status),
+			    h('div', { style: keyStyles.row },
+			      h('input', {
+			        type: 'password',
+			        value: draft,
+			        placeholder: 'NCBI API key (36 characters)',
+			        autoComplete: 'off',
+			        spellCheck: false,
+			        'aria-label': 'NCBI API key',
+			        style: keyStyles.input,
+			        onChange: (event) => setDraft(event.target.value),
+			      }),
+			      h('button', { type: 'button', disabled: busy || state.writable === false || draft.trim() === '', onClick: save },
+			        busy ? 'Saving…' : 'Save'),
+			      h('button', { type: 'button', disabled: busy || state.writable === false || state.configured !== true, onClick: remove }, 'Remove')),
+			    state.message === '' ? null : h('p', { 'data-molbio-key-message': '', role: 'status', style: keyStyles.message }, state.message),
+			    h('p', { style: keyStyles.note },
+			      'Create a key under NCBI → Account Settings → API Key Management. Prefer this over an environment variable: the store is not inherited by shell commands.'));
+			}
+
 			/** Required browser services. */
 			const inject = ['slots', 'sidebarRightTabs', 'remote'];
 
@@ -9098,6 +9259,15 @@ window.__ModuleLoader__.load({
 			      key: toolName,
 			    }, MolbioMapCard)), `molbio panel: ${toolName} card`);
 			  }
+			  // Plugins -> the installed plugin's detail page: the one place a user can
+			  // store the NCBI key without editing a YAML file or exporting a variable.
+			  // A list seat takes an id (not a key); the component itself decides whether
+			  // the open subject is this package and returns null everywhere else.
+			  ctx.effect(() => ctx.slots.inject('plugins.detail.section', () => ctx.slots.register({
+			    name: 'plugins.detail.section',
+			    id: 'molbio-ncbi-key',
+			    order: 100,
+			  }, (props) => h(NcbiKeySection, { ...props, remote }))), 'molbio panel: NCBI key section');
 			}
 
 

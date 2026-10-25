@@ -390,3 +390,41 @@ export function paperLink(paper) {
   if (typeof paper.pmid === 'string' && paper.pmid !== '') return `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/`;
   return undefined;
 }
+
+/** The credential reference the PubMed tools read first. */
+export const NCBI_KEY_REF = 'NCBI_API_KEY';
+
+/**
+ * Whether a Plugins-page detail subject is this package's own entry.
+ *
+ * Bundles and rows both expose `pkg.name`; the key section is offered on the
+ * bundle page and on every row page the bundle declares, and on nothing else.
+ */
+export function isMolbioDetailSubject(subject) {
+  if (subject === null || typeof subject !== 'object') return false;
+  if (subject.kind !== 'bundle' && subject.kind !== 'row') return false;
+  const pkg = subject.pkg;
+  return pkg !== null && typeof pkg === 'object' && pkg.name === 'dsh-molbio-tools';
+}
+
+/**
+ * The host failure message carried by a Remote result, or '' on success.
+ * Remote calls answer `{ ok: true, value }` or `{ ok: false, error }`.
+ */
+export function remoteFailure(response) {
+  if (response === null || typeof response !== 'object' || response.ok !== false) return '';
+  const message = response.error?.message;
+  return typeof message === 'string' && message !== '' ? message : 'the host refused the request';
+}
+
+/** One reference's view from a `credentials.describe` response (never the value). */
+export function credentialInfo(response, ref) {
+  const view = response !== null && typeof response === 'object' && response.ok !== false
+    ? response.value?.[ref]
+    : undefined;
+  return {
+    configured: view?.configured === true,
+    writable: view?.writable !== false,
+    ...typeof view?.source === 'string' && view.source !== '' ? { source: view.source } : {},
+  };
+}

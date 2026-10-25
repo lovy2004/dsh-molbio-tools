@@ -136,6 +136,7 @@ assert.deepEqual(effects, [
   'molbio panel: papers tab title',
   'molbio panel: molbio_plasmid_map card',
   'molbio panel: molbio_plasmid_map_file card',
+  'molbio panel: NCBI key section',
 ]);
 assert.equal(tabTypes.length, 2, 'the package contributes two page tab types');
 assert.deepEqual(
@@ -153,7 +154,7 @@ assert.deepEqual(tabTypes.map((type) => type.guide[0].order), [40, 41], 'the gui
 assert.equal(slots.registrations.length, 0, 'nothing registers before its seat exists');
 assert.deepEqual(
   slots.injectedSeats,
-  ['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview'],
+  ['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview', 'plugins.detail.section'],
   'each seat is claimed by waiting for its declaration, not by registering blindly',
 );
 // The shell's guard, reproduced on the stub: this is the exact exception a bare
@@ -169,8 +170,8 @@ slots.declare('sidebar.right.pane.tab');
 slots.declare('sidebar.right.pane.tab.title');
 assert.deepEqual(
   slots.pendingSeats,
-  ['tool.call.toolview'],
-  'the transcript card is still waiting for the seat ui-tool declares',
+  ['tool.call.toolview', 'plugins.detail.section'],
+  'the transcript card and the plugin-detail section wait for the seats their owners declare',
 );
 assert.equal(slots.registrations.length, 4, 'both tab bodies and titles land as soon as their seat exists');
 slots.declare('tool.call.toolview');
@@ -211,6 +212,39 @@ assert.equal(claim('tool.call.toolview', 'molbio_plasmid_map').registration.inje
 slots.declare('tool.call.toolview');
 assert.equal(slots.registrations.length, 6, 're-declaring the seat re-installs both cards instead of duplicating them');
 
+// The Plugins page's detail seat belongs to the plugin manager. The section
+// lands when that seat is declared, and the component itself decides whether
+// the open subject is this package.
+slots.declare('plugins.detail.section');
+assert.equal(slots.registrations.length, 7, 'the key section lands when the plugin manager declares its seat');
+const keyClaim = slots.registrations.find((entry) => entry.registration.name === 'plugins.detail.section');
+assert.ok(keyClaim, 'the key section is claimed in plugins.detail.section');
+assert.equal(keyClaim.registration.id, 'molbio-ncbi-key', 'the list seat is addressed by an id of our own');
+assert.equal(typeof keyClaim.component, 'function', 'the section is a component');
+// The registered component binds `remote`; invoking its element type is how a
+// test renders it without React (the hooks are stubbed by this file's reactStub).
+const ours = keyClaim.component({ subject: { kind: 'bundle', pkg: { name: 'dsh-molbio-tools' } } });
+assert.equal(typeof ours.type, 'function', 'the wrapper renders this package\'s section');
+const sectionTree = ours.type(ours.props);
+assert.equal(sectionTree.type, 'section');
+assert.equal(sectionTree.props['data-molbio-ncbi-key'], '');
+const flat = [];
+const walk = (node) => {
+  if (node === null || typeof node !== 'object') return;
+  flat.push(node);
+  for (const child of Array.isArray(node.children) ? node.children : []) walk(child);
+};
+walk(sectionTree);
+assert.ok(flat.some((node) => node.type === 'h4' && node.children.join('') === 'PubMed API key'), 'the section is titled');
+assert.ok(flat.some((node) => node.type === 'input' && node.props.type === 'password'), 'the section offers a password input');
+assert.ok(flat.some((node) => node.type === 'button' && node.children.join('') === 'Save'), 'the section offers a save control');
+const renderFor = (subject) => {
+  const wrapper = keyClaim.component({ subject });
+  return wrapper.type(wrapper.props);
+};
+assert.equal(renderFor({ kind: 'bundle', pkg: { name: 'another-plugin' } }), null, 'another package gets no section');
+assert.equal(renderFor({ kind: 'item', id: 'web-search' }), null, 'an official-plugin page gets no section');
+
 // ── 3. the panel's data path, against the real fixture ──────────────────────
 
 assert.equal(panelCore.extensionOf('pUC118.dna'), 'dna');
@@ -230,6 +264,21 @@ const sorted = panelCore.sortEntries([
   { name: 'a.dna', type: 'file' },
 ]);
 assert.deepEqual(sorted.map((entry) => entry.name), ['a.dna', 'z.dna', 'a.fasta', 'notes.md']);
+
+// The plugin-detail key section's pure helpers: which subject it belongs to,
+// how a credential view is read, and how a refused Remote call is surfaced.
+assert.equal(panelCore.isMolbioDetailSubject({ kind: 'bundle', pkg: { name: 'dsh-molbio-tools' } }), true);
+assert.equal(panelCore.isMolbioDetailSubject({ kind: 'row', pkg: { name: 'dsh-molbio-tools' }, row: { rowId: 'molbio-client' } }), true);
+assert.equal(panelCore.isMolbioDetailSubject({ kind: 'bundle', pkg: { name: 'another-plugin' } }), false);
+assert.equal(panelCore.isMolbioDetailSubject({ kind: 'item', id: 'dsh-molbio-tools' }), false, 'official-plugin pages are not ours');
+assert.equal(panelCore.isMolbioDetailSubject(null), false);
+assert.deepEqual(
+  panelCore.credentialInfo({ ok: true, value: { NCBI_API_KEY: { configured: true, source: 'file', writable: true } } }, 'NCBI_API_KEY'),
+  { configured: true, writable: true, source: 'file' },
+);
+assert.deepEqual(panelCore.credentialInfo({ ok: true, value: {} }, 'NCBI_API_KEY'), { configured: false, writable: true });
+assert.equal(panelCore.remoteFailure({ ok: false, error: { message: 'credential/rejected: the store is unreadable' } }), 'credential/rejected: the store is unreadable');
+assert.equal(panelCore.remoteFailure({ ok: true, value: {} }), '', 'a successful result carries no failure');
 
 assert.equal(panelCore.childPath('D:\\work', 'a.dna'), 'D:\\work/a.dna');
 assert.equal(panelCore.childPath('', 'a.dna'), 'a.dna');

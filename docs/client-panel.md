@@ -13,6 +13,7 @@
 | **Molbio**（右栏 tab） | 列出会话工作区里的序列文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图 | `workspaceFiles.readAll`（二进制，含 SnapGene） |
 | **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
 | **图谱调用卡**（`tool.call.toolview`） | `molbio_plasmid_map` / `molbio_plasmid_map_file` 的调用卡：在对话里直接画出这次调用产出的图谱（摘要行 + 写入路径），失败时显示错误文本与 Inspect 入口 | 工具自己声明的 `output.presentationMeta`（见下） |
+| **PubMed API key**（`plugins.detail.section`） | 插件 → 已安装插件 → `dsh-molbio-tools` 详情页里的一段表单：password 输入 + Save/Remove，状态只报「已配置 / 来源 / 未配置」，永不回显值 | `ctx.remote.credentials.describe` / `set` / `unset`（host 的凭据 seam） |
 
 **解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`），
 不经过任何工具调用、不落盘 SVG、不弹系统查看器。
@@ -46,7 +47,7 @@ SVG 随 meta 传输有上限（256 KB）：真实载体的图谱 20-60 KB，但�
 | `build/client-bundle-core.mjs` | 打包器的**生成逻辑**（可 import）：`createGenerator({entry, baseDir})` → 模块图 + `renderBundle(packageName)`；`test/contract.mjs` 在进程内用它重算产物做新鲜度检查（不 spawn，受限沙箱下也能验证） |
 | `build/browser-api.mjs` | 浏览器安全面：从**包根的 `.mjs` 源文件**再导出面板可用的一切（单一事实来源） |
 | `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
-| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，以及两个 map 工具的调用卡 |
+| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，两个 map 工具的调用卡，以及插件详情页的 key 配置段 |
 | `lib/client.js` | **构建产物**（`exports["./client"]` 指向它；由 `npm run build:client` 生成） |
 | `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 57 个工具解耦的交付通道 |
 | `test/client.mjs` | 按加载器的方式执行产物 + 驱动两条数据通路（含真实 pUC118 夹具） |
@@ -131,6 +132,11 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 - **图片式交互**：SVG 里注入的是真实 DOM（可缩放、可选中文本），但没有点特征跳转之类的联动。
 - **CSS 内联**：产物刻意不注入样式表——`factory` 里的样式副作用要自己管拆除；
   内联样式让产物保持单文件、零生命周期负担。
+- **key 配置段只在「本包」的详情页出现**：`plugins.detail.section` 是 list 座位，条目自己判断
+  `subject`；本包只在 `kind: bundle|row` 且 `pkg.name === 'dsh-molbio-tools'` 时渲染，其它插件页
+  返回 `null`。它依赖宿主挂载了凭据 provider（默认组合都有）：没有时状态显示 Unavailable，
+  而工具仍会按「参数 → 凭据库 → 环境变量」的顺序回退，不会因此不可用。**输入框只写不读**：
+  `describe` 的返回里没有值，保存成功后输入框立即清空。
 - **每次改源都要重新构建**：`lib/client.js` 是**产物**，改了根 `.mjs` 或 `build/*.mjs` 后
   必须重跑 `npm run build:client`，否则面板还跑旧逻辑（这与 preset 的"版本目录"规则是
   两码事：客户端产物靠 `rev` 哈希缓存失效，不靠目录名）。
@@ -146,9 +152,11 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    `guide`、无 `patterns`、guide `order` 40/41）、四个 keyed 座位的注册、两个正文的 `inject`
    工厂都只交出 `remote`。座位那一层从**一个座位都没声明**的最坏顺序启动（`test/slots-stub.mjs`
    复刻 shell 的 SlotCore 语义）：`apply()` 必须不抛；右栏座位声明后四条注册落地；调用卡座位在
-   ui-tool 声明之前一直**处于等待**、声明之后才落地；重声明不产生重复注册；并当场复刻
-   "未声明座位 `register()` 必抛"的那条 SlotCore 异常——0.7.1 把整个 GUI 卡在
-   "Failed to load plugins" 的就是它。
+   ui-tool 声明之前一直**处于等待**、声明之后才落地；插件详情页座位同样先等待、后注册；重声明
+   不产生重复注册；并当场复刻 "未声明座位 `register()` 必抛"的那条 SlotCore 异常——0.7.1 把整个
+   GUI 卡在 "Failed to load plugins" 的就是它。key 段还断言了：本包 subject 渲染出
+   `section` + password 输入 + Save，其它包的 subject 返回 `null`，以及凭据视图/失败信息
+   三个纯函数（`isMolbioDetailSubject` / `credentialInfo` / `remoteFailure`）。
 3. **组件行为**：`test/panel-render.mjs` 把**真实的面板组件**放进 Node 跑——没有 React
    （harness 里有，浏览器里的 React 由 shell 播种）也没有 DOM，所以这个文件自带一套最小
    钩子宿主（`createElement`/`useState`/`useEffect`/`useMemo`/`useRef`，语义与 React 一致：
@@ -159,7 +167,9 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    列目录失败的错误态、文献库的列表/搜索/标签过滤/详情/PubMed 链接回退、空库提示、坏库
    报错（**不显示成"空库"**）、以及卸载时中止在途读取。
    这一层抓到过三个真 bug：列表把不可打开的文件也列出来、`sortEntries` 的 `other` 档从不
-   生效、以及坏库时列表仍宣称"还没有文献"。
+   生效、以及坏库时列表仍宣称"还没有文献"。插件详情页的 key 段也被真实驱动：
+   `describe` → 输入 → Save（trim 后写入 `NCBI_API_KEY`）→ 状态刷新 + 清空输入 → Remove →
+   provider 拒绝时消息原样显示。
 4. **数据通路（质粒）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，AmpR 2102-2962
    反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；FASTA → 比对 → logo；
    扩展名分类、排序、base64 解码、非法输入的错误路径。
@@ -234,6 +244,9 @@ shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 
 ## 7. 下一步
 
+- **插件详情页的 key 配置**：✅ 已落地（0.22.1，见第 1 与第 4 节）。后续可把同一个
+  `plugins.detail.section` 模式用于其它凭据（例如文献库的机构代理），前提是它们也有一个
+  稳定的环境变量名。
 - **`tool.call.toolview`**：✅ 已落地（见第 1 与第 3 节），覆盖两个 map 工具。可继续做的
   是给 `molbio_sequence_logo` / `molbio_grna_design` 之类的工具也加上卡片（同一套
   `presentationMeta` + 卡片模式）。**注意上线前先跑 `test/client.mjs` 的抢座位顺序那一层**：

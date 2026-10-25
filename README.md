@@ -55,6 +55,10 @@
    装完点 **立即启用**（Enable now）——关掉对话框只会装好、不会启用，之后也可以在插件页打开它的开关。
 3. 重启该 profile，然后在预设选择器里选 "Molecular Biology Lab" 新建会话。
 
+**（可选）PubMed API key**：重启后打开 **插件 → 已安装插件 → `dsh-molbio-tools` 详情页**，
+在 **PubMed API key** 一节粘贴 NCBI key 并点 **Save**。它写进 DSH 凭据库（`~/.dsh/.credentials.yaml`），
+不需要编辑文件、也不进环境变量，下一次检索即生效。没有 key 时检索仍走原来的 web 检索。
+
 ### 次选：命令行安装
 
 没有图形界面时（例如服务器上只用 CLI），用这条命令；它和插件页安装等价，都从 npm registry 取包：
@@ -562,8 +566,8 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   NCBI 的速率上限是**无 key 3 次/秒、有 key 10 次/秒**，一次带 key 的检索是 2 个请求
   （esearch + esummary）。没有 key 时检索仍走原来的 web 检索通路，行为不变。
 - **优先把 key 放凭据库，而不是环境变量。** 凭据库是 `~/.dsh/.credentials.yaml`（`refs:` 下写
-  `NCBI_API_KEY: …`，或通过设置界面保存同名凭据）：不进环境、仅属主可读、改完热重载、下一次调用
-  即生效。环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具，`echo $env:NCBI_API_KEY`
+  `NCBI_API_KEY: …`；图形入口是**插件 → 已安装插件 → dsh-molbio-tools → PubMed API key**）：
+  不进环境、仅属主可读、改完热重载、下一次调用即生效。环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具，`echo $env:NCBI_API_KEY`
   就能读出来，而且明文存在用户环境里；内联 `api_key` 还会进入对话记录与工具卡片。
   > 凭据库不是对 agent 的硬隔离（agent 与你是同一个 OS 用户，刻意去读文件仍可能），但它消除了
   > 「所有 shell 子进程自动继承」这条泄漏路径——这正是环境变量的主要问题。
@@ -661,8 +665,9 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 `amplicon_min/max` 或 `tm_min/max` 放宽一点即可。
 
 **PubMed 的 API key 怎么配？**
-推荐放进 **DSH 凭据库**：`~/.dsh/.credentials.yaml` 的 `refs:` 下加一行 `NCBI_API_KEY: 你的key`
-（该文件由产品创建、仅属主可读、热重载，改完下一次调用即生效），或在设置界面保存同名凭据。
+推荐用**插件详情页**：插件 → 已安装插件 → `dsh-molbio-tools` → **PubMed API key**，粘贴后点 Save
+（写入 DSH 凭据库的 `NCBI_API_KEY`，不进环境变量，下一次检索生效）。也可以手动在
+`~/.dsh/.credentials.yaml` 的 `refs:` 下加一行 `NCBI_API_KEY: 你的key`。
 也可以用环境变量 `NCBI_API_KEY`，或在单次调用里传 `api_key`，但两者都更容易泄漏：**环境变量会被
 agent 的 shell 子进程继承**，内联参数会出现在对话记录与工具卡片里。有 key 时走官方 E-utilities
 （PubMed 自己的题录，含 DOI），没有 key 时仍走 harness 的 web 检索。

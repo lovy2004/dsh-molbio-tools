@@ -308,7 +308,7 @@ const module = await (async () => {
   }
 })();
 
-const slots = createSlotsStub(['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview']);
+const slots = createSlotsStub(['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview', 'plugins.detail.section']);
 const ctx = {
   remote: remote({}),
   effect(factory) {
@@ -591,6 +591,77 @@ const library = {
   const rendered = markup(harness.tree);
   assert.ok(rendered.includes('not valid JSON'), 'a corrupt library is reported as an error');
   assert.ok(!rendered.includes('No papers in the library yet'), 'a corrupt library is not shown as empty');
+  harness.unmount();
+}
+
+// ── the plugin-detail key section (write-only credential form) ─────────────
+
+{
+  const claim = slots.registrations.find((entry) => entry.registration.name === 'plugins.detail.section');
+  assert.ok(claim, 'the key section registered once its seat was declared');
+  const store = { value: undefined, describe: [], set: [], unset: [], refuse: '' };
+  ctx.remote.credentials = {
+    async describe(refs) {
+      store.describe.push(refs);
+      return {
+        ok: true,
+        value: {
+          NCBI_API_KEY: {
+            configured: store.value !== undefined,
+            writable: true,
+            ...store.value === undefined ? {} : { source: 'file' },
+          },
+        },
+      };
+    },
+    async set(ref, value) {
+      store.set.push([ref, value]);
+      if (store.refuse !== '') return { ok: false, error: { message: store.refuse } };
+      store.value = value;
+      return { ok: true, value: null };
+    },
+    async unset(ref) {
+      store.unset.push(ref);
+      store.value = undefined;
+      return { ok: true, value: null };
+    },
+  };
+  const subject = { kind: 'bundle', pkg: { name: 'dsh-molbio-tools' } };
+  const wrapper = claim.component({ subject });
+  const harness = mount(wrapper.type);
+  globalThis.__molbioTestHooks = harness;
+  harness.setProps({ subject, remote: ctx.remote });
+  await harness.render();
+  assert.deepEqual(store.describe[0], ['NCBI_API_KEY'], 'the section asks only about its own reference');
+  assert.match(markup(harness.tree), /Not configured/, 'an empty store reads as not configured');
+  const input = elements(harness.tree, 'input')[0];
+  assert.equal(input.props.type, 'password', 'the key is typed into a password field');
+  input.props.onChange({ target: { value: '  key-123  ' } });
+  await harness.render();
+  const save = elements(harness.tree, 'button').find((node) => texts(node).join('') === 'Save');
+  await save.props.onClick();
+  await flush();
+  await harness.render();
+  assert.deepEqual(store.set, [['NCBI_API_KEY', 'key-123']], 'Save trims and stores under NCBI_API_KEY');
+  assert.ok(store.describe.length >= 2, 'the status is re-read after the write');
+  assert.match(markup(harness.tree), /Configured \(source: file\)/, 'the status names the source, never the value');
+  assert.equal(elements(harness.tree, 'input')[0].props.value, '', 'the draft is cleared after saving');
+
+  const remove = elements(harness.tree, 'button').find((node) => texts(node).join('') === 'Remove');
+  await remove.props.onClick();
+  await flush();
+  await harness.render();
+  assert.deepEqual(store.unset, ['NCBI_API_KEY'], 'Remove deletes the reference');
+  assert.match(markup(harness.tree), /Not configured/, 'the status follows the removal');
+
+  // A provider refusal is shown verbatim instead of being swallowed.
+  store.refuse = 'credential/rejected: the credentials file is unreadable';
+  elements(harness.tree, 'input')[0].props.onChange({ target: { value: 'x' } });
+  await harness.render();
+  await elements(harness.tree, 'button').find((node) => texts(node).join('') === 'Save').props.onClick();
+  await flush();
+  await harness.render();
+  assert.ok(markup(harness.tree).includes('credential/rejected: the credentials file is unreadable'), 'a refused write keeps the host message');
   harness.unmount();
 }
 

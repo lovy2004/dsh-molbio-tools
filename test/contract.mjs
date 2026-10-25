@@ -277,6 +277,23 @@ check('the built bundle registers the seats and services the framework expects',
   // The inject factory must hand over exactly the services the framework does
   // NOT provide, so it can never shadow sessionId or a synthesised hook.
   assert.ok(/inject: \(\) => \(\{ remote \}\)/.test(bundle), 'the body injects only the Remote face');
+
+  // The plugin-detail key section depends on TWO upstream facts: the plugin
+  // manager still declares the seat, and the settings controller still exposes
+  // the credentials Remote namespace with the argument order we call. Both are
+  // silent if they move (the section simply never renders), so pin them here.
+  assert.ok(bundle.includes('plugins.detail.section'), 'the bundle waits for the plugin-manager detail seat');
+  for (const call of ['credentials.describe(', 'credentials.set(', 'credentials.unset(']) {
+    assert.ok(bundle.includes(call), `the key section calls ${call}…)`);
+  }
+  const manager = clientBundle('@deepseek-ai/dsh-client-ui-plugin-manager');
+  assert.ok(manager !== undefined && manager.text.includes('plugins.detail.section'), 'the plugin manager still declares plugins.detail.section');
+  const settings = hostHalf('@deepseek-ai/dsh-api-settings-controller');
+  assert.ok(settings !== undefined, 'the settings controller is installed');
+  assert.ok(settings.text.includes('namespace: "credentials"'), 'the credentials Remote namespace still exists');
+  assert.match(settings.text, /async describe\(refs\)/, 'describe takes the reference list first');
+  assert.match(settings.text, /async set\(ref, value\)/, 'set takes (ref, value)');
+  assert.match(settings.text, /async unset\(ref\)/, 'unset takes the reference');
 });
 
 check('the package manifest keeps the client declaration the scan keys on', () => {
