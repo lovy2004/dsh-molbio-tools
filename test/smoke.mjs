@@ -1990,6 +1990,55 @@ delete process.env.MOLBIO_NCBI_API_KEY;
 }
 
 {
+  // the harness credential store outranks the environment without ever
+  // materializing the key in process.env; an explicit argument still wins.
+  const saved = process.env.NCBI_API_KEY;
+  process.env.NCBI_API_KEY = 'env-loses';
+  extraServices.set('credentials', {
+    async resolve(ref) {
+      return ref === 'NCBI_API_KEY' ? { value: 'store-key', source: 'store' } : undefined;
+    },
+  });
+  try {
+    mockWeb.calls.length = 0;
+    const stored = await run('molbio_pubmed_search', { query: 'stored key' });
+    assert.equal(stored.backend, 'pubmed-eutils');
+    assert.ok(mockWeb.calls.length === 2 && mockWeb.calls.every((url) => url.includes('api_key=store-key')));
+
+    mockWeb.calls.length = 0;
+    const explicit = await run('molbio_pubmed_search', { query: 'explicit key', api_key: 'arg-key' });
+    assert.equal(explicit.backend, 'pubmed-eutils');
+    assert.ok(mockWeb.calls.every((url) => url.includes('api_key=arg-key')));
+  } finally {
+    extraServices.delete('credentials');
+    delete process.env.NCBI_API_KEY;
+    if (saved !== undefined) process.env.NCBI_API_KEY = saved;
+  }
+}
+
+{
+  // a credential provider that refuses the ref must degrade to the environment,
+  // not break the tool (a composition may have no store at all).
+  const saved = process.env.NCBI_API_KEY;
+  process.env.NCBI_API_KEY = 'env-fallback';
+  extraServices.set('credentials', {
+    async resolve() {
+      throw new Error('no credential store in this composition');
+    },
+  });
+  try {
+    mockWeb.calls.length = 0;
+    const out = await run('molbio_pubmed_search', { query: 'fallback' });
+    assert.equal(out.backend, 'pubmed-eutils');
+    assert.ok(mockWeb.calls.length === 2 && mockWeb.calls.every((url) => url.includes('api_key=env-fallback')));
+  } finally {
+    extraServices.delete('credentials');
+    delete process.env.NCBI_API_KEY;
+    if (saved !== undefined) process.env.NCBI_API_KEY = saved;
+  }
+}
+
+{
   // an invalid key is reported as such, not presented as "no results"
   await assert.rejects(() => run('molbio_pubmed_search', { query: 'x', api_key: 'bad-key' }), /API key invalid/);
 }

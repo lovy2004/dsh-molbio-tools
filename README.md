@@ -224,7 +224,7 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 
 | 工具 | 用途 |
 | --- | --- |
-| `molbio_pubmed_search` | 搜 PubMed 文献。提供 NCBI API key（`api_key` 参数，或环境变量 `NCBI_API_KEY` / `MOLBIO_NCBI_API_KEY`）时走**官方 E-utilities**（esearch + esummary），返回 PMID/标题/期刊/年份/作者/DOI；无 key 时回退到 harness 的 web 检索 |
+| `molbio_pubmed_search` | 搜 PubMed 文献。提供 NCBI API key（`api_key` 参数、**DSH 凭据库**的 `NCBI_API_KEY`、或环境变量）时走**官方 E-utilities**（esearch + esummary），返回 PMID/标题/期刊/年份/作者/DOI；无 key 时回退到 harness 的 web 检索 |
 | `molbio_pubmed_abstract` | 按 PMID 拉取摘要（efetch；同样支持 NCBI API key，依赖部署提供 web fetch 能力） |
 | `molbio_paper_add` / `molbio_paper_list` / `molbio_paper_update` / `molbio_paper_remove` | 阅读库（工作区 `papers.json`）：加/列/改/删，按 PMID→URL→标题+年份去重 |
 | `molbio_paper_export_bibtex` | `papers.json` → BibTeX `.bib`（可按 tag 过滤） |
@@ -557,10 +557,16 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 
 - 检索与摘要走 harness 的 **web** 服务（部署不提供时工具会明确报错，而不是假装搜到）。
 - 提供 NCBI API key 时，`molbio_pubmed_search` 用官方 E-utilities：esearch 拿 PMID、esummary
-  拿题录（标题/期刊/年份/作者/DOI），`molbio_pubmed_abstract` 用 efetch 拿摘要。key 的来源优先级是
-  `api_key` 参数 > `NCBI_API_KEY` > `MOLBIO_NCBI_API_KEY`；**长期使用请用环境变量**，内联传参会让 key
-  出现在对话记录与工具卡片里。NCBI 的速率上限是**无 key 3 次/秒、有 key 10 次/秒**，一次带 key 的
-  检索是 2 个请求（esearch + esummary）。没有 key 时检索仍走原来的 web 检索通路，行为不变。
+  拿题录（标题/期刊/年份/作者/DOI），`molbio_pubmed_abstract` 用 efetch 拿摘要。key 的解析顺序是
+  **`api_key` 参数 → DSH 凭据库（`NCBI_API_KEY`，其次 `MOLBIO_NCBI_API_KEY`）→ 进程环境变量**。
+  NCBI 的速率上限是**无 key 3 次/秒、有 key 10 次/秒**，一次带 key 的检索是 2 个请求
+  （esearch + esummary）。没有 key 时检索仍走原来的 web 检索通路，行为不变。
+- **优先把 key 放凭据库，而不是环境变量。** 凭据库是 `~/.dsh/.credentials.yaml`（`refs:` 下写
+  `NCBI_API_KEY: …`，或通过设置界面保存同名凭据）：不进环境、仅属主可读、改完热重载、下一次调用
+  即生效。环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具，`echo $env:NCBI_API_KEY`
+  就能读出来，而且明文存在用户环境里；内联 `api_key` 还会进入对话记录与工具卡片。
+  > 凭据库不是对 agent 的硬隔离（agent 与你是同一个 OS 用户，刻意去读文件仍可能），但它消除了
+  > 「所有 shell 子进程自动继承」这条泄漏路径——这正是环境变量的主要问题。
 - 阅读库/协议库/实验日志是工作区里的 `papers.json` / `protocols.json` / `experiments.json`，
   写入遵循会话的**沙箱政策**，与其它文件工具同权；面板（Papers tab）直接读 `papers.json`。
 - `molbio_paper_export_bibtex` 可选按 tag 过滤导出。
@@ -655,10 +661,11 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 `amplicon_min/max` 或 `tm_min/max` 放宽一点即可。
 
 **PubMed 的 API key 怎么配？**
-在启动 DSH 的环境里设 `NCBI_API_KEY`（或 `MOLBIO_NCBI_API_KEY`），插件会自动把它带进 E-utilities 请求；
-也可以在单次调用里传 `api_key`。有 key 时 `molbio_pubmed_search` 走官方 API（PubMed 自己的题录，
-含 DOI），没有 key 时仍走 harness 的 web 检索。注意：**内联传的 key 会出现在对话记录和工具调用卡片里**，
-长期用请设环境变量。
+推荐放进 **DSH 凭据库**：`~/.dsh/.credentials.yaml` 的 `refs:` 下加一行 `NCBI_API_KEY: 你的key`
+（该文件由产品创建、仅属主可读、热重载，改完下一次调用即生效），或在设置界面保存同名凭据。
+也可以用环境变量 `NCBI_API_KEY`，或在单次调用里传 `api_key`，但两者都更容易泄漏：**环境变量会被
+agent 的 shell 子进程继承**，内联参数会出现在对话记录与工具卡片里。有 key 时走官方 E-utilities
+（PubMed 自己的题录，含 DOI），没有 key 时仍走 harness 的 web 检索。
 
 **"帮我把这段序列分析一下" 它却问我要参数？**
 把目标说具体即可：要引物还是探针、产物多长、Tm 多少、哪个区域。工具默认值都是常规实验条件

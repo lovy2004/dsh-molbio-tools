@@ -32,7 +32,7 @@
 
 - **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**60 个 `molbio_*` 工具**（其中
   `molbio_plot` 一个工具承载 8 种图表）。
-- **基线**：DSH **0.2.1-rc.3**；`package.json` 版本 0.22.0。
+- **基线**：DSH **0.2.1-rc.3**；`package.json` 版本 0.22.1。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
   **两个独立的 npm 条目、两条独立的版本线**，必须分别发布。
 - **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 只插一行**惰性宿主锚点**

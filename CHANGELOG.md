@@ -10,6 +10,53 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.22.1] — 2026-10-25（PubMed key 改走 DSH 凭据库；环境变量降为后备）
+
+**工具数不变（60）；没有凭据库的组合，行为与 0.22.0 相同。** 0.22.0 只从 `api_key` 参数与
+`process.env` 读 key；这一版把 DSH 的凭据 seam（`ctx.credentials`）插到两者之间，并把环境变量
+降为最后一级。
+
+### 1. 环境变量为什么不够好
+
+环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具：一句 `echo $env:NCBI_API_KEY`
+就能把 key 读进对话；它还会出现在进程环境块、崩溃转储与用户的注册表环境里（Windows 的
+`HKCU\Environment` 是明文）。对一把能读数据、能改状态的云密钥，这常常是不能接受的暴露面。
+
+DSH 自带的凭据库（`@deepseek-ai/dsh-credentials-local`）就是为这件事存在的：值存在
+`~/.dsh/.credentials.yaml` 里，**不注入环境**、文件仅属主可读、改动热重载，
+`describe()` 只报告是否已设置与来源、从不回显值，而且**存储值优先于启动环境**。
+
+### 2. 新的解析顺序
+
+| 优先级 | 来源 | 说明 |
+| --- | --- | --- |
+| 1 | `api_key` 参数 | 单次调用显式指定；会出现在对话记录与工具卡片里 |
+| 2 | 凭据库 `NCBI_API_KEY` | 推荐；不进入环境，agent 的 shell 子进程读不到 |
+| 3 | 凭据库 `MOLBIO_NCBI_API_KEY` | 同上，插件专用命名 |
+| 4 | 进程环境 `NCBI_API_KEY` / `MOLBIO_NCBI_API_KEY` | 兼容 0.22.0 的用法；暴露面最大 |
+
+实现上调用 `ctx.credentials.resolve(ref)`（存在性检查后才调用），因此凭据库自身的回退层
+（启动环境、项目 `.env`、harness home 的 `.env`）也一并继承；provider 不存在或拒绝该引用时
+**静默回退到 `process.env`**，没有凭据库的组合行为不变。
+
+### 3. key 放进凭据库的两种方式
+
+1. 编辑 `~/.dsh/.credentials.yaml`（产品创建、仅属主可读、热重载）：在 `refs:` 下加一行
+   `NCBI_API_KEY: 你的key`；下一次工具调用即生效，无需重启。
+2. 在 DSH 的设置界面保存同名凭据（该界面只显示“是否已设置/来源”，不显示值）。
+
+> **这不是对 agent 的硬隔离。** 凭据库自己的文档写得很清楚：agent 的工具进程以同一个 OS 用户
+> 运行，刻意去读那个文件仍然读得到。它解决的是**自动泄漏**：环境变量会被每个 shell 子进程
+> 无条件继承，而凭据库不会。真正要把密钥挡在 agent 之外，需要换提供方（OS 钥匙串/KMS），
+> 当前产品没有随附这类 provider。
+
+### 4. 边界与验证
+
+- 默认路径（无 key）仍是 web 检索；有 key 仍是 esearch + esummary + efetch，速率上限不变。
+- 面板包不动（客户端字节未变），版本仍是 0.1.5。
+- smoke 新增三条：**凭据库压过环境变量**、**显式参数压过凭据库**、**provider 抛错时回退到环境**；
+  原有的“无 key 不碰 E-utilities”与“坏 key 报错”保留。
+- `npm test` 全绿；`preset-patch --check` / `client-bundle --check` 均不变（这次没有动生成物）。
 ## [0.22.0] — 2026-10-25（DSH 0.2.1-rc.3 适配；PubMed 官方 API + NCBI API key）
 
 **工具数不变（60）。新增一条通路：`molbio_pubmed_search` / `molbio_pubmed_abstract` 可以带着

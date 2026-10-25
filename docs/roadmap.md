@@ -10,7 +10,7 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.22.0）
+## 1. 当前状态（0.22.1）
 
 - 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
@@ -41,6 +41,9 @@ L = 需要新机制或外部资源）。
   `standard` 行清单**逐字节未变**，`preset-health` / `drift-probe` / `contract` 在 rc.3 上
   全绿，因此这一半只改声明与证据）；`molbio_pubmed_search` / `molbio_pubmed_abstract` 增加
   NCBI API key 通路，走官方 E-utilities（esearch + esummary），无 key 时保持原有 web 检索。
+- **0.22.1 是 key 存放方式的安全加固**：`molbio_pubmed_search` / `molbio_pubmed_abstract` 的 key
+  解析顺序变为 **`api_key` 参数 → DSH 凭据库 → 环境变量**。环境变量会被 agent 自己的 shell 子进程
+  继承，凭据库不会；没有凭据库的组合行为与 0.22.0 相同。
 
 ---
 
