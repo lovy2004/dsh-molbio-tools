@@ -66,6 +66,13 @@ DSH 自带的凭据库（`@deepseek-ai/dsh-credentials-local`）就是为这件�
 - 它和 CLI/工具读的是**同一个**凭据引用，所以两边不需要同步；没有凭据 provider 的部署会显示
   Unavailable，而工具仍按 §2 的顺序回退到环境变量。
 
+> **测试中发现并修掉的一处真实缺陷（同一版内）**：第一版把 `ctx.remote.credentials` 当成普通
+> 属性直接访问，而它是 **fiber injection**——官方设置页在 `inject` 列表里显式声明
+> `remote.credentials`。没有声明时该命名空间是 `undefined`，点 Save 什么也不会写（状态看起来
+> 只是"没保存"）。现在整段的注册被 `ctx.inject(['remote.credentials'], …)` 门控：有命名空间才
+> 出现，没有则整段不注册（面板不受影响）；写入之后还会重新 `describe`，若 Host 仍报"未配置"
+> 会把这句话显示出来，而不是假装成功。
+
 ### 5. 边界与验证
 
 - 默认路径（无 key）仍是 web 检索；有 key 仍是 esearch + esummary + efetch，速率上限不变。

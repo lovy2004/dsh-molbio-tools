@@ -314,6 +314,11 @@ const ctx = {
   effect(factory) {
     return factory();
   },
+  // `apply` gates the key section on the credentials Remote namespace; this
+  // file supplies every dependency it asks for, like the default composition.
+  inject(_deps, callback) {
+    return { dispose() {}, value: callback(ctx) };
+  },
   sidebarRightTabs: { register: (definition) => registrations.push(definition) },
   slots,
 };

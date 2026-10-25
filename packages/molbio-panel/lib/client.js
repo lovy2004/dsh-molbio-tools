@@ -9101,8 +9101,17 @@ window.__ModuleLoader__.load({
 			  useEffect(() => {
 			    if (subjectToken === '') return undefined;
 			    let live = true;
-			    readNcbiKey(remote).then((next) => { if (live) setState(next); });
-			    return () => { live = false; };
+			    const load = () => readNcbiKey(remote).then((next) => { if (live) setState(next); });
+			    load();
+			    // Another surface may rotate or clear the same reference (Settings, the
+			    // file watcher); follow the host event instead of showing a stale badge.
+			    const off = typeof remote?.$on === 'function'
+			      ? remote.$on('credentials/reference-updated', (ref) => { if (ref === NCBI_KEY_REF) load(); })
+			      : undefined;
+			    return () => {
+			      live = false;
+			      if (typeof off === 'function') off();
+			    };
 			  }, [remote, subjectToken]);
 			  if (!isMolbioDetailSubject(subject)) return null;
 			  const busy = state.phase === 'saving';
@@ -9125,7 +9134,11 @@ window.__ModuleLoader__.load({
 			    const next = await readNcbiKey(remote);
 			    setState(failure !== ''
 			      ? { ...next, phase: 'error', message: failure }
-			      : { ...next, message: 'Saved. The next PubMed call uses this key.' });
+			      : next.phase === 'error'
+			        ? next
+			        : next.configured === true
+			          ? { ...next, message: 'Saved. The next PubMed call uses this key.' }
+			          : { ...next, phase: 'error', message: 'The host accepted the write but still reports no key configured. Restart the profile and try again.' });
 			  };
 			  const remove = async () => {
 			    if (remote?.credentials === undefined || typeof remote.credentials.unset !== 'function') {
@@ -9143,7 +9156,11 @@ window.__ModuleLoader__.load({
 			    const next = await readNcbiKey(remote);
 			    setState(failure !== ''
 			      ? { ...next, phase: 'error', message: failure }
-			      : { ...next, message: 'Removed. PubMed search falls back to web search.' });
+			      : next.phase === 'error'
+			        ? next
+			        : next.configured === false
+			          ? { ...next, message: 'Removed. PubMed search falls back to web search.' }
+			          : { ...next, phase: 'error', message: 'The host still reports a key configured after Remove.' });
 			  };
 			  const status = state.phase === 'loading'
 			    ? 'Checking the credential store…'
@@ -9261,13 +9278,23 @@ window.__ModuleLoader__.load({
 			  }
 			  // Plugins -> the installed plugin's detail page: the one place a user can
 			  // store the NCBI key without editing a YAML file or exporting a variable.
-			  // A list seat takes an id (not a key); the component itself decides whether
-			  // the open subject is this package and returns null everywhere else.
-			  ctx.effect(() => ctx.slots.inject('plugins.detail.section', () => ctx.slots.register({
-			    name: 'plugins.detail.section',
-			    id: 'molbio-ncbi-key',
-			    order: 100,
-			  }, (props) => h(NcbiKeySection, { ...props, remote }))), 'molbio panel: NCBI key section');
+			  //
+			  // `remote.credentials` is a FIBER INJECTION, not merely a property on the
+			  // Remote carrier: the shipped settings pages declare it in `inject` for the
+			  // same reason. Without the declaration `ctx.remote.credentials` is undefined,
+			  // which is exactly how the first build of this section made Save a no-op.
+			  // The gate keeps the panel working in deployments that expose no credentials
+			  // namespace: the section simply never registers there.
+			  ctx.effect(() => {
+			    const gate = ctx.inject(['remote.credentials'], (keyCtx) => {
+			      keyCtx.effect(() => keyCtx.slots.inject('plugins.detail.section', () => keyCtx.slots.register({
+			        name: 'plugins.detail.section',
+			        id: 'molbio-ncbi-key',
+			        order: 100,
+			      }, (props) => h(NcbiKeySection, { ...props, remote: keyCtx.remote }))), 'molbio panel: NCBI key section');
+			    });
+			    return () => { gate.dispose(); };
+			  }, 'molbio panel: NCBI key section gate');
 			}
 
 

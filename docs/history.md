@@ -60,6 +60,11 @@
 - smoke 新增三条：凭据库压过环境、参数压过凭据库、provider 抛错回退。
 - 0.22.1 同时补了**图形入口**：插件 → 已安装插件 → 本包详情页里的 `plugins.detail.section`
   表单（password 输入 + Save/Remove，值只写不读）。改 YAML 不该是唯一入口。
+- **测试里抓到的缺陷**：`ctx.remote.credentials` 是 fiber injection，不是 Remote 载体的普通属性。
+  第一版没在 `inject` 里声明它，命名空间就是 `undefined`，Save 静默地什么也没写；官方设置页
+  一直把 `remote.credentials` 写在 `inject` 列表里，那就是这行声明的用途。现在用
+  `ctx.inject(['remote.credentials'], …)` 门控整段注册，并在写后重新 `describe` 核对结果。
+
 ## v0.22.0（2026-10-25，包 0.22.0）
 
 一半是适配（rc.3），一半是新能力（PubMed 官方 API + key）。三条教训。

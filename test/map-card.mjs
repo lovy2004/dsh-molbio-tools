@@ -253,12 +253,14 @@ function mount(Component) {
 const registrations = [];
 const module = await import(entryPath.href);
 const slots = createSlotsStub(['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title', 'tool.call.toolview']);
-module.apply({
+const cardCtx = {
   remote: {},
   effect: (factory) => factory(),
+  inject: (_deps, callback) => ({ dispose() {}, value: callback(cardCtx) }),
   sidebarRightTabs: { register: (definition) => registrations.push(definition) },
   slots,
-});
+};
+module.apply(cardCtx);
 const MapCard = slots.registrations.find(
   (entry) => entry.registration.name === 'tool.call.toolview' && entry.registration.key === 'molbio_plasmid_map',
 ).component;

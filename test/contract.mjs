@@ -286,6 +286,7 @@ check('the built bundle registers the seats and services the framework expects',
   for (const call of ['credentials.describe(', 'credentials.set(', 'credentials.unset(']) {
     assert.ok(bundle.includes(call), `the key section calls ${call}…)`);
   }
+  assert.ok(bundle.includes("ctx.inject(['remote.credentials']"), 'the key section declares the credentials FIBER INJECTION (a plain property is undefined)');
   const manager = clientBundle('@deepseek-ai/dsh-client-ui-plugin-manager');
   assert.ok(manager !== undefined && manager.text.includes('plugins.detail.section'), 'the plugin manager still declares plugins.detail.section');
   const settings = hostHalf('@deepseek-ai/dsh-api-settings-controller');
@@ -477,10 +478,12 @@ check('every seat claim waits for the declaration (slots.inject, not a bare regi
 
   // Our artifact: every `register` must sit inside a wait for that same seat.
   const bundle = readFileSync(join(packageRoot, 'lib', 'client.js'), 'utf8');
-  const waited = [...bundle.matchAll(/slots\.inject\('([^']+)', \(\) => (?:ctx\.)?slots\.register\(\{\s*name: '([^']+)'/g)];
+  // The receiver may be a fiber context (`keyCtx.slots`), not only `ctx.slots`:
+  // the key section registers inside a ctx.inject gate.
+  const waited = [...bundle.matchAll(/slots\.inject\('([^']+)', \(\) => (?:[A-Za-z_$][\w$]*\.)?slots\.register\(\{\s*name: '([^']+)'/g)];
   assert.ok(waited.length > 0, 'the bundle claims its seats through slots.inject');
   for (const [, seat, name] of waited) assert.equal(seat, name, `the claim of ${name} waits for the seat it registers into`);
-  const registers = (bundle.match(/(?:ctx\.)?slots\.register\(/g) ?? []).length;
+  const registers = (bundle.match(/(?:[A-Za-z_$][\w$]*\.)?slots\.register\(/g) ?? []).length;
   assert.equal(registers, waited.length, 'and no registration exists outside such a wait');
 });
 

@@ -101,6 +101,7 @@ assert.deepEqual([...module.inject], ['slots', 'sidebarRightTabs', 'remote'], 't
 
 const effects = [];
 const tabTypes = [];
+const injectedDeps = [];
 const slots = createSlotsStub();
 const ctx = {
   remote: {
@@ -122,9 +123,16 @@ const ctx = {
     effects.push(label);
     return factory();
   },
+  inject(deps, callback) {
+    injectedDeps.push([...deps]);
+    const child = Object.create(ctx);
+    child.remote = { ...ctx.remote, credentials: {} };
+    return { dispose() {}, value: callback(child) };
+  },
   sidebarRightTabs: { register(definition) { tabTypes.push(definition); return () => undefined; } },
   slots,
 };
+assert.deepEqual(injectedDeps, [], 'no dependency gate has run yet');
 assert.doesNotThrow(() => module.apply(ctx), 'apply() must not require any seat to be declared yet');
 
 assert.deepEqual(effects, [
@@ -136,8 +144,10 @@ assert.deepEqual(effects, [
   'molbio panel: papers tab title',
   'molbio panel: molbio_plasmid_map card',
   'molbio panel: molbio_plasmid_map_file card',
+  'molbio panel: NCBI key section gate',
   'molbio panel: NCBI key section',
 ]);
+assert.deepEqual(injectedDeps, [['remote.credentials']], 'the key section waits for the credentials Remote namespace');
 assert.equal(tabTypes.length, 2, 'the package contributes two page tab types');
 assert.deepEqual(
   tabTypes.map((type) => [type.id, type.kind, type.title()]),

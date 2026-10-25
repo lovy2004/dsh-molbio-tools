@@ -134,9 +134,12 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
   内联样式让产物保持单文件、零生命周期负担。
 - **key 配置段只在「本包」的详情页出现**：`plugins.detail.section` 是 list 座位，条目自己判断
   `subject`；本包只在 `kind: bundle|row` 且 `pkg.name === 'dsh-molbio-tools'` 时渲染，其它插件页
-  返回 `null`。它依赖宿主挂载了凭据 provider（默认组合都有）：没有时状态显示 Unavailable，
-  而工具仍会按「参数 → 凭据库 → 环境变量」的顺序回退，不会因此不可用。**输入框只写不读**：
-  `describe` 的返回里没有值，保存成功后输入框立即清空。
+  返回 `null`。它依赖宿主挂载了凭据 provider（默认组合都有）：没有时整段通过
+  `ctx.inject(['remote.credentials'], …)` 门控而不注册，工具仍会按「参数 → 凭据库 → 环境变量」
+  的顺序回退，不会因此不可用。**`remote.credentials` 是 fiber injection，不是普通属性**：
+  官方设置页同样在 `inject` 里声明它；第一版漏了这一步，`ctx.remote.credentials` 是 `undefined`，
+  点 Save 什么也没写（0.22.1 测试中发现并修掉）。**输入框只写不读**：`describe` 的返回里没有值，
+  保存成功后输入框立即清空；写后仍报未配置、或 Remove 后仍报已配置，都会把不一致显示出来。
 - **每次改源都要重新构建**：`lib/client.js` 是**产物**，改了根 `.mjs` 或 `build/*.mjs` 后
   必须重跑 `npm run build:client`，否则面板还跑旧逻辑（这与 preset 的"版本目录"规则是
   两码事：客户端产物靠 `rev` 哈希缓存失效，不靠目录名）。
