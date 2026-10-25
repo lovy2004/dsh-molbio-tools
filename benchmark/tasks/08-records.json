@@ -13,7 +13,11 @@
     "whatever PubMed answers today and there is no recorded value to pin. Its",
     "assertions are therefore all `where: \"answer\"` and structural — a PMID",
     "appears, a title appears — and `benchmark/verifications.mjs` deliberately",
-    "declares no offline invocation for it. See NETWORK_TASKS there."
+    "declares no offline invocation for it. See NETWORK_TASKS there.",
+    "",
+    "The 0.22.0 NCBI-API-key path is NOT exercised here: a benchmark cannot",
+    "require a real key or pin live PubMed records. test/smoke.mjs covers it with",
+    "mocked esearch/esummary/efetch responses (including the invalid-key error)."
   ],
   "tasks": [
     {

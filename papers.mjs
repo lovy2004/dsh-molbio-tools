@@ -132,6 +132,157 @@ export function pmidFromUrl(url) {
   return match?.[1];
 }
 
+// ── PubMed E-utilities (official API) ───────────────────────────────────────
+//
+// `molbio_pubmed_search` used to depend entirely on the harness web-search
+// service. The official API is a different thing: it answers with PubMed's own
+// records (PMIDs, indexed titles, journal/year/DOI) instead of whatever a
+// general search engine indexed, and an NCBI API key raises the rate limit from
+// 3 to 10 requests per second. The helpers below build the request URLs and
+// normalize the responses; the tool keeps the transport (ctx.web.fetch) so the
+// existing sandbox/consent rules still apply.
+
+/** The E-utilities endpoint prefix. */
+export const EUTILS_BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
+
+/**
+ * The NCBI API key for this call: an explicit tool argument first, then the two
+ * environment variables a deployment can set once. A blank value counts as
+ * absent, so an empty `api_key` falls back instead of sending `api_key=` (NCBI
+ * rejects the empty form with a 400 that blames the query).
+ */
+export function pubmedApiKey(args, env = process.env) {
+  for (const candidate of [args?.api_key, env?.NCBI_API_KEY, env?.MOLBIO_NCBI_API_KEY]) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+  }
+  return undefined;
+}
+
+function eutilsUrl(endpoint, params) {
+  const pairs = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`);
+  return `${EUTILS_BASE}/${endpoint}?${pairs.join('&')}`;
+}
+
+/** esearch: the PMIDs matching a query, relevance-ranked. */
+export function pubmedSearchUrl(query, maxResults, apiKey) {
+  return eutilsUrl('esearch.fcgi', {
+    db: 'pubmed',
+    term: query,
+    retmax: maxResults,
+    retmode: 'json',
+    sort: 'relevance',
+    tool: 'dsh-molbio-tools',
+    api_key: apiKey,
+  });
+}
+
+/** esummary: title/authors/journal/year/DOI for the PMIDs esearch returned. */
+export function pubmedSummaryUrl(pmids, apiKey) {
+  return eutilsUrl('esummary.fcgi', {
+    db: 'pubmed',
+    id: pmids.join(','),
+    retmode: 'json',
+    tool: 'dsh-molbio-tools',
+    api_key: apiKey,
+  });
+}
+
+/** efetch: the full XML records (abstracts live here, not in esummary). */
+export function pubmedFetchUrl(pmids, apiKey) {
+  return eutilsUrl('efetch.fcgi', {
+    db: 'pubmed',
+    id: pmids.join(','),
+    retmode: 'xml',
+    tool: 'dsh-molbio-tools',
+    api_key: apiKey,
+  });
+}
+
+/** The PMIDs and total hit count in an esearch JSON response. */
+export function parseEsearch(payload) {
+  if (typeof payload?.error === 'string' && payload.error !== '') {
+    throw new MolbioInputError(`PubMed E-utilities error: ${payload.error}`);
+  }
+  const result = payload?.esearchresult;
+  if (result === undefined || result === null || typeof result !== 'object') {
+    throw new MolbioInputError('PubMed esearch returned no esearchresult — is the response really E-utilities JSON?');
+  }
+  if (typeof result.ERROR === 'string' && result.ERROR !== '') {
+    throw new MolbioInputError(`PubMed esearch failed: ${result.ERROR}`);
+  }
+  const ids = Array.isArray(result.idlist)
+    ? result.idlist.map((id) => String(id).trim()).filter((id) => /^\d+$/.test(id))
+    : [];
+  const count = Number.parseInt(String(result.count ?? ''), 10);
+  return { ids, count: Number.isFinite(count) ? count : ids.length };
+}
+
+/**
+ * Normalize the records in an esummary JSON response.
+ *
+ * The response puts a `uids` array beside one object per PMID; walking `uids`
+ * (rather than Object.keys) keeps the esearch order, which is relevance order.
+ */
+export function parseEsummaryRecords(payload) {
+  if (typeof payload?.error === 'string' && payload.error !== '') {
+    throw new MolbioInputError(`PubMed E-utilities error: ${payload.error}`);
+  }
+  const result = payload?.result;
+  if (result === undefined || result === null || typeof result !== 'object') {
+    throw new MolbioInputError('PubMed esummary returned no result — is the response really E-utilities JSON?');
+  }
+  if (typeof result.error === 'string' && result.error !== '') {
+    throw new MolbioInputError(`PubMed esummary failed: ${result.error}`);
+  }
+  const uids = Array.isArray(result.uids) ? result.uids.map(String) : [];
+  const records = [];
+  for (const uid of uids) {
+    const row = result[uid];
+    if (row === undefined || row === null || typeof row !== 'object') continue;
+    const title = typeof row.title === 'string' ? row.title.trim() : '';
+    const authors = Array.isArray(row.authors)
+      ? row.authors
+        .map((author) => (typeof author?.name === 'string' ? author.name.trim() : ''))
+        .filter((name) => name !== '')
+      : [];
+    const articleIds = Array.isArray(row.articleids) ? row.articleids : [];
+    const doi = articleIds.find((id) => id?.idtype === 'doi' && typeof id.value === 'string')?.value ?? '';
+    const pubdate = typeof row.pubdate === 'string' ? row.pubdate : '';
+    const year = /\b(?:1[89]|20)\d{2}\b/.exec(pubdate)?.[0] ?? '';
+    const journal = typeof row.fulljournalname === 'string' && row.fulljournalname !== ''
+      ? row.fulljournalname
+      : (typeof row.source === 'string' ? row.source : '');
+    records.push({
+      pmid: String(row.uid ?? uid),
+      title,
+      authors,
+      journal,
+      pubdate,
+      year,
+      doi,
+    });
+  }
+  return records;
+}
+
+/** One esummary record as a search source (the shape molbio_pubmed_search returns). */
+export function esummarySource(record) {
+  const source = {
+    title: record.title === '' ? `PMID ${record.pmid}` : record.title,
+    url: `https://pubmed.ncbi.nlm.nih.gov/${record.pmid}/`,
+    pmid: record.pmid,
+  };
+  const authorText = record.authors.length > 2 ? `${record.authors[0]} et al.` : record.authors.join(', ');
+  const snippet = [record.journal, record.year, authorText].filter((part) => part !== '').join(' · ');
+  if (snippet !== '') source.snippet = snippet;
+  if (record.authors.length > 0) source.authors = record.authors.join(', ');
+  if (record.journal !== '') source.journal = record.journal;
+  if (record.year !== '') source.year = record.year;
+  if (record.doi !== '') source.doi = record.doi;
+  return source;
+}
 /** Escape a string for BibTeX. */
 function bibtexEscape(text) {
   return String(text)

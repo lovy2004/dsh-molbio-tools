@@ -104,9 +104,16 @@ import {
 } from './methylation.mjs';
 import {
   addPapers,
+  esummarySource,
   libraryPath,
   loadLibrary,
+  parseEsearch,
+  parseEsummaryRecords,
   pmidFromUrl,
+  pubmedApiKey,
+  pubmedFetchUrl,
+  pubmedSearchUrl,
+  pubmedSummaryUrl,
   removePaper,
   saveLibrary,
   updatePaper,
@@ -6888,14 +6895,34 @@ const phylogeneticTreeTool = (ctx) => define({
   },
 });
 
+/** Fetch one E-utilities URL through the harness web service and parse JSON. */
+async function eutilsRequest(web, url, signal, label) {
+  let result;
+  try {
+    result = await web.fetch({ url }, signal);
+  } catch (error) {
+    throw new MolbioInputError(`${label} could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const body = result?.body?.content;
+  if (typeof body !== 'string' || body === '') {
+    throw new MolbioInputError(`${label} returned no content (status ${result?.statusCode ?? 'unknown'})`);
+  }
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new MolbioInputError(`${label} returned a non-JSON response (status ${result?.statusCode ?? 'unknown'})`);
+  }
+}
+
 const pubmedAbstractTool = (ctx) => define({
   name: 'molbio_pubmed_abstract',
-  description: 'Fetch PubMed abstracts for PMIDs via NCBI E-utilities (efetch). Requires the deployment to provide the web fetch capability; otherwise it reports that clearly. Use it to pull abstracts for papers found by molbio_pubmed_search before adding them to the library.',
+  description: 'Fetch PubMed abstracts for PMIDs via NCBI E-utilities (efetch). Requires the deployment to provide the web fetch capability; otherwise it reports that clearly. Pass api_key (or set NCBI_API_KEY / MOLBIO_NCBI_API_KEY) to attribute the request to your NCBI key and raise the rate limit. Use it to pull abstracts for papers found by molbio_pubmed_search before adding them to the library.',
   parameters: {
     type: 'object',
     required: ['pmids'],
     properties: {
       pmids: { type: 'array', items: { type: 'string' }, description: 'PubMed IDs, e.g. ["37607951"].' },
+      api_key: { type: 'string', description: 'Optional NCBI API key for E-utilities. Prefer setting NCBI_API_KEY in the environment: an inline key appears in the conversation transcript.' },
     },
   },
   outputSchema: {
@@ -6939,7 +6966,8 @@ const pubmedAbstractTool = (ctx) => define({
     if (web === undefined || typeof web.fetch !== 'function') {
       throw new MolbioInputError('this deployment provides no web fetch capability, so PubMed abstracts cannot be retrieved; molbio_pubmed_search still works for titles and snippets');
     }
-    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmids.join(',')}&retmode=xml`;
+    const apiKey = pubmedApiKey(args);
+    const url = pubmedFetchUrl(pmids, apiKey);
     const result = await web.fetch({ url }, exec?.signal);
     const body = result?.body?.content;
     if (typeof body !== 'string' || body === '') {
@@ -7290,21 +7318,24 @@ function paperServiceDeps(ctx, exec, args) {
 
 const pubmedSearchTool = (ctx) => define({
   name: 'molbio_pubmed_search',
-  description: 'Search the web for literature (PubMed results preferred). Uses the harness web-search service; returns up to max_results sources with titles, snippets, URLs and extracted PMIDs. Add the ones you keep to the reading library with molbio_paper_add.',
+  description: 'Search PubMed for literature. With an NCBI API key (the api_key argument, or NCBI_API_KEY / MOLBIO_NCBI_API_KEY in the environment) it queries the official E-utilities API and returns PubMed records with PMIDs, titles, journal/year, authors and DOI; without a key it falls back to the harness web-search service. Add the papers you keep to the reading library with molbio_paper_add.',
   parameters: {
     type: 'object',
     required: ['query'],
     properties: {
       query: requiredString('Search query, e.g. "CRISPR base editing review 2024" or "site:pubmed.ncbi.nlm.nih.gov KRAS G12D".'),
       max_results: { type: 'integer', description: 'Maximum results (1-20, default 8).' },
+      api_key: { type: 'string', description: 'Optional NCBI API key for the official PubMed E-utilities API. Prefer setting NCBI_API_KEY in the environment: an inline key appears in the conversation transcript.' },
     },
   },
   outputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['query', 'sources'],
+    required: ['query', 'backend', 'sources'],
     properties: {
       query: { type: 'string' },
+      backend: { type: 'string', enum: ['pubmed-eutils', 'web-search'] },
+      total_matches: { type: 'integer' },
       answer: { type: 'string' },
       sources: {
         type: 'array',
@@ -7317,14 +7348,22 @@ const pubmedSearchTool = (ctx) => define({
             url: { type: 'string' },
             snippet: { type: 'string' },
             pmid: { type: 'string' },
+            doi: { type: 'string' },
+            authors: { type: 'string' },
+            journal: { type: 'string' },
+            year: { type: 'string' },
           },
         },
       },
     },
   },
   render(value) {
-    if (value.sources.length === 0) return `no results for "${value.query}"`;
-    const lines = [`results for "${value.query}":`];
+    const via = value.backend === 'pubmed-eutils' ? ' via PubMed E-utilities' : '';
+    if (value.sources.length === 0) return `no results for "${value.query}"${via}`;
+    const matches = value.total_matches === undefined
+      ? ''
+      : ` — ${value.total_matches} matching record${value.total_matches === 1 ? '' : 's'}`;
+    const lines = [`results for "${value.query}"${via}${matches}:`];
     if (value.answer !== undefined) lines.push(value.answer);
     for (const source of value.sources) {
       const pmid = source.pmid !== undefined ? ` [PMID ${source.pmid}]` : '';
@@ -7334,12 +7373,26 @@ const pubmedSearchTool = (ctx) => define({
     return lines.join('\n');
   },
   async execute(args, exec) {
-    const web = ctx.get('web');
-    if (web === undefined) throw new MolbioInputError('the web search service is not available in this composition; molbio_pubmed_search needs ctx.web');
     const maxResults = args.max_results ?? 8;
     if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 20) {
       throw new MolbioInputError('max_results must be an integer between 1 and 20');
     }
+    const web = ctx.get('web');
+    const apiKey = pubmedApiKey(args);
+    if (apiKey !== undefined) {
+      if (web === undefined || typeof web.fetch !== 'function') {
+        throw new MolbioInputError('an NCBI API key was provided, but this deployment provides no web fetch capability; the official PubMed API needs ctx.web.fetch');
+      }
+      const search = await eutilsRequest(web, pubmedSearchUrl(args.query, maxResults, apiKey), exec?.signal, 'PubMed esearch');
+      const { ids, count } = parseEsearch(search);
+      if (ids.length === 0) {
+        return { query: args.query, backend: 'pubmed-eutils', total_matches: count, sources: [] };
+      }
+      const summary = await eutilsRequest(web, pubmedSummaryUrl(ids, apiKey), exec?.signal, 'PubMed esummary');
+      const sources = parseEsummaryRecords(summary).map(esummarySource);
+      return { query: args.query, backend: 'pubmed-eutils', total_matches: count, sources };
+    }
+    if (web === undefined) throw new MolbioInputError('the web search service is not available in this composition; molbio_pubmed_search needs ctx.web (or an NCBI API key plus ctx.web.fetch)');
     const result = await web.search({ query: args.query, maxResults }, exec?.signal);
     const sources = result.sources.map((source) => {
       const pmid = pmidFromUrl(source.url ?? '');
@@ -7352,6 +7405,7 @@ const pubmedSearchTool = (ctx) => define({
     });
     return {
       query: args.query,
+      backend: 'web-search',
       ...result.content !== undefined ? { answer: result.content } : {},
       sources,
     };
@@ -7520,9 +7574,9 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_sequence_logo (draws the same alignment as a sequence logo SVG — pass the molbio_msa_align output rows as the alignment argument; letters are sized by per-position information content), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_batch_analyze (run one summary/ORF/enzyme analysis over every matching FASTA/FASTQ/GenBank/.dna file in a directory and write one CSV/TSV table), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
 - CRISPR: molbio_grna_design (family-aware guide RNAs over a sequence or plasmid file: cas_family spcas9/sacas9/cas12a/cas13a/cas13b/cas13d selects the PAM side, crRNA length, seed and target type — Cas12a uses a 5' TTTV PAM and 23 nt crRNA; Cas13 targets RNA and reports a PFS preference rather than a PAM. Both strands are scanned for DNA families, the sense strand by default for Cas13; guides are filtered on GC/poly-T/self-complementarity and ranked, with a mismatch-tolerant off-target search over the same sequence — reaching a whole genome simply means passing it as the target). Pass the top candidates on for ordering with save_path (CSV) or map_path (SVG map); the ranking is a heuristic and says so, so present it as candidate ranking, never as a validated efficiency prediction.
 - Map extras: pass gc_skew: true for the GC skew ring, show_unique_cutters: true to mark single-cutting enzymes on the map.
-- Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — works only when the deployment provides web fetch), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
+- Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — needs web fetch; pass api_key or set NCBI_API_KEY to use your NCBI key), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
 - Bench analysis (v19): molbio_fastq_qc (read-level QC for a FASTQ file: per-base quality with quartiles, per-read quality, base content, GC distribution, length, exact duplication, over-represented sequences, adapter screen, plus a report SVG — use it for "is this run good"), molbio_codon_usage (CAI/RSCU/Nc/GC3, rare-codon list and CDS CpG against E. coli/yeast/human — use it for "will this gene express"; it explains, molbio_codon_optimize rewrites), molbio_phylogenetic_tree (distance method: p-distance/JC/K2P/Tamura-Nei, UPGMA or neighbour-joining, bootstrap support, consensus, Newick file and an SVG tree — it is NOT a maximum-likelihood or Bayesian analysis, and bootstrap percentages are not p-values), molbio_pcr_simulate (where a primer pair amplifies: product sizes and coordinates on both strands, mismatch detail, the 3'-end exact-match requirement, circular templates, screening other templates, and an expected gel — use it for "what band will I see"), molbio_gc_composition (sliding-window GC, CpG islands under the Gardiner-Garden or Takai criteria, GC/AT skew with the cumulative-skew origin/terminus indication, dinucleotide obs/exp, entropy, complexity, N50/L50, plus a figure — use it for "is this a promoter or an origin").
-- Literature: molbio_pubmed_search (web search), and the reading library molbio_paper_add / molbio_paper_list / molbio_paper_update / molbio_paper_remove (papers.json in the workspace).
+- Literature: molbio_pubmed_search — with an NCBI API key (api_key argument, or NCBI_API_KEY / MOLBIO_NCBI_API_KEY in the environment) it uses the official PubMed E-utilities API and returns PMIDs, titles, journal/year, authors and DOI; without a key it falls back to the harness web search. The reading library is molbio_paper_add / molbio_paper_list / molbio_paper_update / molbio_paper_remove (papers.json in the workspace).
 
 Cloning workflow rules (follow them to avoid slow re-derivation):
 - To clone a sequence into a plasmid, call molbio_clone_simulate FIRST — pass the BARE insert with add_flanks: true and the tool adds the enzyme recognition sites itself. The tool also validates single cutting, insert orientation, and internal sites itself: never pre-verify enzymes, cutting counts, or flank construction by thinking. Its output already contains final_sequence AND the remapped feature coordinates (features field). NEVER recompute feature coordinates or insert positions by reasoning — always take them from the tool output.

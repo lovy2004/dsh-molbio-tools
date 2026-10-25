@@ -402,5 +402,10 @@ export function invocationsFor(task) {
  * answer (structural facts: a PMID appears, a title appears), which is why this
  * module returns no invocations for them and why the offline gate tolerates that
  * specific case while failing every other task that forgets to declare one.
+ *
+ * The NCBI-API-key path added in 0.22.0 is covered by `test/smoke.mjs` instead:
+ * a keyed call is two E-utilities requests (esearch + esummary) whose responses
+ * the mock returns, including the invalid-key error. A benchmark must not need a
+ * real NCBI key or pin live PubMed data, so this task stays network-only.
  */
 export const NETWORK_TASKS = new Set(['literature-search']);

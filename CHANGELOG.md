@@ -10,6 +10,78 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.22.0] — 2026-10-25（DSH 0.2.1-rc.3 适配；PubMed 官方 API + NCBI API key）
+
+**工具数不变（60）。新增一条通路：`molbio_pubmed_search` / `molbio_pubmed_abstract` 可以带着
+NCBI API key 走 PubMed 官方 E-utilities。** 没有 key 时两条工具的行为与 0.21.1 相同——检索仍走
+harness 的 web 检索，摘要仍走 `ctx.web.fetch`。
+
+### 1. 为什么要有官方通路
+
+原来的检索完全依赖 harness 的 web 检索服务：它返回的是**搜索引擎索引到的页面**，不是 PubMed 的
+题录。三个具体代价：命中的 PMID 要从 URL 里猜、拿不到期刊/年份/作者/DOI 这些结构化字段、也
+无法用 NCBI 的 API key 提升速率上限（无 key 3 次/秒，有 key 10 次/秒）。官方 API 是两步：
+`esearch`（term → PMID 列表）→ `esummary`（PMID → 题录），摘要另走 `efetch`。
+
+### 2. 通路选择与 key 的来源
+
+| 条件 | 检索通路 | 结果字段 |
+| --- | --- | --- |
+| 有 key（参数或环境变量） | 官方 E-utilities：esearch + esummary | PMID、标题、期刊、年份、作者、DOI，另含 `total_matches` |
+| 无 key | 原来的 harness web 检索（行为不变） | 标题、URL、snippet、从 URL 提取的 PMID |
+
+key 的优先级是 **`api_key` 参数 > `NCBI_API_KEY` > `MOLBIO_NCBI_API_KEY`**；空白值视为未提供
+（不会发出 `api_key=` 这种被 NCBI 以 400 拒绝的空参数）。一次带 key 的检索是 **2 个请求**，
+`molbio_pubmed_abstract` 是 1 个 efetch 请求。
+
+> **内联传 key 会出现在对话记录和工具调用卡片里**，这是参数通路的固有代价；长期使用应设环境
+> 变量。工具的输出、渲染和错误信息都不回显 key。
+
+### 3. 实现
+
+- `papers.mjs` 增加纯函数：`pubmedApiKey`（参数/环境变量优先级）、`pubmedSearchUrl` /
+  `pubmedSummaryUrl` / `pubmedFetchUrl`（三个 URL 构造器，统一带 `tool=dsh-molbio-tools`）、
+  `parseEsearch`（ids + count）、`parseEsummaryRecords`（按 `uids` 顺序归一化题录，
+  DOI 从 `articleids` 里取 `idtype: doi`）、`esummarySource`（转成工具返回的 source 形状）。
+- 传输仍走 `ctx.web.fetch`：官方 API 不是一条绕开沙箱/同意机制的新网络通路。没有 `web.fetch`
+  而用户又给了 key 时，工具明确报「需要 ctx.web.fetch」，而不是悄悄退回 web 检索。
+- 错误处理：NCBI 的 `{"error":"API key invalid"}` 会变成 `PubMed E-utilities error: API key
+  invalid`，**不会被当成「没有结果」**——「搜不到」和「key 错了」是两件事。空结果返回
+  `sources: []` 与 `total_matches: 0`。
+- 输出 schema 扩展：`backend`（`pubmed-eutils` / `web-search`）、`total_matches`，以及 source 上的
+  `doi` / `authors` / `journal` / `year`；全部为可选字段，旧调用的输出形状不变。
+
+### 4. rc.3 适配：这次上游什么都没动，但仍要走完流程
+
+- `@deepseek-ai/dsh-web-app@0.2.1-rc.3` 的 `standard.patch.yml` 与 rc.2 **逐字节一致**（`git diff
+  --no-index` 验证），所以 preset 行清单、`cordis.patch.yml`、`preset-health` 的期望都没有改。
+- 在 rc.3 上全套守卫全绿：`preset-health`（30 行）、`drift-probe`（14 条突变）、`contract`（16 项，
+  含客户端入口与 `presentationMeta` 的行为断言）、`benchmark-profile`（12 行 / 60 工具）。
+- 声明：`engines.dsh` 仍为 `>=0.2.1-rc.2 <0.3.0-0`（rc.2 仍可用）；`dshReleases` 把 rc.3 改成
+  `compatible`；CI 的 test/release 两条工作流钉到 `0.2.1-rc.3`；面板包 `0.1.4 → 0.1.5`（清单的
+  兼容声明变了，客户端产物字节未变，因此只 bump 面板版本线）。
+- 证据用 rc.3 的 CLI 重跑：`docs/store-evidence.md`（0.22.0 tarball 安装 → 启动 → 卸载）。
+
+### 5. benchmark 的处理（以及为什么没有重跑模型）
+
+- 默认通路（无 key）的输出与 0.21.1 相同，`bench --offline` 的 61 题期望值逐条照跑。
+- `literature-search` 仍是 `NETWORK_TASKS` 里唯一的一条：它断言的是模型的最终回答（PMID、标题、
+  摘要措辞），工具结果本来就是**当天的 live PubMed 数据**，没有可以钉住的值。
+- **带 key 的新通路由 `test/smoke.mjs` 覆盖，而不是 benchmark**：benchmark 不能要求真实 key、
+  也不该把 live 记录冻结成期望值。smoke 用 mock 的 esearch/esummary/efetch 断言了四件事——
+  key 同时出现在两个请求里、题录字段解析正确、环境变量能回退、无效 key 会报错；另有一条
+  「无 key 时不碰 E-utilities 传输」的对照。
+
+### 6. 版本与验证
+
+- 根包 `0.21.1 → 0.22.0`；面板 `0.1.4 → 0.1.5`。
+- `npm test`（DSH 0.2.1-rc.3）全绿：smoke、画面四套、客户端四套、contract 16、drift-probe 14 条
+  突变、preset-health 30 行、release 13 项、benchmark 四道守卫 + `bench --offline` 61 题。
+- `node build/preset-patch.mjs --check` 与 `node build/client-bundle.mjs --check` 均报告与源一致
+  （rc.3 适配没有动任何生成物）。
+- 一次性 Profile：tarball **115 个文件 / 约 1.0 MB**；安装 571 ms；启动 `HTTP 200`、38180 字节，
+  `__DSH_BOOT__` 含 `dsh-molbio-tools/client.js&rev=a25c3919676b`；卸载 421 ms，`molbio` 引用 0、
+  lockfile 与 `node_modules` 无残留。
 ## [0.21.1] — 2026-10-25（DSH STORE 提交前置：一个 patch、逐版本兼容声明、一个 tarball 一个清单）
 
 **工具数不变（60），插件运行时行为零改动。** 这一版不加任何计算能力，只把"这个包以什么形状提交"

@@ -48,14 +48,15 @@
 # list carries no comments of its own, so none appear below; provenance and the
 # upgrade rules live in this header.
 #
-# Baseline: the `standard` preset of dsh 0.2.1-rc.2 (harness root
+# Baseline: the `standard` preset of dsh 0.2.1-rc.3 (harness root
 # `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`, file
 # `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`, whose
 # rows live under the `preset-standard` row's `config.plugins:`).
 #
-# 0.2.1-rc.2 is the first bump since 0.1.7-alpha.1 that changed the row list: it
-# added `time-context`, `tool-schedule` and `tool-plugin-market`; dropped the two
-# disabled optional subagent providers (`tool-subagent-codex`,
+# 0.2.1-rc.3 ships the SAME row list as 0.2.1-rc.2 (verified by diffing the
+# file), so no row changed in this bump. The last upstream row change was
+# 0.2.1-rc.2: it added `time-context`, `tool-schedule` and `tool-plugin-market`;
+# dropped the two disabled optional subagent providers (`tool-subagent-codex`,
 # `tool-subagent-claude-code`) and `tool-ralph`; dropped the persona `suffix` and
 # both `backgroundMode: continuable` settings; and reworded the plan-mode
 # section. Absorb such a bump verbatim — see workflow.md §4.

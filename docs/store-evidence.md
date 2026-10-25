@@ -18,7 +18,7 @@
     "dshReleases": {
       "0.2.1-rc.1": "unknown",
       "0.2.1-rc.2": "compatible",
-      "0.2.1-rc.3": "unknown"
+      "0.2.1-rc.3": "compatible"
     }
   }
 }
@@ -29,19 +29,19 @@
 `@deepseek-ai/dsh-app-boot` 的 `unmetRequirements`）：带 prerelease 选项时 `<0.3.0`
 会放行 `0.3.0-alpha.1`，而 `-0` 不会。
 
-### 为什么 rc.2 是 compatible、rc.1 / rc.3 是 unknown
+### 为什么 rc.2 / rc.3 是 compatible、rc.1 是 unknown
 
 | 版本 | 记录 | 依据 |
 | --- | --- | --- |
 | 0.2.1-rc.1 | unknown | 早于本包基线（0.20.1 钉 `0.2.0-rc.2`），未在此版本上运行过；同时也不在 `engines.dsh` 范围内 |
-| 0.2.1-rc.2 | compatible | CI 基线固定该版本；本文件第 3 节的一次性 Profile 流程；`contract` / `preset-health` / `smoke` 均通过 |
-| 0.2.1-rc.3 | unknown | 未获取到该版本，未验证。`engines.dsh` 的补丁级范围包含它，但**是否授权安装以商城的 `dshReleases` 记录为准**——范围不等于验收 |
+| 0.2.1-rc.2 | compatible | 0.21.0 / 0.21.1 的发布基线；本文件第 3 节的一次性 Profile 流程在 rc.2 上跑过；`contract` / `preset-health` / `smoke` 均通过 |
+| 0.2.1-rc.3 | compatible | 0.22.0 的发布基线（CI 钉该版本）；同一套一次性 Profile 流程在 rc.3 上重跑通过（安装 → 启动 HTTP 200 → 卸载无残留）；`contract` / `preset-health` / `drift-probe` / `benchmark-profile` / `smoke` 在 rc.3 上全绿。上游 `standard` 行清单与 rc.2 **逐字节一致** |
 
 ## 2. 环境
 
 | 项 | 值 |
 | --- | --- |
-| DSH | `0.2.1-rc.2` |
+| DSH | `0.2.1-rc.3` |
 | Node.js | `v26.12.1` |
 | pnpm | `11.22.0` |
 | 平台 | Windows（win32 x64） |
@@ -52,9 +52,9 @@
 
 ```bash
 export DSH_HOME=<workspace>/.tmp/dsh-store-check
-npm pack --pack-destination "$DSH_HOME"          # 得到 dsh-molbio-tools-0.21.1.tgz
+npm pack --pack-destination "$DSH_HOME"          # 得到 dsh-molbio-tools-0.22.0.tgz
 dsh --profile molbio-tgz-check --from-default-profile web --dump-config
-dsh plugin --profile molbio-tgz-check add "$DSH_HOME/dsh-molbio-tools-0.21.1.tgz"
+dsh plugin --profile molbio-tgz-check add "$DSH_HOME/dsh-molbio-tools-0.22.0.tgz"
 dsh --profile molbio-tgz-check --dump-config      # 安装后的组合树
 dsh --profile molbio-tgz-check --no-open --port 0 # 启动，打印 URL
 curl "http://127.0.0.1:<port>/?token=<token>"     # 读回页面
@@ -65,20 +65,20 @@ dsh --profile molbio-tgz-check --dump-config      # 卸载后的组合树
 安装用 **tarball** 而不是目录，因为 tarball 就是发布物本身：它能同时证明 `files`
 白名单带全了运行文件（`host.mjs`、`lib/client.js`、单个 `cordis.patch.yml` 的两个 insert、preset）。
 
-tarball 是 **115 个文件 / 约 999 kB**（`npm pack --dry-run` 实测约 999.3 kB，解包约 3.2 MB；再改文档会让
-字节数在 1 kB 内浮动，文件数不变），且 `package/packages/**` 为 **0**：根包不再内嵌
+tarball 是 **115 个文件 / 约 1.0 MB**（`npm pack` 实测 1,004,017 B，解包约 3.2 MB；再改文档会让字节数
+小幅浮动，文件数不变），且 `package/packages/**` 为 **0**：根包不再内嵌
 `packages/molbio-panel`，一个 tarball 里只有一个插件清单（面板包按自己的地址单独发布）。
 面板本身没有因此消失——根包的 `lib/client.js` 就带着它，第 3.2 节的回读可以作证。
 
-下面这次是在 **0.21.1 的 tarball** 上重跑的（2026-10-25），文件数与发布物一致；
-0.21.0 时代的记录只差版本号与文件数，流程未变。
+下面这次是在 **0.22.0 的 tarball** 上、用 **dsh 0.2.1-rc.3** 的 CLI 重跑的（2026-10-25），
+文件数与发布物一致；更早的记录只差版本号与文件数，流程未变。
 
 ### 3.1 安装
 
 ```
-+ dsh-molbio-tools file:D:/.../dsh-molbio-tools-0.21.1.tgz
++ dsh-molbio-tools file:D:/.../dsh-molbio-tools-0.22.0.tgz
 Packages: +1
-Done in 631ms
+Done in 571ms
 ```
 
 安装后的 `--dump-config` 出现 bundle 层，且 `host.mjs` 解析到**已安装包内**：
@@ -98,19 +98,19 @@ Done in 631ms
 ### 3.2 启动
 
 ```
-dsh web: http://127.0.0.1:61834/?token=...
+dsh web: http://127.0.0.1:50071/?token=...
 ```
 
-读回结果：`HTTP 200`、37721 字节；页面里的 `window.__DSH_BOOT__` 图包含
-`dsh-molbio-tools/client.js&rev=e4e837d570c2`，即浏览器半被宿主 Loader 发现并进了客户端图——
+读回结果：`HTTP 200`、38180 字节；页面里的 `window.__DSH_BOOT__` 图包含
+`dsh-molbio-tools/client.js&rev=a25c3919676b`，即浏览器半被宿主 Loader 发现并进了客户端图——
 这是"启动成功"的可观察证据，而不只是进程没退出。（先用 token 换 cookie，再带 cookie 读 `/`，
 否则第一跳是 303。）
 
 ### 3.3 卸载
 
 ```
-- dsh-molbio-tools file:D:/.../dsh-molbio-tools-0.21.1.tgz
-Done in 452ms
+- dsh-molbio-tools file:D:/.../dsh-molbio-tools-0.22.0.tgz
+Done in 421ms
 ```
 
 卸载后四项同时回到初始状态：
@@ -133,7 +133,7 @@ pnpm 的 hoisted linker 会在 `node_modules/` 留下一个指向仓库目录的
 
 ```
 node test/contract.mjs       → 16 checks passed（host 契约、client 产物、tarball 覆盖）
-node test/preset-health.mjs  → all 30 rows load on dsh 0.2.1-rc.2
+node test/preset-health.mjs  → all 30 rows load on dsh 0.2.1-rc.3
 node test/smoke.mjs          → registered 60 tools, all smoke tests passed
 ```
 

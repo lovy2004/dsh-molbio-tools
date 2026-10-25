@@ -201,7 +201,7 @@ export function tagVersion(tag) {
  * `rc.10 < rc.2`, so a release of `rc.2` after `rc.10` would look like a
  * DOWNGRADE and the gate would refuse a legitimate publish (or, in the other
  * direction, wave through a stale one). This repository does cut prereleases
- * (the harness baseline itself is `0.2.1-rc.2`), so the rule is implemented
+ * (the harness baseline itself is `0.2.1-rc.3`), so the rule is implemented
  * rather than approximated.
  *
  * Semver's rule: split on dots; numeric identifiers compare numerically and rank

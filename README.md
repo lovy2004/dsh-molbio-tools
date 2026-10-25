@@ -224,8 +224,8 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 
 | 工具 | 用途 |
 | --- | --- |
-| `molbio_pubmed_search` | 通过 harness 的 web 检索服务搜文献，自动提取 PMID |
-| `molbio_pubmed_abstract` | 按 PMID 拉取摘要（依赖部署提供 web fetch 能力） |
+| `molbio_pubmed_search` | 搜 PubMed 文献。提供 NCBI API key（`api_key` 参数，或环境变量 `NCBI_API_KEY` / `MOLBIO_NCBI_API_KEY`）时走**官方 E-utilities**（esearch + esummary），返回 PMID/标题/期刊/年份/作者/DOI；无 key 时回退到 harness 的 web 检索 |
+| `molbio_pubmed_abstract` | 按 PMID 拉取摘要（efetch；同样支持 NCBI API key，依赖部署提供 web fetch 能力） |
 | `molbio_paper_add` / `molbio_paper_list` / `molbio_paper_update` / `molbio_paper_remove` | 阅读库（工作区 `papers.json`）：加/列/改/删，按 PMID→URL→标题+年份去重 |
 | `molbio_paper_export_bibtex` | `papers.json` → BibTeX `.bib`（可按 tag 过滤） |
 | `molbio_protocol_add` / `molbio_protocol_list` / `molbio_protocol_update` | 协议库（`protocols.json`）：步骤列表、自由参数、来源文献 |
@@ -556,6 +556,11 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 ### 文献与记录
 
 - 检索与摘要走 harness 的 **web** 服务（部署不提供时工具会明确报错，而不是假装搜到）。
+- 提供 NCBI API key 时，`molbio_pubmed_search` 用官方 E-utilities：esearch 拿 PMID、esummary
+  拿题录（标题/期刊/年份/作者/DOI），`molbio_pubmed_abstract` 用 efetch 拿摘要。key 的来源优先级是
+  `api_key` 参数 > `NCBI_API_KEY` > `MOLBIO_NCBI_API_KEY`；**长期使用请用环境变量**，内联传参会让 key
+  出现在对话记录与工具卡片里。NCBI 的速率上限是**无 key 3 次/秒、有 key 10 次/秒**，一次带 key 的
+  检索是 2 个请求（esearch + esummary）。没有 key 时检索仍走原来的 web 检索通路，行为不变。
 - 阅读库/协议库/实验日志是工作区里的 `papers.json` / `protocols.json` / `experiments.json`，
   写入遵循会话的**沙箱政策**，与其它文件工具同权；面板（Papers tab）直接读 `papers.json`。
 - `molbio_paper_export_bibtex` 可选按 tag 过滤导出。
@@ -648,6 +653,12 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 **引物/探针一个候选都没有？**
 工具会返回 `notes` 说明放宽哪个约束（Tm 窗口、GC 窗口、扩增子长度、探针长度…）。通常是把
 `amplicon_min/max` 或 `tm_min/max` 放宽一点即可。
+
+**PubMed 的 API key 怎么配？**
+在启动 DSH 的环境里设 `NCBI_API_KEY`（或 `MOLBIO_NCBI_API_KEY`），插件会自动把它带进 E-utilities 请求；
+也可以在单次调用里传 `api_key`。有 key 时 `molbio_pubmed_search` 走官方 API（PubMed 自己的题录，
+含 DOI），没有 key 时仍走 harness 的 web 检索。注意：**内联传的 key 会出现在对话记录和工具调用卡片里**，
+长期用请设环境变量。
 
 **"帮我把这段序列分析一下" 它却问我要参数？**
 把目标说具体即可：要引物还是探针、产物多长、Tm 多少、哪个区域。工具默认值都是常规实验条件

@@ -99,6 +99,9 @@ const memFs = {
 };
 
 const mockWeb = {
+  // Every fetch URL the tools request, so the tests can prove the NCBI key
+  // actually travels in the E-utilities query instead of merely being accepted.
+  calls: [],
   async search({ query }) {
     return {
       content: `answer for ${query}`,
@@ -109,9 +112,45 @@ const mockWeb = {
       truncated: false,
     };
   },
-  async fetch() {
+  async fetch({ url } = {}) {
+    const target = String(url ?? '');
+    this.calls.push(target);
+    const json = (payload, statusCode = 200) => ({
+      url: target,
+      statusCode,
+      body: { kind: 'text', content: JSON.stringify(payload) },
+      truncated: false,
+    });
+    if (target.includes('/esearch.fcgi')) {
+      if (target.includes('api_key=bad-key')) return json({ error: 'API key invalid' }, 400);
+      return json({ esearchresult: { count: '2', retmax: '2', idlist: ['39609418', '12345678'] } });
+    }
+    if (target.includes('/esummary.fcgi')) {
+      return json({
+        result: {
+          uids: ['39609418', '12345678'],
+          '39609418': {
+            uid: '39609418',
+            title: 'SPLICER: a highly efficient base editing toolbox',
+            pubdate: '2024 Nov',
+            source: 'Nat Biotechnol',
+            fulljournalname: 'Nature biotechnology',
+            authors: [{ name: 'Li X' }, { name: 'Wang Y' }, { name: 'Zhang Z' }],
+            articleids: [{ idtype: 'doi', value: '10.1038/s41587-024-02460-4' }],
+          },
+          '12345678': {
+            uid: '12345678',
+            title: 'An older paper',
+            pubdate: '2019',
+            source: 'Cell',
+            authors: [{ name: 'Doe J' }],
+            articleids: [],
+          },
+        },
+      });
+    }
     return {
-      url: 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi',
+      url: target,
       statusCode: 200,
       body: {
         kind: 'text',
@@ -1891,14 +1930,82 @@ function splicedToGenomic(splicedPos, exons) {
 
 // ── pubmed search (mocked web service) ──────────────────────────────────────
 
+// The keys below are cleared for the whole section: a developer machine with
+// NCBI_API_KEY exported must not silently change what these tests exercise.
+const savedNcbiEnv = {
+  NCBI_API_KEY: process.env.NCBI_API_KEY,
+  MOLBIO_NCBI_API_KEY: process.env.MOLBIO_NCBI_API_KEY,
+};
+delete process.env.NCBI_API_KEY;
+delete process.env.MOLBIO_NCBI_API_KEY;
+
 {
+  // no key and no environment: the pre-existing web-search path
+  mockWeb.calls.length = 0;
   const out = await run('molbio_pubmed_search', { query: 'CRISPR' });
   assert.equal(out.query, 'CRISPR');
+  assert.equal(out.backend, 'web-search');
   assert.equal(out.answer, 'answer for CRISPR');
   assert.equal(out.sources.length, 2);
   assert.equal(out.sources[0].pmid, '12345678');
   assert.equal(out.sources[1].pmid, undefined);
+  assert.equal(mockWeb.calls.length, 0, 'the web-search path must not touch the E-utilities transport');
 }
+
+{
+  // official PubMed API: an explicit key switches the tool to E-utilities, and
+  // the key travels in the request (esearch AND esummary) rather than merely
+  // being accepted by the argument schema.
+  mockWeb.calls.length = 0;
+  const out = await run('molbio_pubmed_search', { query: 'CRISPR base editing', api_key: 'test-key-123' });
+  assert.equal(out.backend, 'pubmed-eutils');
+  assert.equal(out.total_matches, 2);
+  assert.equal(out.sources.length, 2);
+  assert.equal(out.sources[0].pmid, '39609418');
+  assert.equal(out.sources[0].url, 'https://pubmed.ncbi.nlm.nih.gov/39609418/');
+  assert.match(out.sources[0].title, /SPLICER/);
+  assert.equal(out.sources[0].journal, 'Nature biotechnology');
+  assert.equal(out.sources[0].year, '2024');
+  assert.equal(out.sources[0].doi, '10.1038/s41587-024-02460-4');
+  assert.match(out.sources[0].snippet, /Nature biotechnology · 2024 · Li X et al\./);
+  assert.equal(out.sources[1].authors, 'Doe J');
+  assert.ok(mockWeb.calls.every((url) => url.includes('api_key=test-key-123')));
+  assert.ok(mockWeb.calls.some((url) => url.includes('/esearch.fcgi')));
+  assert.ok(mockWeb.calls.some((url) => url.includes('/esummary.fcgi')));
+}
+
+{
+  // the environment fallback is what makes "set the key once" possible
+  const saved = process.env.NCBI_API_KEY;
+  process.env.NCBI_API_KEY = 'env-key-456';
+  try {
+    mockWeb.calls.length = 0;
+    const out = await run('molbio_pubmed_search', { query: 'base editing' });
+    assert.equal(out.backend, 'pubmed-eutils');
+    assert.ok(mockWeb.calls.length === 2 && mockWeb.calls.every((url) => url.includes('api_key=env-key-456')));
+  } finally {
+    delete process.env.NCBI_API_KEY;
+    if (saved !== undefined) process.env.NCBI_API_KEY = saved;
+  }
+}
+
+{
+  // an invalid key is reported as such, not presented as "no results"
+  await assert.rejects(() => run('molbio_pubmed_search', { query: 'x', api_key: 'bad-key' }), /API key invalid/);
+}
+
+{
+  // abstracts use the same key and the efetch endpoint
+  mockWeb.calls.length = 0;
+  const out = await run('molbio_pubmed_abstract', { pmids: ['12345678'], api_key: 'test-key-123' });
+  assert.equal(out.abstracts[0].error, '');
+  assert.equal(out.abstracts[0].title, 'Test Article Title');
+  assert.ok(mockWeb.calls.length === 1 && mockWeb.calls[0].includes('/efetch.fcgi') && mockWeb.calls[0].includes('api_key=test-key-123'));
+}
+
+// Restore whatever the developer machine had exported.
+if (savedNcbiEnv.NCBI_API_KEY !== undefined) process.env.NCBI_API_KEY = savedNcbiEnv.NCBI_API_KEY;
+if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_KEY = savedNcbiEnv.MOLBIO_NCBI_API_KEY;
 
 // ── paper library (mocked fs service) ───────────────────────────────────────
 

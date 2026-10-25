@@ -43,6 +43,10 @@ or a fixed-source manual review.
 }
 ```
 
+> 这段是**提交时那个固定 commit** 的原文（所以 rc.3 当时是 `unknown`）。0.22.0 起 rc.3 已在其上
+> 跑过同一套一次性 Profile 与守卫，`dshReleases` 已改为 `compatible`，见
+> [store-evidence.md](store-evidence.md) 第 1–2 节。
+
 同一个 patch 文件里的两个 insert（顺序即应用顺序），分工固定：
 
 ```yaml

@@ -10,12 +10,12 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.21.1）
+## 1. 当前状态（0.22.0）
 
 - 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.1-rc.2**。
+- 基线：DSH **0.2.1-rc.3**。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -37,6 +37,10 @@ L = 需要新机制或外部资源）。
   `dshReleases`、根 tarball 去掉 `packages/`（一个包只带一个插件清单）。剩下的两条预检规则
   不是改包能解决的，证据与请求见 [store-preset-exemption.md](store-preset-exemption.md)。
   下一版若要动工具，按本文件第 2 节挑候选；若只等商城结论，则不必发版。
+- **0.22.0 是 rc.3 适配 + 文献检索升级**：DSH 基线 0.2.1-rc.2 → 0.2.1-rc.3（上游
+  `standard` 行清单**逐字节未变**，`preset-health` / `drift-probe` / `contract` 在 rc.3 上
+  全绿，因此这一半只改声明与证据）；`molbio_pubmed_search` / `molbio_pubmed_abstract` 增加
+  NCBI API key 通路，走官方 E-utilities（esearch + esummary），无 key 时保持原有 web 检索。
 
 ---
 

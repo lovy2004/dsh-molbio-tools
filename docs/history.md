@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.22.0 | — | **DSH 0.2.1-rc.3 适配 + PubMed 官方 API**：`molbio_pubmed_search`/`_abstract` 支持 NCBI API key（E-utilities），无 key 行为不变 | 60 |
 | 0.21.1 | — | **DSH STORE 提交前置**：单文件 bundle patch、逐版本兼容声明；根 tarball 只带一个插件清单（工具行为零变化） | 60 |
 | 0.21.0 | — | **DSH 0.2.1-rc.2 适配**：preset 行清单逐行重抄；contract 两条断言重锚到行为；两条 suspended 记录用真实模型重录 | 60 |
 | 0.20.1 | — | 插件专属图标（透明底双螺旋 SVG），运行时零改动 | 60 |
@@ -44,6 +45,30 @@
 
 ---
 
+## v0.22.0（2026-10-25，包 0.22.0）
+
+一半是适配（rc.3），一半是新能力（PubMed 官方 API + key）。三条教训。
+
+**(1) 「上游没变」不是可以跳过流程的理由，而是一个需要被证明的结论。**
+rc.3 的 `standard.patch.yml` 与 rc.2 逐字节相同，所以 preset 行、生成物、`preset-health` 的期望
+一行都没动——但这是先 diff 过、再把 `preset-health` / `drift-probe` / `contract` /
+`benchmark-profile` 全套在 rc.3 上跑绿之后才敢下的结论。上一次（0.21.0）同一个文件在补丁级版本里
+改了 12 处结构；把「这次应该没事」当选版本的理由，就是在赌下一次。
+
+**(2) 官方 API 不是「另一条网络通路」，它仍然是一次 `ctx.web.fetch`。**
+PubMed E-utilities 的加入没有引入 `fetch` 依赖，也没有绕开沙箱/同意机制：工具只是把 URL 构造成
+esearch/esummary/efetch，再交给同一个 `ctx.web` 缝。两个细节必须做对：**空结果与鉴权失败是两件
+事**（`{"error":"API key invalid"}` 不能渲染成「没有搜到」）；**key 的优先级要可预测**
+（参数 > `NCBI_API_KEY` > `MOLBIO_NCBI_API_KEY`，空白值视为缺席）。另外，内联传 key 会让它出现在
+对话记录与工具卡片里——这是参数通路的固有代价，所以文档把「长期使用请设环境变量」写在工具描述里，
+而不是只写在 README。
+
+**(3) 需要真实凭证/实时数据的路径，归 smoke，不归 benchmark。**
+benchmark 的 `literature-search` 一直是 `NETWORK_TASKS`：它只断言最终回答的结构，因为工具返回的
+是当天的 PubMed 数据，没有可冻结的值。带 key 的新通路同样不能被 benchmark 钉住（既不能要求一个
+真 key，也不该把 live 记录写进 fixture），于是用 mock 的 esearch/esummary/efetch 在 `test/smoke.mjs`
+里断言「key 真的进了两个请求」「字段解析正确」「环境变量能回退」「坏 key 会报错」，并保留一条
+「无 key 时不碰 E-utilities」的对照——benchmark 负责模型会不会用，smoke 负责这条分支本身对不对。
 ## v0.21.1（2026-10-25，包 0.21.1）
 
 上架前置版：一个工具都没改，只改「提交的形状」。三条教训都关于**契约不止一份**。
