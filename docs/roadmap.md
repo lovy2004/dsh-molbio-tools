@@ -10,7 +10,7 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.21.0）
+## 1. 当前状态（0.21.1）
 
 - 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
@@ -32,6 +32,11 @@ L = 需要新机制或外部资源）。
   `tool-ralph`；去掉 persona `suffix` 与两处 `backgroundMode`），`contract` 两条断言从上游
   minified 字面量改挂到**行为**，两条 suspended 的 benchmark 记录用真实模型重录。
   工具数与插件行为零变化。
+- **0.21.1 是上架前置版（工具行为零变化）**：两层 patch 合并成单个 `cordis.patch.yml`
+  （DSH STORE 的提交预检只接受字符串）、两个 manifest 声明 `engines.dsh` 与逐版本
+  `dshReleases`、根 tarball 去掉 `packages/`（一个包只带一个插件清单）。剩下的两条预检规则
+  不是改包能解决的，证据与请求见 [store-preset-exemption.md](store-preset-exemption.md)。
+  下一版若要动工具，按本文件第 2 节挑候选；若只等商城结论，则不必发版。
 
 ---
 

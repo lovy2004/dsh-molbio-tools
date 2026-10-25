@@ -10,6 +10,97 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.21.1] — 2026-10-25（DSH STORE 提交前置：一个 patch、逐版本兼容声明、一个 tarball 一个清单）
+
+**工具数不变（60），插件运行时行为零改动。** 这一版不加任何计算能力，只把"这个包以什么形状提交"
+改成 DSH STORE 的提交预检与 DSH 自身的清单契约**都能接受、且不再互相矛盾**的那一种。三处改动都
+来自同一次上架提交：预检里能靠改包解决的两条已经解决，剩下两条的原理与请求另写在
+[docs/store-preset-exemption.md](docs/store-preset-exemption.md)。
+
+### 1. 两层 patch 合并成单个 `cordis.patch.yml`
+
+0.21.0 的 `dsh.bundle.patch` 是**有序数组**：`["./cordis.patch.yml", "./preset/molbio-lab/preset.patch.yml"]`。
+DSH 运行时接受这种写法（`@deepseek-ai/dsh-app-boot` 的 `bundlePatchPaths`：one file, or an
+ordered list of files），官方 `@deepseek-ai/dsh-web-app` 自己就列了 5 个文件；但 DSH STORE 的提交
+预检（`scripts/check-plugin-submission.mjs` 的 `safePatchPath`）只接受字符串，数组直接判
+`SUBMISSION_BUNDLE_PATCH_INVALID`。两边都自称官方契约，解法不必等预检放宽：
+
+- `build/preset-patch.mjs` 现在直接产出**根目录的 `cordis.patch.yml`**，内容是**两个 insert**：
+  `molbio-client → ./host.mjs`（惰性宿主锚点）在前，`preset-molbio-lab`（由
+  `preset/molbio-lab/agent.cordis.yml` 生成的 preset 行）在后；顺序即应用顺序。
+- 不再生成 `preset/molbio-lab/preset.patch.yml`（文件已删）；`package.json` 的
+  `dsh.bundle.patch` 是**单字符串**。
+- 四个读者改为跟单文件走：`test/preset-health.mjs`、`test/drift-probe.mjs`、
+  `preset/install.mjs`、`test/preset-rows.mjs`（后者在同一个文件的两个 insert 里找 preset 段，
+  不假设"preset.patch.yml 才是 preset"）。
+
+> 这一条同时守住一条更早的教训：**锚点行不能因为"文件变少了"而消失**。0.15.2 的两个侧栏 tab
+> 就是锚点丢失后静默消失的；`test/client-mount.mjs` 仍然逐包断言"被选中的包必须有一个宿主行
+> 能解析到它"，`test/contract.mjs` 仍然断言"产物里的每一处 `register` 都在 `inject` 里"。
+
+### 2. `engines.dsh` 与逐版本 `dshReleases`
+
+两个 manifest 各声明一份：
+
+```jsonc
+"engines": { "node": ">=26", "dsh": ">=0.2.1-rc.2 <0.3.0-0" },
+"dsh": { "compatibility": { "dshReleases": {
+  "0.2.1-rc.1": "unknown", "0.2.1-rc.2": "compatible", "0.2.1-rc.3": "unknown" } } }
+```
+
+上界写 `<0.3.0-0` 而不是 `<0.3.0`：DSH 用 `semver.satisfies(..., { includePrerelease: true })`
+判定（`@deepseek-ai/dsh-app-boot` 的 `unmetRequirements`），带 prerelease 选项时 `<0.3.0`
+会放行 `0.3.0-alpha.1`，`-0` 不会。`rc.1` 早于本包基线、`rc.3` 未取得也未验证，两者都只能
+标 `unknown`——**范围不等于验收**：`engines` 是安装时的粗筛，商城的 `dshReleases` 记录才是
+逐版本的验收结论。
+
+面板包随之 `0.1.3 → 0.1.4`：它的版本线独立于根包，但清单变了，不发这个版本号就没有能承载新
+声明的发布物。
+
+### 3. 根 tarball 不再内嵌面板包
+
+`files` 白名单去掉 `packages`。此前根 tarball 里同时躺着 `package.json` 与
+`packages/molbio-panel/package.json` 两个 DSH 插件清单，还重复携带 427 KB 相同的 `lib/client.js`；
+商城把"一个包里出现第二个插件清单"视为提交歧义是对的。现在根 tarball **只有一个插件清单**：
+**118 → 115 个文件、约 1.1 MB → 约 999 kB**（多出的 1 个文件是本次提交的
+`docs/store-preset-exemption-issue.md`）。面板没有因此消失——根包的 `lib/client.js` 本来就带着它
+（第 4 节的启动回读可以作证）；面板包继续按自己的地址单独发布。
+
+`test/contract.mjs` 的打包断言随之改向：不再要求 `files` 必须包含 `packages/`，而是断言
+**一个 tarball 里恰好只有一个 DSH 清单**（把 `packages` 加回白名单会立刻 FAIL）。
+
+### 4. 一次性 profile 证据（tarball 就是发布物）
+
+证据记录在 [docs/store-evidence.md](docs/store-evidence.md)，用临时 `DSH_HOME` 重跑，不碰真实
+`~/.dsh`：`npm pack` → `--from-default-profile web` 建 profile → `plugin add` tarball →
+`--dump-config`（`molbio-client` 解析到已安装包内，preset 行带 `tool-molbio`）→
+`--no-open --port 0` 启动 → 带 token 回读页面（**HTTP 200**，`__DSH_BOOT__` 图里有
+`dsh-molbio-tools/client.js`）→ `plugin remove` → 再 `--dump-config`（`molbio` 引用 **0** 处）。
+装 tarball 而不是目录，是因为 tarball 同时证明 `files` 白名单带全了运行文件。
+
+### 5. 未做 / 边界
+
+- **`0.2.1-rc.3` 没有验证**，因此标 `unknown`。拿到该版本后按
+  [docs/workflow.md](docs/workflow.md) 第 4 节的升级流程重跑 `preset-health` / `drift-probe` /
+  一次性 profile，再把它改成 `compatible`。
+- **预检的另外两条（保护命名空间、身份一致）不是改包能解决的**：本包已自行消掉
+  `SUBMISSION_BUNDLE_PATCH_INVALID`；剩下两条的证据、代码位置与三个可执行请求写在
+  [docs/store-preset-exemption.md](docs/store-preset-exemption.md)，可直接贴到 issue 的短版在
+  [docs/store-preset-exemption-issue.md](docs/store-preset-exemption-issue.md)。
+- **工具行为与 benchmark 一律不动**：60 个工具的输出与 0.21.0 相同，按规则 6 的"没变就不必跑
+  模型"；`bench --offline` 仍在 `npm test` 里，期望值照样逐条校验。
+
+### 6. 版本与验证
+
+- 根包 `0.21.0 → 0.21.1`；面板 `0.1.4`（见 §2）。
+- `npm test` 全绿：smoke、画面四套、客户端四套、contract 16 项、drift-probe 14 条突变、
+  preset-health 30 行、release 13 项、benchmark 四道守卫 + `bench --offline` 61 题。
+- `node build/preset-patch.mjs --check` 与 `node build/client-bundle.mjs --check` 均报告与源一致。
+- `node build/release-preflight.mjs --tag v0.21.1`：本地不变量全过；npm 上 `dsh-molbio-tools`
+  已有 0.21.0、本版按 `publish` 处理；面板 0.1.4 尚未发布。
+- 文档同步：maintainer 的版本号、roadmap 的当前状态、history 的版本一览与本段、store-evidence
+  的 tarball 名与文件数。
+
 ## [0.21.0] — 2026-10-23（DSH 0.2.1-rc.2 适配；两条 benchmark 欠账清零）
 
 **工具数不变（60），插件行为零改动。** 这是一次"只跟上游走"的版本：0.20.1 之后本机 harness
