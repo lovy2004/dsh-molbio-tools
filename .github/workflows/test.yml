@@ -43,13 +43,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        # THE SAME VERSION `package.json`'s `engines.node` DECLARES, and the
-        # version local development runs. Keeping all three equal is the point:
-        # while the matrix sat at '22' and `engines` at '>=22' it tested the
-        # floor, but a developer on 26 could still land something the floor
-        # rejects and only find out from CI. Raise `engines.node` and this entry
-        # together, in the same commit, whenever a version-specific change lands.
-        node: ['26']
+        # THE FLOOR `package.json`'s `engines.node` DECLARES, and the Node the
+        # DSH desktop runtime actually embeds (0.2.1-rc.5 ships 24.21.0). Keep
+        # all three equal: while the matrix ran 26 and `engines` said `>=26`,
+        # the suite never exercised the runtime users get. Raise both together,
+        # in the same commit, whenever a version-specific change lands.
+        node: ['24']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +57,7 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
 
       # Every guard resolves the harness through `benchmark/harness.mjs`. Say
       # exactly what was installed rather than leaving each probe to guess: on a

@@ -66,7 +66,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '26'
+          # The declared `engines.node` floor and the Node that DSH
+          # 0.2.1-rc.5 embeds; the publish job runs on the runtime users get.
+          node-version: '24'
           # NO `registry-url`, deliberately. It makes setup-node write an
           # `.npmrc` with a `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
           # line, and trusted publishing works by having NO usable token: npm
@@ -136,7 +138,7 @@ jobs:
           "
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
 
       # Same derivation as test.yml: on a runner npm's global prefix is the Node
       # toolchain directory, and several guards resolve the harness through

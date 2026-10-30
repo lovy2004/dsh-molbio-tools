@@ -10,6 +10,54 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.22.2] — 2026-10-30（DSH 0.2.1-rc.5 适配；契约守卫兼容桌面版）
+
+**工具行为零变化（60 个）。** 0.22.1 的验收基线是 **0.2.1-rc.3**；这一版把基线推到
+**0.2.1-rc.5**，并按 rc.5 的两种安装形态（npm 包 / 桌面 `app.asar`）各跑了一遍。
+
+### 1. 为什么"补丁号在范围内"不等于适配
+
+`engines.dsh` 的 `>=0.2.1-rc.2 <0.3.0-0` 本来就覆盖 rc.5，DSH 的 `unmetRequirements`
+（`@deepseek-ai/dsh-app-boot`）用 `includePrerelease` 判定也通过；但按本仓库的规矩
+（[store-evidence.md](docs/store-evidence.md)），范围只是安装粗筛，**逐版本结论要写进
+`dsh.compatibility.dshReleases`**。rc.3 之后上游发过 rc.4 / rc.5，这一版补上。
+
+### 2. rc.5 上真正跑过的证据
+
+- 桌面版 0.2.1-rc.5（Electron 44.7.0 / Node 24.21.0）的完整流程：`npm pack`（115 文件）→
+  `dsh plugin add` → `--dump-config`（bundle 层与 preset 行都在）→ 启动 HTTP 200 →
+  `__DSH_BOOT__` 含 `dsh-molbio-tools/client.js` → `dsh plugin remove`（0 残留）。
+- `agentPresets/list` 的 `broken` 为空，`pluginInventory/list` 里 molbio-lab 的
+  `tool-molbio` 是 `fiberPhase: "active"`（rules.md 规则 1 的判据，说明 preset 里 60 个工具
+  真的挂上了，而不是"组合树看着对"）。
+- 上游 `dsh-web-app/presets/standard.patch.yml` 在 rc.3 与 rc.5 之间**逐字节一致**
+  （6799 B，同一 sha256），因此 preset 行清单不需要重抄。
+- `preset-health` 30/30 行、`drift-probe` 16/16、`smoke` 60 工具、`bench --offline` 61 题
+  全绿；`contract` 17/17（见下）。
+
+### 3. contract：桌面版不再报"假红"
+
+`app.asar` 为省体积裁掉了 `lib/types/*.d.ts`（`dsh-fs` 整个 `lib/types` 目录都没有），
+于是 0.22.1 的 contract 在桌面版上有两条以 ENOENT 失败——那是**打包差异**，不是契约变化
+（npm tarball 里声明仍在，运行时行为也一致）。这一版把声明守卫改成
+`declarationEvidence()`：先读 `lib/types/*.d.ts`，缺失时读同一份声明的内嵌副本
+（`dsh-llm/lib/typert.host.js`、`dsh-fs-local` / `dsh-attachment-local` 的 runtime），
+两条断言改由同一组谓词驱动；新增第 17 条检查用**突变文本**驱动这些谓词，证明回退
+不是"永远通过"（rules.md 规则 9）。npm 安装与桌面安装现在都是 17/17。
+
+### 4. Node 下限对齐 DSH 桌面运行时
+
+`engines.node` 从 `>=26` 降到 **`>=24`**，CI 矩阵从 26 改到 24：DSH 0.2.1-rc.5 桌面版
+内嵌 **Node 24.21.0**，而 `engines.node` 是给 npm/pnpm 看的（DSH 自己只读 `engines.dsh`）。
+全套测试与 61 题离线 benchmark 都在 24.21.0 上跑过。
+
+### 5. 声明与版本
+
+- 两个包 `dshReleases`：`0.2.1-rc.5: compatible`、`0.2.1-rc.4: unknown`（未装机验证）。
+- CI（`test.yml` / `release.yml`）钉 `@deepseek-ai/dsh@0.2.1-rc.5`，Node 24。
+- 根包 `0.22.1 → 0.22.2`；面板包 `0.1.6 → 0.1.7`（只改清单声明，`lib/client.js` 未变）。
+- 基线文档（maintainer / roadmap / workflow / store-evidence / history）同步到 rc.5。
+
 ## [0.22.1] — 2026-10-25（PubMed key 改走 DSH 凭据库；环境变量降为后备）
 
 **工具数不变（60）；没有凭据库的组合，行为与 0.22.0 相同。** 0.22.0 只从 `api_key` 参数与

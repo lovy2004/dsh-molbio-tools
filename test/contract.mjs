@@ -102,6 +102,70 @@ function hostHalf(pkg) {
   return existsSync(path) ? { path, text: readFileSync(path, 'utf8') } : undefined;
 }
 
+/**
+ * The declaration evidence for a contract check, from whichever copy this
+ * installation carries.
+ *
+ * The npm packages ship `lib/types/*.d.ts`; the DESKTOP build (app.asar)
+ * strips them to save space (`dsh-fs` ships no `lib/types` at all and
+ * `dsh-llm` keeps only the declarations `lib/typert.host.js` embeds for its
+ * type registry). The contract is the same in both builds, so a desktop
+ * verification must not report the packaging difference as a contract change.
+ * The fallbacks therefore read the same declarations where the build kept them;
+ * `\n`/`\"` escapes in the embedded copy are unescaped so one regex serves
+ * both.
+ *
+ * This is still a guard: when NO candidate exists the check fails loudly
+ * instead of skipping, and `the declaration guard still fails when a
+ * declaration moves` below drives the same assertions with mutated text.
+ *
+ * @param pkg the `@deepseek-ai/*` package name.
+ * @param candidates package-relative paths, in preference order.
+ * @returns the first existing file's text and path.
+ */
+function declarationEvidence(pkg, candidates) {
+  const dir = packageDir(pkg);
+  for (const relative of candidates) {
+    const path = join(dir, relative);
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, 'utf8').replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\'/g, "'");
+    return { text, path };
+  }
+  assert.fail(`${pkg} ships none of ${candidates.join(', ')} — the declaration guard cannot read its evidence`);
+}
+
+/** The ImageBlock half of the picture contract, over a declaration text. */
+function assertImageBlockDeclared(types) {
+  const imageBlock = /interface ImageBlock \{[\s\S]*?\n\}/.exec(types)?.[0] ?? '';
+  assert.match(imageBlock, /type: 'image'/, 'ImageBlock still declares type "image"');
+  assert.match(imageBlock, /attachment: ImageAttachmentRef/, 'and still carries a durable attachment reference');
+}
+
+/** The ImageAttachmentRef fields our output value mirrors. */
+function assertImageRefDeclared(types) {
+  const ref = /interface ImageAttachmentRef \{[\s\S]*?\n\}/.exec(types)?.[0] ?? '';
+  for (const field of ['attachmentId', 'mediaType', 'bytes', 'width', 'height']) {
+    assert.ok(ref.includes(`${field}:`), `ImageAttachmentRef still carries ${field}`);
+  }
+}
+
+/**
+ * The store method the picture hand-off calls: the TypeScript declaration on a
+ * build that ships types, or the runtime method that implements it on the
+ * desktop build, which strips `lib/types`.
+ */
+function assertSaveImageDeclared(indexTypes) {
+  const declared = /saveImage\(input: SaveImageAttachment\): Promise<ImageAttachmentRef>/.test(indexTypes);
+  const implemented = /async saveImage\(input\)/.test(indexTypes);
+  assert.ok(declared || implemented, 'the store still exposes saveImage');
+}
+
+/** The text-only filesystem seam the picture workaround rests on. */
+function assertFsSeamDeclared(fsText, fsIndexText) {
+  assert.ok(fsText.includes('FS_NOT_TEXT'), 'the filesystem seam still carries FS_NOT_TEXT');
+  assert.ok(!/\bwriteBytes\b/.test(fsIndexText), 'no binary write primitive appeared on the fs seam');
+}
+
 /** Every file under a directory, bounded (the shell bundle ships under dist/). */
 function filesUnder(dir, limit = 400) {
   const out = [];
@@ -627,20 +691,13 @@ check('a tool may show the model a picture the way read_image does', () => {
   // Our output.render builds `{ type: 'image', attachment: {...} }`; that shape
   // must stay the harness's own ImageBlock, and the reference fields must stay
   // the ones our output value mirrors.
-  const llmTypes = readFileSync(join(packageDir('@deepseek-ai/dsh-llm'), 'lib', 'types', 'types.d.ts'), 'utf8');
-  const imageBlock = /interface ImageBlock \{[\s\S]*?\n\}/.exec(llmTypes)?.[0] ?? '';
-  assert.match(imageBlock, /type: 'image'/, 'ImageBlock still declares type "image"');
-  assert.match(imageBlock, /attachment: ImageAttachmentRef/, 'and still carries a durable attachment reference');
-
-  const attachmentTypes = readFileSync(join(packageDir('@deepseek-ai/dsh-attachment'), 'lib', 'types', 'types.d.ts'), 'utf8');
-  const ref = /interface ImageAttachmentRef \{[\s\S]*?\n\}/.exec(attachmentTypes)?.[0] ?? '';
-  for (const field of ['attachmentId', 'mediaType', 'bytes', 'width', 'height']) {
-    assert.ok(ref.includes(`${field}:`), `ImageAttachmentRef still carries ${field}`);
-  }
+  assertImageBlockDeclared(declarationEvidence('@deepseek-ai/dsh-llm', ['lib/types/types.d.ts', 'lib/typert.host.js']).text);
+  // The desktop build strips dsh-attachment's own `lib/types`, so the durable
+  // reference is read from the copy `dsh-llm/lib/typert.host.js` embeds.
+  assertImageRefDeclared(declarationEvidence('@deepseek-ai/dsh-attachment', ['lib/types/types.d.ts', 'lib/types/index.d.ts', '../dsh-llm/lib/typert.host.js']).text);
 
   // The commit call, and that this deployment accepts what we encode.
-  const attachmentIndex = readFileSync(join(packageDir('@deepseek-ai/dsh-attachment'), 'lib', 'types', 'index.d.ts'), 'utf8');
-  assert.match(attachmentIndex, /saveImage\(input: SaveImageAttachment\): Promise<ImageAttachmentRef>/, 'the store still exposes saveImage');
+  assertSaveImageDeclared(declarationEvidence('@deepseek-ai/dsh-attachment', ['lib/types/index.d.ts', '../dsh-attachment-local/lib/index.js']).text);
   const attachmentLocal = readFileSync(join(packageDir('@deepseek-ai/dsh-attachment-local'), 'lib', 'index.js'), 'utf8');
   assert.ok(attachmentLocal.includes('"image/png"'), 'this deployment still accepts image/png');
 
@@ -663,12 +720,57 @@ check('the workspace still cannot hold a binary file (the reason the picture rid
   // the filesystem seam is text-only. If DSH grows a binary write, this check
   // fails on purpose: revisit the design (png_path becomes possible) rather
   // than silently keeping the workaround.
-  const fsTypes = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'lib', 'types', 'types.d.ts'), 'utf8');
-  assert.ok(fsTypes.includes('FS_NOT_TEXT'), 'the filesystem seam still types FS_NOT_TEXT');
+  // `dsh-fs`'s own base class carries no code list; the refusal code lives in
+  // the local backend (the base is consulted last, only as a presence fallback).
+  const fsTypes = declarationEvidence('@deepseek-ai/dsh-fs', ['lib/types/types.d.ts', '../dsh-fs-local/lib/index.js', 'lib/index.js']).text;
   const fsReadme = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'README.md'), 'utf8');
   assert.match(fsReadme, /binary-safe mutations remain deferred/i, 'and still documents binary mutations as deferred');
   const fsIndex = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'lib', 'index.js'), 'utf8');
-  assert.ok(!/\bwriteBytes\b/.test(fsIndex), 'no binary write primitive appeared on the fs seam');
+  assertFsSeamDeclared(fsTypes, fsIndex);
+});
+
+check('the declaration guard still fails when a declaration moves (the build fallback is not vacuous)', () => {
+  // 0.22.2 taught the two checks above to read the declarations a DESKTOP build
+  // embeds instead of the `lib/types` it strips. A fallback that cannot fail
+  // would turn those checks into decoration, so drive every predicate with a
+  // mutated copy of the SAME evidence the installation supplied: each one must
+  // reject the mutation. (rules.md rule 9.)
+  const llm = declarationEvidence('@deepseek-ai/dsh-llm', ['lib/types/types.d.ts', 'lib/typert.host.js']).text;
+  const attachment = declarationEvidence('@deepseek-ai/dsh-attachment', ['lib/types/types.d.ts', 'lib/types/index.d.ts', '../dsh-llm/lib/typert.host.js']).text;
+  const attachmentIndex = declarationEvidence('@deepseek-ai/dsh-attachment', ['lib/types/index.d.ts', '../dsh-attachment-local/lib/index.js']).text;
+  const fsText = declarationEvidence('@deepseek-ai/dsh-fs', ['lib/types/types.d.ts', '../dsh-fs-local/lib/index.js', 'lib/index.js']).text;
+
+  const imageBlock = /interface ImageBlock \{[\s\S]*?\n\}/.exec(llm)?.[0] ?? '';
+  assert.notEqual(imageBlock, '', 'the mutation experiment found a real ImageBlock declaration to mutate');
+  assert.throws(
+    () => assertImageBlockDeclared(llm.replace(imageBlock, imageBlock.replace("type: 'image'", "type: 'picture'"))),
+    'a moved ImageBlock type is caught',
+  );
+  assert.throws(
+    () => assertImageBlockDeclared(llm.replace(imageBlock, imageBlock.replace('ImageAttachmentRef', 'SomeOtherRef'))),
+    'a moved attachment reference is caught',
+  );
+
+  const refBlock = /interface ImageAttachmentRef \{[\s\S]*?\n\}/.exec(attachment)?.[0] ?? '';
+  assert.notEqual(refBlock, '', 'the mutation experiment found a real ImageAttachmentRef declaration to mutate');
+  assert.throws(
+    () => assertImageRefDeclared(attachment.replace(refBlock, refBlock.replace('attachmentId:', 'id:'))),
+    'a renamed attachment field is caught',
+  );
+
+  assert.throws(
+    () => assertSaveImageDeclared(attachmentIndex.split('saveImage(').join('putImage(')),
+    'a renamed saveImage is caught',
+  );
+
+  assert.throws(
+    () => assertFsSeamDeclared(fsText.split('FS_NOT_TEXT').join('FS_BINARY_REFUSED'), ''),
+    'a renamed FS error code is caught',
+  );
+  assert.throws(
+    () => assertFsSeamDeclared(fsText, 'function writeBytes() {}'),
+    'a binary write primitive is caught',
+  );
 });
 
 check('the harness decodes the PNG our rasterizer produces (and refuses a corrupt one)', async () => {

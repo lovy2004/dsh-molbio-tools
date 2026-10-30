@@ -10,12 +10,12 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.22.1）
+## 1. 当前状态（0.22.2）
 
 - 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.1-rc.3**。
+- 基线：DSH **0.2.1-rc.5**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -45,6 +45,12 @@ L = 需要新机制或外部资源）。
   的 key 解析顺序变为 **`api_key` 参数 → DSH 凭据库 → 环境变量**（环境变量会被 agent 自己的 shell
   子进程继承，凭据库不会）；同时插件详情页出现 **PubMed API key** 表单，用户不必改 YAML。
   没有凭据库的组合行为与 0.22.0 相同。
+- **0.22.2 是 rc.5 纯适配版（工具行为零变化）**：基线 rc.3 → rc.5。上游 `standard` 行清单
+  **逐字节未变**；真正的变化在**打包形态**——桌面版 `app.asar` 裁掉 `lib/types`，于是
+  `contract` 的声明守卫改为"npm 包读 `.d.ts`，桌面版读 `typert.host.js` / runtime 内嵌副本"，
+  并加了"突变必须失败"的自检（17 条）。两份 `dshReleases` 增加 rc.5 `compatible`、rc.4
+  `unknown`；`engines.node` 与 CI 降到 DSH 桌面实际内嵌的 **24**。面板包 `0.1.6 → 0.1.7`
+  （只改声明，产物未变）。
 
 ---
 

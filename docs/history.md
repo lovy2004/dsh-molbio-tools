@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.22.2 | — | **DSH 0.2.1-rc.5 适配**：基线 rc.3 → rc.5（上游 standard 逐字节未变）；contract 声明守卫兼容桌面版裁掉 `lib/types` 的打包形态（+突变自检）；engines.node 与 CI 降到 24 | 60 |
 | 0.22.1 | — | **PubMed key 改走 DSH 凭据库**：解析顺序 `api_key` → 凭据库 → 环境变量；无凭据库时行为同 0.22.0 | 60 |
 | 0.22.0 | — | **DSH 0.2.1-rc.3 适配 + PubMed 官方 API**：`molbio_pubmed_search`/`_abstract` 支持 NCBI API key（E-utilities），无 key 行为不变 | 60 |
 | 0.21.1 | — | **DSH STORE 提交前置**：单文件 bundle patch、逐版本兼容声明；根 tarball 只带一个插件清单（工具行为零变化） | 60 |
