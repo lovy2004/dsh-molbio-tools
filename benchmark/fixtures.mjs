@@ -112,6 +112,23 @@ export function buildFixtures(makeTemplate) {
   // tasks/06-analysis.json and re-proven by `bench --offline`).
   const DOTPLOT_SEQUENCE = 'TTAGGCACGTAGCTAGGCTAACGTTAGGCACGTAGCTAGGCTAACG';
 
+  // ── embedded-signature screening + FASTQ trimming ─────────────────────────
+  //
+  // The contamination fixture carries a pUC/pBR322 origin fragment at the start
+  // and the Illumina Universal adapter at the end; the middle is a neutral
+  // ACGT repeat, so the expected hit set is exactly those two signatures.
+  const CONTAMINATION_SEQUENCE = 'GTTTGCCGGATCAAGAGCTACCAACTCTTT' + 'ACGT'.repeat(20) + 'AGATCGGAAGAG';
+
+  // Four reads: a low-quality 3' tail (r1), an adapter followed by extra bases
+  // (r2), a poly-G tail (r3), and a read that is too short after trimming (r4).
+  const TRIM_FASTQ_TEXT = [
+    '@r1', 'ACGT'.repeat(10), '+', 'I'.repeat(30) + '!'.repeat(10),
+    '@r2', 'ACGT'.repeat(7) + 'AC' + 'AGATCGGAAGAG' + 'TTTTT', '+', 'I'.repeat(47),
+    '@r3', 'ACGT'.repeat(5) + 'G'.repeat(10), '+', 'I'.repeat(30),
+    '@r4', 'ACGT'.repeat(2) + 'AC', '+', 'I'.repeat(10),
+    '',
+  ].join('\n');
+
   // ── a coding sequence for the codon/ORF tasks ─────────────────────────────
   const CDS = `ATG${'GCT'.repeat(3)}${'GAA'.repeat(3)}${'TTC'.repeat(3)}${'AAA'.repeat(3)}${'GGT'.repeat(3)}${'CGT'.repeat(3)}${'TAC'.repeat(3)}${'GAT'.repeat(3)}${'CTG'.repeat(3)}${'TAA'}`;
 
@@ -149,6 +166,8 @@ export function buildFixtures(makeTemplate) {
     MUTAGENESIS_TEMPLATE,
     MUTAGENESIS_MUTATION: '200A>G',
     DOTPLOT_SEQUENCE,
+    CONTAMINATION_SEQUENCE,
+    TRIM_FASTQ_TEXT,
     INTRON_GENOMIC,
     INTRON_EXONS: [
       { start: 1, end: 400 },

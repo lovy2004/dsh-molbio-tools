@@ -84,6 +84,16 @@ export function toFasta(entries) {
   return entries.map((entry) => `>${entry.id}${entry.description !== '' ? ' ' + entry.description : ''}\n${entry.sequence}`).join('\n') + '\n';
 }
 
+/** Render entries as four-line FASTQ text (quality is preserved verbatim). */
+export function toFastq(entries) {
+  return entries.map((entry) => {
+    if (typeof entry.quality !== 'string' || entry.quality.length !== entry.sequence.length) {
+      throw new MolbioInputError(`entry ${entry.id}: sequence and quality lengths differ`);
+    }
+    return `@${entry.id}${entry.description !== undefined && entry.description !== '' ? ' ' + entry.description : ''}\n${entry.sequence}\n+\n${entry.quality}`;
+  }).join('\n') + '\n';
+}
+
 /** Summary statistics over parsed entries. */
 export function entryStats(entries, qualityMode = false) {
   const lengths = entries.map((entry) => entry.sequence.length);

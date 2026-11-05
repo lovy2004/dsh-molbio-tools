@@ -1,6 +1,7 @@
 {
   "$comment": [
-    "Protein analysis, bench analysis and plotting.",
+    "Protein analysis, bench analysis and plotting, plus the embedded-signature",
+    "contamination screen (short signatures, both strands, negative != clean).",
     "",
     "`reading-frames` is the one task whose point is a TOOL CHOICE rather than a",
     "value: the model must call the translator in all-frames mode with an ORF floor,",
@@ -231,6 +232,45 @@
         {
           "where": "answer",
           "pattern": "direct|inverted|repeat"
+        }
+      ]
+    },
+    {
+      "id": "contamination-screen",
+      "category": "bench-analysis",
+      "tier": "full",
+      "covers": [
+        "molbio_contamination_screen"
+      ],
+      "instruction": "I have this 122 bp sequence from a miniprep and I am worried it is contaminated with vector backbone or Illumina/Nextera adapter. Screen it against common vector and adapter signatures, tell me which signatures hit and their positions, and say whether this is proof of contamination.\n\n{seq:contamination}",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_contamination_screen"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "sequence input: 1 of 1 entry, 122 bp; 2 signature\\(s\\) hit, 1 entry with a hit\\."
+        },
+        {
+          "where": "tool",
+          "pattern": "Illumina Universal \\[adapter/adapter\\] 1/1 \\(100%\\), best 0 mismatch\\(es\\); e\\.g\\. input 111-122 \\(\\+\\)"
+        },
+        {
+          "where": "tool",
+          "pattern": "pUC/pBR322 origin \\[vector/origin\\] 1/1 \\(100%\\), best 0 mismatch\\(es\\); e\\.g\\. input 1-30 \\(\\+\\)"
+        },
+        {
+          "where": "answer",
+          "pattern": "pUC|pBR322|vector"
+        },
+        {
+          "where": "answer",
+          "pattern": "Illumina|adapter"
+        },
+        {
+          "where": "answer",
+          "pattern": "not proof|short signature|does not prove|suggest|consistent"
         }
       ]
     },

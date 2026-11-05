@@ -12,7 +12,7 @@ L = 需要新机制或外部资源）。
 
 ## 1. 当前状态（0.23.0）
 
-- 62 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- 64 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
 - 基线：DSH **0.2.2-rc.1**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
@@ -45,6 +45,10 @@ L = 需要新机制或外部资源）。
   的 key 解析顺序变为 **`api_key` 参数 → DSH 凭据库 → 环境变量**（环境变量会被 agent 自己的 shell
   子进程继承，凭据库不会）；同时插件详情页出现 **PubMed API key** 表单，用户不必改 YAML。
   没有凭据库的组合行为与 0.22.0 相同。
+- **0.24.0 是数据卫生版**：新增 survey #11 载体/接头污染筛查与 #12 FASTQ 修剪/过滤；
+  同时修掉 FASTQ QC 接头表里 Small RNA 5' 的 RNA→DNA 归一化静默错（旧表在 DNA reads 上
+  只能命中反向互补）。工具 62 → 64，benchmark 63 → 65；客户端产物仅因
+  `seqio.mjs` 新增 `toFastq` 重建，面板行为未变（面板包 0.1.8 → 0.1.9）。
 - **0.23.0 是工具行为版**：修掉 2.0 的遗留（跨内含子引物现在报告的真实反向分子、F 在 R 上游），
   落地 2.9a（sequence logo / gRNA 的调用卡），并从候选池新增两个轻量工具：
   `molbio_protein_charge`（survey #34，电荷-pH 滴定 + 可切换 pK 表）与
@@ -204,7 +208,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 63 条任务覆盖 **62/62 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 65 条任务覆盖 **64/64 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。
@@ -304,7 +308,7 @@ Node 做路径运算（Windows 是 `<prefix>/node_modules`，POSIX 是 `<prefix>
 - **agent 驱动浏览器终端**：无 `dsh-tool-terminal`，且面板明确不把输出转给模型。
   `ctx.computerUse`/`ctx.browserUse` 这类 seam 只允许**一个** provider 注册，
   第三方插件即便在未来版本也不能自带一个并行实现去抢。
-- **把 62 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
+- **把 64 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
   提示预算）。真要全局可见需要自己加一层宿主行，而那会让专属模式里的同一行变成死行。
 - **持久 shell 进 preset**：收益有限、风险明确（工具名冲突要 disable 一次性那行，
   且需要未经验证的 `isolate: { terminals: true }` 分组），详见

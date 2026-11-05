@@ -51,6 +51,7 @@ const FILE_FIXTURES = {
   'chart-violin': { 'ct.csv': FIXTURES.CT_CSV },
   'chart-volcano': { 'de.csv': FIXTURES.DE_CSV },
   'chart-heatmap': { 'expression.tsv': FIXTURES.HEATMAP_TSV },
+  'fastq-trim': { 'reads.fq': FIXTURES.TRIM_FASTQ_TEXT },
 };
 
 /** Where reports land. Gitignored: a report is a measurement, not a source. */

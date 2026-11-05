@@ -28,6 +28,11 @@
  */
 
 import { MolbioInputError } from './lib.mjs';
+import { ADAPTERS } from './contamination.mjs';
+
+// Re-exported for callers that used this module's adapter table directly. The
+// table now lives in contamination.mjs and is DNA-normalized there.
+export { ADAPTERS } from './contamination.mjs';
 import {
   axis,
   escapeXml,
@@ -63,15 +68,7 @@ export const FASTQ_QC_DEFAULTS = {
   duplication_bins: 10,
 };
 
-/** Public adapter/primer fragments used for the adapter-content screen. */
-export const ADAPTERS = [
-  { name: 'Illumina Universal', sequence: 'AGATCGGAAGAG' },
-  { name: 'Illumina Small RNA 3\'', sequence: 'TGGAATTCTCGG' },
-  { name: 'Illumina Small RNA 5\'', sequence: 'GUUCAGAGUUCUACAGUCCGACGAUC' },
-  { name: 'Nextera Transposase', sequence: 'CTGTCTCTTATA' },
-  { name: 'PolyA', sequence: 'AAAAAAAAAAAA' },
-  { name: 'PolyG', sequence: 'GGGGGGGGGGGG' },
-];
+/** Public adapter/primer fragments: see contamination.mjs (DNA-normalized). */
 
 /** Phred+33 decoding, with the offending read id in the message. */
 function phredOf(character) {

@@ -50,7 +50,7 @@ SVG 随 meta 传输有上限（256 KB）：真实载体的图谱 20-60 KB，但�
 | `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
 | `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，两个 map 工具与两个 figure 工具的调用卡，以及插件详情页的 key 配置段 |
 | `lib/client.js` | **构建产物**（`exports["./client"]` 指向它；由 `npm run build:client` 生成） |
-| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 62 个工具解耦的交付通道 |
+| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 64 个工具解耦的交付通道 |
 | `test/client.mjs` | 按加载器的方式执行产物 + 驱动两条数据通路（含真实 pUC118 夹具） |
 | `test/map-card.mjs` | 调用卡的**跨界**检查：地图卡与图形卡（logo/gRNA）的真实投影 → 卡片读取 → 渲染出 SVG（含降级、超限、坏 meta 路径） |
 | `test/client-mount.mjs` | 复刻宿主侧图扫描，证明两个包都能挂上、依赖可解析 |

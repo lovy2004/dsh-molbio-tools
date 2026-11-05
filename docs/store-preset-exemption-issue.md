@@ -37,7 +37,7 @@ disabled、没有覆盖官方行。
 `@deepseek-ai/dsh-client-modules` 的 `exactPackageSpecifier` 只接受 `@scope/name` 或裸包名，任何含
 `/` 的非 scoped 说明符返回 `undefined`，`locatePkgJson` 随即返回 `undefined`，该行永远不会被客户端
 扫描发现，右栏 Molbio/Papers 两个 tab 会静默消失。改成包根 `dsh-molbio-tools` 也不可行：根模块是
-工具入口，会把 62 个工具注册进该 profile 的每个会话——这正是本包要避免的。
+工具入口，会把 64 个工具注册进该 profile 的每个会话——这正是本包要避免的。
 
 请求：允许「`name` 以 `./` 开头、解析基准为 manifest 所在包目录、解析结果留在包内且文件已分发」的
 自引用 insert 行；或把本固定 commit 送入人工专项审阅，按实际内容判定。

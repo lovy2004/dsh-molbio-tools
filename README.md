@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **62 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **64 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 62 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 64 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：在 DSH 插件页安装（3 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**62 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**64 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。**右栏的 Molbio / Papers 两个面板也随这个包
 一起装好**，不需要再装 `dsh-molbio-panel`。
 
@@ -104,9 +104,9 @@ dsh plugin --profile web update dsh-molbio-tools
 | 层（同一个 `cordis.patch.yml` 里的两段） | 作用 |
 | --- | --- |
 | `molbio-client` → `./host.mjs` | 只插一行**惰性宿主锚点**，不注册任何工具 |
-| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，62 个工具在这一层里 |
+| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，64 个工具在这一层里 |
 
-所以 62 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+所以 64 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
 > **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
@@ -122,7 +122,7 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 只要浏览器面板
 
-如果只想要图形面板、不想让该 profile 装 62 个工具（连模式都不装），装面板专用包即可
+如果只想要图形面板、不想让该 profile 装 64 个工具（连模式都不装），装面板专用包即可
 （见[浏览器面板](#浏览器面板可选)）。**它和 `dsh-molbio-tools` 二选一**：两者注册同一组右栏 tab
 （`dsh-molbio-tools` / `dsh-molbio-tools/papers`），同时装会重复注册并报
 `tab type id ... is already registered`。同样在 **插件 → 添加插件** 里输入 `dsh-molbio-panel`，
@@ -138,10 +138,10 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 
 ## 它会做什么
 
-62 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+64 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
-### 1. 序列分析与酶切（8）
+### 1. 序列分析与酶切（9）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -153,6 +153,7 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_methylation_check` | **甲基化会不会挡住酶切**：列出序列中每个 Dam（GATC）/Dcm（CCWGG）位点，把每个酶判为 `cuts` / `impaired` / `blocked` / `no_site`，并给出"哪些酶能用来切"的清单 |
 | `molbio_double_digest` | **双酶切规划**：两个酶各自的切点/片段、合并切点与片段，以及两者**是否共用 buffer**（无共用则提示顺序酶切或换用厂商双酶切 buffer） |
 | `molbio_dotplot` | **序列自身 dotplot**：按 k-mer 精确匹配画直接重复（黑）与反向重复（红），网格分箱以限制文件大小，并报告匹配数与任何扫描/绘图截断；是精确 k-mer 视图，不是滑窗同一性打分图 |
+| `molbio_contamination_screen` | **载体/接头污染筛查**：用内置的短签名表（pUC/pBR322、pUC19 lacZ/M13、pET T7、pcDNA CMV/BGH、Gateway attB1/attB2、Illumina/Nextera 接头）扫描序列或 FASTA/FASTQ；双链、默认精确、可选 0–2 错配，报告每个签名命中的 reads 数、示例位置/链/错配。**短签名筛查，不是 BLAST/全库比对；未命中不等于干净** |
 
 ### 2. 引物设计（6）
 
@@ -237,11 +238,12 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_protocol_add` / `molbio_protocol_list` / `molbio_protocol_update` | 协议库（`protocols.json`）：步骤列表、自由参数、来源文献 |
 | `molbio_experiment_log` / `molbio_experiment_list` | 实验日志（`experiments.json`）：关联协议与文献、笔记与结果 |
 
-### 10. 实验台分析（5，v19 新增，树图 v20 改进）
+### 10. 实验台分析（6，v19 新增，树图 v20 改进）
 
 | 工具 | 用途 |
 | --- | --- |
 | `molbio_fastq_qc` | **读级 FASTQ 质控**：每碱基质量（均值 **+ 四分位**）、每读质量直方图、每碱基 A/C/G/T 含量、每读 GC 分布（含理论正态叠加）、长度分布、**精确序列重复率**、过度代表序列、内置接头片段扫描、Q20/Q30 与"质量从第几位开始跌破 Q30"——并出一张六面板 SVG 报告 |
+| `molbio_fastq_trim` | **FASTQ 修剪/过滤**：3' 滑窗质量修剪、5' 引物/3' 接头精确去除、poly-G/poly-A 尾修剪、最小长度与 N 比例过滤；支持 Phred+33/+64，写出 FASTQ 或 FASTA，并报告 before/after 计数与逐阶段 trim 数。不做 paired-end merge、semiglobal adapter alignment 或 UMI |
 | `molbio_codon_usage` | **密码子使用分析**：CAI（Sharp & Li）、逐密码子 RSCU、Nc（有效密码子数）、GC3/GC123、罕见密码子清单（带位置与宿主频率）、CDS 内 CpG 观测/期望、隐藏终止子扫描；可对比 E. coli / 酵母 / 人 |
 | `molbio_phylogenetic_tree` | **距离法系统发生树**：p-distance / Jukes-Cantor / Kimura 2P / Tamura-Nei 校正距离、UPGMA 或邻接法（NJ）、**bootstrap 支持度（种子可复现）**、严格/多数共识树、Newick 读写、矩形式/环形/扇形 SVG |
 | `molbio_pcr_simulate` | **in-silico PCR**：双链搜索引物结合位点、产物大小与坐标、逐位错配明细、**"3' 端必须精确匹配几个碱基"是独立旋钮**（中段错配仍能延伸、3' 错配通常不能）、环状模板跨 origin 产物、对额外模板（如载体）做错引导筛查、预期凝胶图 |
@@ -275,6 +277,8 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | "这段肽是不是两亲性？画个螺旋轮" | `molbio_helical_wheel(sequence, moment_window:11)` |
 | "画这个蛋白的疏水性图，找跨膜段" | `molbio_hydropathy_plot(sequence, window:19)` |
 | "这批测序数据质量怎么样，从第几位开始掉" | `molbio_fastq_qc(path)` → 看 `quality_tail_below_30` 与六面板报告 |
+| "这批 reads 有没有接头或载体污染" | `molbio_contamination_screen(path 或 sequence)` → 看命中的短签名、位置/链/错配；未命中不等于干净 |
+| "把 reads 的低质量尾和接头修掉，写出新 FASTQ" | `molbio_fastq_trim(path, output_path, adapter:…, poly_g:true)` → before/after 计数 + 写出文件 |
 | "这个基因在大肠杆菌里表达会好吗，问题在哪" | `molbio_codon_usage(sequence, host:'e_coli')` → CAI / 罕见密码子清单 |
 | "这对引物除了目标还会在哪扩增？预期几条带" | `molbio_pcr_simulate(template, primer_pairs:[…])` → 产物大小 + 凝胶图 |
 | "这几条序列谁跟谁最近，这个结论有信心吗" | `molbio_phylogenetic_tree(sequences:[…], bootstrap:100)` → 支持度 + Newick |
@@ -303,6 +307,7 @@ SVG 文件**并在结果里返回路径：
 | `molbio_qpcr_efficiency` / `molbio_plot` / `molbio_virtual_gel` | 曲线；`molbio_plot` 的柱状/散点/折线/直方图/箱型/小提琴/火山/热力图（`output_path` 必填）；凝胶图 |
 | `molbio_helical_wheel` / `molbio_hydropathy_plot` | 螺旋轮、疏水性图 |
 | `molbio_fastq_qc` | `<名称>.qc.svg`（六面板质控报告） |
+| `molbio_fastq_trim` | `output_path` 指定的 FASTQ/FASTA（修剪后的 reads） |
 | `molbio_phylogenetic_tree` | `<名称>.nwk`（Newick）+ `<名称>-tree.svg` |
 | `molbio_pcr_simulate` | `pcr-gel.svg`（预期凝胶） |
 | `molbio_gc_composition` | `gc-composition.svg`（GC/CpG 三面板图） |
@@ -442,6 +447,11 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 - **`molbio_dotplot`**：精确 k-mer 自比较，黑色是直接重复、红色是反向重复；简并碱基参与的
   k-mer 被跳过并在 `ambiguous_bases` 计数。`truncated` 表示匹配扫描触顶（计数是下界），
   `plot_truncated` 表示绘图网格触顶（部分点未画）。对角线是序列与自身，属正常现象。
+
+### 污染筛查与 FASTQ 修剪（0.24.0）
+
+- **`molbio_contamination_screen`**：表是**内置短签名**，不是数据库：pUC/pBR322 ori、pUC19 lacZ/M13、pUC/pBR322 bla、pET T7 promoter/terminator、pcDNA CMV/BGH、Gateway attB1/attB2，以及 Illumina/Nextera/polyA/polyG 接头。默认 exact、双链、替换错配 0–2（seed-and-verify），报告每个签名的 reads 数、示例位置/链/错配。**短签名会漏也会假阳性**；命中是"值得追"的线索，未命中**不能证明**样本干净。接头表在源头做了 U→T 归一化；旧版 Small RNA 5' 的 RNA 序列在 DNA reads 上只能命中反向互补，这是一个已修的静默错。
+- **`molbio_fastq_trim`**：按固定顺序执行——5' 引物（精确、只在读首）→ 3' 接头（精确、切到接头前）→ 3' 滑窗质量（窗口均值 < 阈值时向左收）→ poly-G/poly-A 尾 → 最小长度/N 比例过滤。Phred+33/+64 的**质量字符原样保留**；输出 FASTQ 或 FASTA。**不做** paired-end overlap merge、cutadapt 式 semiglobal adapter alignment、UMI 处理——这些不在一个工具里假装做完。滑窗阈值、窗口、poly 最小 run、最小长度、N 比例都回显在 `criteria` 里。
 
 ### TaqMan 探针（v17）
 
@@ -716,13 +726,13 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 63 题（覆盖 62/62 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 65 题（覆盖 64/64 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
 > `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
 > （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
-> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 62/62 覆盖），
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 64/64 覆盖），
 > `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
@@ -749,7 +759,7 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 62 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 64 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
@@ -772,7 +782,9 @@ dsh-molbio-tools/
 ├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶
 ├── charts.mjs       # 实验数据图表：CSV/TSV 读取 + 折线/直方图/箱型/小提琴/火山/热力图（基于 svgio）
 ├── dotplot.mjs      # k-mer 自比较 dotplot（直接/反向重复，网格分箱）
-├── seqio.mjs        # FASTA/FASTQ 解析与统计
+├── contamination.mjs # 内置载体/接头短签名表 + 双链污染筛查
+├── fastq-trim.mjs   # FASTQ 修剪/过滤（质量/接头/引物/poly/N/长度）
+├── seqio.mjs        # FASTA/FASTQ 解析与统计（含 FASTQ 写出）
 ├── batch.mjs        # 批量文件分析：同一套摘要/ORF/酶切位点 → CSV/TSV
 ├── records.mjs      # 协议库 / 实验日志存储
 ├── papers.mjs       # 文献库存储

@@ -1,6 +1,10 @@
 {
   "$comment": [
-    "Codon usage, phylogeny, and the two file-parsing tools.",
+    "Codon usage, phylogeny, FASTQ trimming, and the two file-parsing tools.",
+    "",
+    "`fastq-trim` belongs here rather than under visualisation: it reads a FASTQ,",
+    "transforms every record, and writes a FASTQ/FASTA back. The task pins the",
+    "before/after counts and the per-stage trim reasons, not just 'it ran'.",
     "",
     "The parsing tools appear here as a CHAIN rather than alone: a model that",
     "answers a question about a GenBank record without parsing it is doing",
@@ -125,6 +129,45 @@
         {
           "where": "answer",
           "pattern": "same|identical|match"
+        }
+      ]
+    },
+    {
+      "id": "fastq-trim",
+      "category": "sequence-io",
+      "tier": "full",
+      "covers": [
+        "molbio_fastq_trim"
+      ],
+      "instruction": "These four reads are from an old Illumina run: r1 has a low-quality 3' tail, r2 carries the Illumina Universal adapter, r3 has a poly-G tail, and r4 is very short. Trim the low-quality tail with a 3-base window at mean Q30, remove the adapter and everything after it, trim poly-G runs of 8 or more, drop reads shorter than 20 bp, and write the survivors to trimmed.fq. Tell me how many reads and bases went in and out, how many were trimmed or dropped, and why.\n",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_fastq_trim"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "FASTQ trim: 4 of 4 read\\(s\\) scanned \\(127 bases\\) -> 3 read\\(s\\) \\(80 bases\\); 3 trimmed, 1 dropped\\."
+        },
+        {
+          "where": "tool",
+          "pattern": "quality 1 · adapter 1 · poly-G 1 · poly-A 0 · primer 0; dropped by length 1, by N 0"
+        },
+        {
+          "where": "tool",
+          "pattern": "Saved FASTQ to .*trimmed\\.fq\\."
+        },
+        {
+          "where": "answer",
+          "pattern": "3 .{0,20}(read|kept|surviv)|(kept|surviv).{0,20}3"
+        },
+        {
+          "where": "answer",
+          "pattern": "80"
+        },
+        {
+          "where": "answer",
+          "pattern": "adapter|poly-G|quality|drop"
         }
       ]
     },

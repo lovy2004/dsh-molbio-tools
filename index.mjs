@@ -67,7 +67,7 @@ import {
   renderVolcanoPlot,
   resolveTable,
 } from './charts.mjs';
-import { entryStats, parseFasta, parseFastq, toFasta } from './seqio.mjs';
+import { entryStats, parseFasta, parseFastq, toFasta, toFastq } from './seqio.mjs';
 import { addExperiment, addProtocol, loadRecords, recordPath, saveRecords, updateProtocol } from './records.mjs';
 import { toBibtex } from './papers.mjs';
 import { parseXml } from './snapgene.mjs';
@@ -125,6 +125,8 @@ import {
 import { openDefaultViewer } from './view.mjs';
 import { renderSvgToPng } from './svgpng.mjs';
 import { fastqQcReport, renderFastqQcReport } from './fastq-qc.mjs';
+import { screenContamination } from './contamination.mjs';
+import { trimFastq } from './fastq-trim.mjs';
 import { CODON_FREQUENCIES, codonUsageAnalysis } from './codon.mjs';
 import {
   DISTANCE_MODELS,
@@ -6679,6 +6681,248 @@ const fastqQcTool = (ctx) => define({
   },
 });
 
+
+const contaminationScreenTool = (ctx) => define({
+  name: 'molbio_contamination_screen',
+  description: 'Screen a DNA sequence, or every entry in a FASTA/FASTQ file, for common vector-backbone/promoter/origin and Illumina/Nextera adapter signatures. The signature table is SHORT and embedded (no reference database, no network): a hit is evidence worth following up, and a negative result does NOT prove the sample is clean. Matching is both-strand and substitution-only (no gaps); max_mismatches adds a seed-and-verify search (0-2). Reports per-signature read counts, the best example position/strand, and the criteria that produced them. Use it for "is this assembly contaminated with vector backbone or adapter" — not as a BLAST replacement.',
+  parameters: {
+    type: 'object',
+    properties: {
+      sequence: { type: 'string', description: 'Inline DNA sequence to screen. Provide exactly one of sequence or path.' },
+      path: { type: 'string', description: 'Path to a FASTA/FASTQ file, or a plain sequence file. Provide exactly one of sequence or path.' },
+      max_mismatches: { type: 'integer', description: 'Substitutions allowed per signature (0-2, default 0). A hit still needs one exact seed chunk.' },
+      max_reads: { type: 'integer', description: 'Scan at most this many entries (default 0 = all, capped at 200000).' },
+      kinds: { type: 'string', enum: ['both', 'adapter', 'vector'], description: 'Restrict the table to adapters, vectors, or both (default both).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['input_type', 'total_entries', 'scanned_entries', 'bases', 'ambiguous_bases', 'hits', 'hit_count', 'reads_with_hit', 'truncated', 'criteria'],
+    properties: {
+      input_type: { type: 'string', enum: ['sequence', 'fasta', 'fastq'] },
+      total_entries: { type: 'integer' },
+      scanned_entries: { type: 'integer' },
+      bases: { type: 'integer' },
+      ambiguous_bases: { type: 'integer' },
+      hits: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['name', 'kind', 'category', 'signature', 'reads', 'percent', 'best_mismatches', 'example'],
+          properties: {
+            name: { type: 'string' },
+            kind: { type: 'string', enum: ['adapter', 'vector'] },
+            category: { type: 'string' },
+            signature: { type: 'string' },
+            reads: { type: 'integer' },
+            percent: { type: 'number' },
+            best_mismatches: { type: 'integer' },
+            example: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['id', 'start', 'end', 'strand', 'mismatches'],
+              properties: {
+                id: { type: 'string' },
+                start: { type: 'integer' },
+                end: { type: 'integer' },
+                strand: { type: 'string', enum: ['+', '-'] },
+                mismatches: { type: 'integer' },
+              },
+            },
+          },
+        },
+      },
+      hit_count: { type: 'integer' },
+      reads_with_hit: { type: 'integer' },
+      truncated: { type: 'boolean' },
+      criteria: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['max_mismatches', 'kinds', 'signature_count', 'max_reads', 'match_basis'],
+        properties: {
+          max_mismatches: { type: 'integer' },
+          kinds: { type: 'string', enum: ['both', 'adapter', 'vector'] },
+          signature_count: { type: 'integer' },
+          max_reads: { type: 'integer' },
+          match_basis: { type: 'string' },
+        },
+      },
+    },
+  },
+  render(value) {
+    const lines = [
+      value.input_type + ' input: ' + value.scanned_entries + ' of ' + value.total_entries + ' entr' + (value.total_entries === 1 ? 'y' : 'ies') + ', ' + value.bases + ' bp; ' + value.hit_count + ' signature(s) hit, ' + value.reads_with_hit + ' entr' + (value.total_entries === 1 ? 'y' : 'ies') + ' with a hit.',
+    ];
+    if (value.hits.length === 0) {
+      lines.push('No embedded vector/adapter signature matched.');
+    } else {
+      for (const hit of value.hits) {
+        lines.push('  ' + hit.name + ' [' + hit.kind + '/' + hit.category + '] ' + hit.reads + '/' + value.scanned_entries + ' (' + hit.percent + '%), best ' + hit.best_mismatches + ' mismatch(es); e.g. ' + hit.example.id + ' ' + hit.example.start + '-' + hit.example.end + ' (' + hit.example.strand + ')');
+      }
+    }
+    if (value.ambiguous_bases > 0) lines.push(value.ambiguous_bases + ' ambiguous base(s) were scanned literally (they can only match a signature at an unambiguous position).');
+    if (value.truncated) lines.push('Only the first ' + value.scanned_entries + ' entr' + (value.scanned_entries === 1 ? 'y was' : 'ies were') + ' scanned; max_reads capped the input.');
+    lines.push('Short embedded signatures, both strands, substitutions only (no gaps). A negative result does not prove the sample is clean.');
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const hasSequence = typeof args.sequence === 'string' && args.sequence !== '';
+    const hasPath = typeof args.path === 'string' && args.path !== '';
+    if (hasSequence === hasPath) throw new MolbioInputError('provide exactly one of sequence or path');
+    let entries;
+    let inputType;
+    if (hasSequence) {
+      entries = [{ id: 'input', sequence: normalizeSequence(args.sequence, 'sequence') }];
+      inputType = 'sequence';
+    } else {
+      const bytes = await readFileBytes(ctx, exec, args.path);
+      const text = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '');
+      const first = text.trimStart();
+      if (first.startsWith('@')) {
+        entries = parseFastq(text);
+        inputType = 'fastq';
+      } else if (first.startsWith('>')) {
+        entries = parseFasta(text);
+        inputType = 'fasta';
+      } else {
+        entries = [{ id: 'input', sequence: normalizeSequence(text, 'sequence') }];
+        inputType = 'sequence';
+      }
+    }
+    const result = screenContamination(entries, {
+      maxMismatches: args.max_mismatches,
+      maxReads: args.max_reads,
+      kinds: args.kinds,
+    });
+    return { input_type: inputType, ...result };
+  },
+});
+
+const FASTQ_TRIM_TOOL_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['reads_in', 'total_reads', 'reads_out', 'bases_in', 'bases_out', 'trimmed_reads', 'dropped_reads', 'trim_counts', 'drop_counts', 'truncated', 'criteria', 'saved_to', 'output_format'],
+  properties: {
+    reads_in: { type: 'integer' },
+    total_reads: { type: 'integer' },
+    reads_out: { type: 'integer' },
+    bases_in: { type: 'integer' },
+    bases_out: { type: 'integer' },
+    trimmed_reads: { type: 'integer' },
+    dropped_reads: { type: 'integer' },
+    trim_counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['quality', 'adapter', 'poly_g', 'poly_a', 'primer'],
+      properties: {
+        quality: { type: 'integer' },
+        adapter: { type: 'integer' },
+        poly_g: { type: 'integer' },
+        poly_a: { type: 'integer' },
+        primer: { type: 'integer' },
+      },
+    },
+    drop_counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['length', 'n'],
+      properties: {
+        length: { type: 'integer' },
+        n: { type: 'integer' },
+      },
+    },
+    truncated: { type: 'boolean' },
+    criteria: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['min_quality', 'quality_window', 'poly_min', 'min_length', 'max_n_percent', 'phred', 'max_reads', 'adapter', 'primer', 'poly_g', 'poly_a'],
+      properties: {
+        min_quality: { type: 'integer' },
+        quality_window: { type: 'integer' },
+        poly_min: { type: 'integer' },
+        min_length: { type: 'integer' },
+        max_n_percent: { type: 'number' },
+        phred: { type: 'integer', enum: [33, 64] },
+        max_reads: { type: 'integer' },
+        adapter: { type: 'string' },
+        primer: { type: 'string' },
+        poly_g: { type: 'boolean' },
+        poly_a: { type: 'boolean' },
+      },
+    },
+    saved_to: { type: 'string' },
+    output_format: { type: 'string', enum: ['fastq', 'fasta'] },
+  },
+};
+
+const fastqTrimTool = (ctx) => define({
+  safe: false,
+  name: 'molbio_fastq_trim',
+  description: 'Trim and filter a FASTQ file, then WRITE the surviving reads as FASTQ or FASTA. Supported operations, applied in this order: remove an exact 5\' primer, remove an exact 3\' adapter and everything after it, trim a low-quality 3\' tail with a sliding mean-quality window, trim a trailing poly-G or poly-A run, then drop reads below min_length or above max_n_percent. Phred+33 and Phred+64 are supported (quality characters are preserved). This is not a paired-end merger, not a semiglobal adapter aligner, and not a UMI pipeline; those are deliberately out of scope. Returns before/after counts, per-stage trim counts, and the written path.',
+  parameters: {
+    type: 'object',
+    required: ['path', 'output_path'],
+    properties: {
+      path: { type: 'string', description: 'Path to the input .fastq/.fq file.' },
+      output_path: { type: 'string', description: 'Path to write the trimmed reads (FASTQ or FASTA, per output_format).' },
+      output_format: { type: 'string', enum: ['fastq', 'fasta'], description: 'Output format (default fastq).' },
+      min_quality: { type: 'integer', description: 'Minimum mean Phred in the sliding window (0-60, default 20). Set 0 to disable quality trimming.' },
+      quality_window: { type: 'integer', description: 'Sliding-window width in bases (1-100, default 4).' },
+      poly_g: { type: 'boolean', description: 'Trim a trailing poly-G run (default false; useful for NovaSeq/NextSeq).' },
+      poly_a: { type: 'boolean', description: 'Trim a trailing poly-A run (default false).' },
+      poly_min: { type: 'integer', description: 'Minimum trailing run length to trim (2-100, default 8).' },
+      adapter: { type: 'string', description: 'Exact 3\' adapter sequence; it and everything after it are removed. Empty = no adapter trim.' },
+      primer: { type: 'string', description: 'Exact 5\' primer sequence; it is removed when the read starts with it. Empty = no primer trim.' },
+      min_length: { type: 'integer', description: 'Drop reads shorter than this after trimming (default 0).' },
+      max_n_percent: { type: 'number', description: 'Drop reads whose trimmed sequence has more than this percent of non-ACGT bases (0-100, default 100 = no filter).' },
+      phred: { type: 'integer', enum: [33, 64], description: 'Quality encoding of the input (33 = Sanger/Illumina 1.8+, 64 = old Illumina). Output keeps the same encoding.' },
+      max_reads: { type: 'integer', description: 'Process at most this many reads (default 0 = all, capped at 200000).' },
+    },
+  },
+  outputSchema: FASTQ_TRIM_TOOL_SCHEMA,
+  render(value) {
+    const counts = value.trim_counts;
+    const lines = [
+      'FASTQ trim: ' + value.reads_in + ' of ' + value.total_reads + ' read(s) scanned (' + value.bases_in + ' bases) -> ' + value.reads_out + ' read(s) (' + value.bases_out + ' bases); ' + value.trimmed_reads + ' trimmed, ' + value.dropped_reads + ' dropped.',
+      '  quality ' + counts.quality + ' · adapter ' + counts.adapter + ' · poly-G ' + counts.poly_g + ' · poly-A ' + counts.poly_a + ' · primer ' + counts.primer + '; dropped by length ' + value.drop_counts.length + ', by N ' + value.drop_counts.n,
+      'Saved ' + value.output_format.toUpperCase() + ' to ' + value.saved_to + '.',
+    ];
+    if (value.truncated) lines.push('Only the first ' + value.reads_in + ' read(s) were processed; max_reads capped the input.');
+    lines.push('Settings: Phred+' + value.criteria.phred + ', min Q' + value.criteria.min_quality + ' over ' + value.criteria.quality_window + ' base(s), poly >= ' + value.criteria.poly_min + ', min length ' + value.criteria.min_length + ', max N ' + value.criteria.max_n_percent + '%.');
+    if (value.criteria.adapter !== '') lines.push('Adapter: ' + value.criteria.adapter + '.');
+    if (value.criteria.primer !== '') lines.push('Primer: ' + value.criteria.primer + '.');
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const bytes = await readFileBytes(ctx, exec, args.path);
+    const text = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '');
+    if (text.trimStart().startsWith('>')) throw new MolbioInputError('this looks like FASTA, not FASTQ: molbio_fastq_trim needs per-base quality strings');
+    const entries = parseFastq(text);
+    const trimmed = trimFastq(entries, {
+      minQuality: args.min_quality,
+      qualityWindow: args.quality_window,
+      polyG: args.poly_g,
+      polyA: args.poly_a,
+      polyMin: args.poly_min,
+      adapter: args.adapter,
+      primer: args.primer,
+      minLength: args.min_length,
+      maxNPercent: args.max_n_percent,
+      phred: args.phred,
+      maxReads: args.max_reads,
+    });
+    const outputFormat = args.output_format ?? 'fastq';
+    const fs = fsService(ctx);
+    const sandboxPolicyService = ctx.get('sandboxPolicy');
+    const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+    const file = workspaceFilePath(args.output_path, exec, policy?.workspaceRoot);
+    await writeWorkspaceFile(fs, file, outputFormat === 'fasta' ? toFasta(trimmed.entries) : toFastq(trimmed.entries), policy);
+    return { ...trimmed.stats, saved_to: file, output_format: outputFormat };
+  },
+});
+
 const RARE_CODON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -7800,11 +8044,11 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Proteins: molbio_protein_props (MW/pI/A280/GRAVY — estimates), molbio_peptide_digest (trypsin etc. for MS), molbio_codon_optimize (E. coli/yeast/human, can avoid restriction sites), molbio_helical_wheel (Schiffer-Edmundson wheel + Eisenberg hydrophobic moment, written as an SVG), molbio_hydropathy_plot (Kyte-Doolittle sliding-window profile with the 1.6 threshold peaks, written as an SVG).
 - Quantitation: molbio_qpcr_efficiency (standard curve + plot), molbio_plot (experiment-data charts written to files), molbio_virtual_gel (expected band pattern as an SVG gel image with a size ladder).
 - molbio_plot kinds: bar (labelled values + optional SD error bars) and scatter (x/y + optional least-squares line) take their arrays directly in the call; the table kinds read a workspace CSV/TSV — pass data_path plus columns naming which column plays which role, or pass data with the table text inline. Use a table kind whenever the numbers are already in a file: do NOT retype a column into the call. line = one series per group_column; histogram = distribution of one column (bins default to Freedman-Diaconis unless you pass bins); box = Q1-Q3 box, median, 1.5xIQR whiskers, outliers as dots; violin = the same samples as a kernel-density silhouette with the box summary inside (use it when the SHAPE matters, not just the five numbers); volcano = effect size against significance from a log2-fold-change column and a p column, with dashed thresholds — it computes no statistics of its own, so the p-values must already be in the table; heatmap = a row x column matrix, one cell per value plus a colour bar, accepting either a wide table (first column = row labels, the rest = samples) or the long form (columns.row/column/value), with scale row_zscore|log2 as an explicitly-reported DISPLAY transform. The result carries the computed statistics (medians, quartiles, outliers, bin counts, axis ranges, significance counts, matrix extent), so quote THOSE instead of estimating values off the picture.
-- Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_sequence_logo (draws the same alignment as a sequence logo SVG — pass the molbio_msa_align output rows as the alignment argument; letters are sized by per-position information content), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_batch_analyze (run one summary/ORF/enzyme analysis over every matching FASTA/FASTQ/GenBank/.dna file in a directory and write one CSV/TSV table), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
+- Sequences & files: molbio_align (local alignment with a readable match line), molbio_msa_align (progressive multiple sequence alignment — pass an array of sequences or a workspace FASTA), molbio_conservation (consensus + per-column identity/conservation + variable positions; accepts aligned rows or raw sequences it aligns first), molbio_sequence_logo (draws the same alignment as a sequence logo SVG — pass the molbio_msa_align output rows as the alignment argument; letters are sized by per-position information content), molbio_fasta_fastq (FASTA/FASTQ stats/extract/convert/QC on workspace files), molbio_contamination_screen (embedded short vector/adapter signatures, both strands, exact or 0-2 mismatches — a short-signature screen, not BLAST), molbio_batch_analyze (run one summary/ORF/enzyme analysis over every matching FASTA/FASTQ/GenBank/.dna file in a directory and write one CSV/TSV table), molbio_extract_region (pull a CDS/promoter/region from a plasmid file by feature label or coordinates).
 - CRISPR: molbio_grna_design (family-aware guide RNAs over a sequence or plasmid file: cas_family spcas9/sacas9/cas12a/cas13a/cas13b/cas13d selects the PAM side, crRNA length, seed and target type — Cas12a uses a 5' TTTV PAM and 23 nt crRNA; Cas13 targets RNA and reports a PFS preference rather than a PAM. Both strands are scanned for DNA families, the sense strand by default for Cas13; guides are filtered on GC/poly-T/self-complementarity and ranked, with a mismatch-tolerant off-target search over the same sequence — reaching a whole genome simply means passing it as the target). Pass the top candidates on for ordering with save_path (CSV) or map_path (SVG map); the ranking is a heuristic and says so, so present it as candidate ranking, never as a validated efficiency prediction.
 - Map extras: pass gc_skew: true for the GC skew ring, show_unique_cutters: true to mark single-cutting enzymes on the map.
 - Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — needs web fetch; an NCBI key comes from the api_key argument, the credential store's NCBI_API_KEY, or the environment), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
-- Bench analysis (v19): molbio_fastq_qc (read-level QC for a FASTQ file: per-base quality with quartiles, per-read quality, base content, GC distribution, length, exact duplication, over-represented sequences, adapter screen, plus a report SVG — use it for "is this run good"), molbio_codon_usage (CAI/RSCU/Nc/GC3, rare-codon list and CDS CpG against E. coli/yeast/human — use it for "will this gene express"; it explains, molbio_codon_optimize rewrites), molbio_phylogenetic_tree (distance method: p-distance/JC/K2P/Tamura-Nei, UPGMA or neighbour-joining, bootstrap support, consensus, Newick file and an SVG tree — it is NOT a maximum-likelihood or Bayesian analysis, and bootstrap percentages are not p-values), molbio_pcr_simulate (where a primer pair amplifies: product sizes and coordinates on both strands, mismatch detail, the 3'-end exact-match requirement, circular templates, screening other templates, and an expected gel — use it for "what band will I see"), molbio_gc_composition (sliding-window GC, CpG islands under the Gardiner-Garden or Takai criteria, GC/AT skew with the cumulative-skew origin/terminus indication, dinucleotide obs/exp, entropy, complexity, N50/L50, plus a figure — use it for "is this a promoter or an origin").
+- Bench analysis (v19): molbio_fastq_qc (read-level QC for a FASTQ file: per-base quality with quartiles, per-read quality, base content, GC distribution, length, exact duplication, over-represented sequences, adapter screen, plus a report SVG — use it for "is this run good"), molbio_codon_usage (CAI/RSCU/Nc/GC3, rare-codon list and CDS CpG against E. coli/yeast/human — use it for "will this gene express"; it explains, molbio_codon_optimize rewrites), molbio_phylogenetic_tree (distance method: p-distance/JC/K2P/Tamura-Nei, UPGMA or neighbour-joining, bootstrap support, consensus, Newick file and an SVG tree — it is NOT a maximum-likelihood or Bayesian analysis, and bootstrap percentages are not p-values), molbio_pcr_simulate (where a primer pair amplifies: product sizes and coordinates on both strands, mismatch detail, the 3'-end exact-match requirement, circular templates, screening other templates, and an expected gel — use it for "what band will I see"), molbio_gc_composition (sliding-window GC, CpG islands under the Gardiner-Garden or Takai criteria, GC/AT skew with the cumulative-skew origin/terminus indication, dinucleotide obs/exp, entropy, complexity, N50/L50, plus a figure — use it for "is this a promoter or an origin"), molbio_fastq_trim (trim low-quality 3' tails, exact adapters/primers, poly-G/poly-A, then filter by length/N and write FASTQ/FASTA — not a paired-end merger).
 - Literature: molbio_pubmed_search — with an NCBI API key (api_key argument, the credential store under NCBI_API_KEY / MOLBIO_NCBI_API_KEY, or the environment) it uses the official PubMed E-utilities API and returns PMIDs, titles, journal/year, authors and DOI; without a key it falls back to the harness web search. The reading library is molbio_paper_add / molbio_paper_list / molbio_paper_update / molbio_paper_remove (papers.json in the workspace).
 
 Cloning workflow rules (follow them to avoid slow re-derivation):
@@ -7865,6 +8109,8 @@ export function apply(ctx) {
     fastaFastqTool(ctx),
     batchAnalyzeTool(ctx),
     fastqQcTool(ctx),
+    contaminationScreenTool(ctx),
+    fastqTrimTool(ctx),
     codonUsageTool,
     phylogeneticTreeTool(ctx),
     pcrSimulateTool(ctx),

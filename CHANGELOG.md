@@ -10,6 +10,60 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.24.0] — 2026-11-05（载体/接头污染筛查；FASTQ 修剪；接头表静默错修复）
+
+**工具数 62 → 64，benchmark 63 → 65 题（64/64 覆盖）。** 两块工作都来自候选池 survey：
+#11 载体/接头污染筛查、#12 FASTQ 修剪/过滤；同时修掉 FASTQ QC 接头表里一个已有的静默错。
+面板包 `0.1.8 → 0.1.9`：客户端产物因 `seqio.mjs` 新增 `toFastq` 而改变，面板行为未变。
+
+### 1. `molbio_contamination_screen`（survey #11）
+
+- 内置**短签名**表：pUC/pBR322 ori、pUC19 lacZ/M13、pUC/pBR322 bla（AmpR）、pET T7
+  promoter/terminator、pcDNA CMV/BGH、Gateway attB1/attB2；接头复用
+  Illumina Universal/Small RNA、Nextera、polyA/polyG。
+- 输入单条序列或 FASTA/FASTQ；**双链**、默认 exact，`max_mismatches` 0–2 走
+  seed-and-verify（不扫描每个窗口）；报告每个签名的 reads 数、示例位置/链/错配。
+- 明确写"短签名筛查，不是 BLAST/全库比对；未命中不等于干净"。
+- **顺带修的静默错**：原 `fastq-qc.mjs` 里的 Illumina Small RNA 5' 是 RNA 序列
+  （`GUUCAG…`，含 U），而 `adapterContent` 直接去 DNA reads 里 `indexOf`；正向分子
+  永远匹配不上，只有反向互补能命中。现在表在 `contamination.mjs` 里以 DNA 形式定义
+  （U→T），`fastq-qc` 从那里导入并再导出；smoke 用"正向 + 反向互补"两条 read 断言两者都命中。
+
+### 2. `molbio_fastq_trim`（survey #12）
+
+按固定顺序执行：5' 引物（精确，只在读首）→ 3' 接头（精确，切到接头前）→ 3' 滑窗质量
+（窗口均值低于阈值时向左收）→ poly-G/poly-A 尾 → 最小长度/N 比例过滤；支持
+Phred+33/+64，写出 FASTQ 或 FASTA，返回 before/after reads/bases、逐阶段 trim 数、
+drop 原因与写入路径。
+
+- 质量字符原样保留；`toFastq` 写四行记录，index 与 `parseFastq` 往返。
+- **不做** paired-end overlap merge、cutadapt 式 semiglobal adapter alignment、UMI；
+  这些在描述与 README 里写明，不假装完成。
+- 测试钉住：每条 read 的修剪后长度、poly-G 边界、adapter 位置、min_length 丢弃、
+  Phred+64、FASTQ round-trip 与错误路径。
+
+### 3. 计数、产物与测试
+
+- `package.json` 0.23.0 → **0.24.0**；`files` 加入两个新模块。
+- 面板包 0.1.8 → **0.1.9**；两个 `lib/client.js` 重新构建（`seqio.mjs` 新增
+  `toFastq` 进入浏览器半的模块图）。
+- 工具注册 62 → **64**；benchmark 63 → **65** 题，覆盖 **64/64**；预设描述、
+  `agent.cordis.yml`、README、maintainer、rules、workflow、roadmap、survey 状态同步。
+- smoke 覆盖两个新工具的已知值与错误路径，以及 Small RNA 接头双向命中的回归。
+- `npm test` 全绿：smoke 64 工具、benchmark 65 题、覆盖 64/64、`contract` 17/17、
+  `preset-health` 29 行、`release` 13/13、`bench --offline` 65 题全过；
+  `build/client-bundle.mjs --check` 与 `build/preset-patch.mjs --check` 与源一致。
+- **定向真实模型跑分（2026-11-05）**：`contamination-screen` 与 `fastq-trim` 两题 **2/2 通过**，
+  tool selection / arguments / final answer 均 2/2（409,576 tokens，70 s）。只是受影响题目的测量，
+  不是全量 65 题跑分；报告在 `benchmark/reports/20261105-194348-suite.md`（reports/ 不进 git）。
+
+### 4. 未做 / 边界
+
+- 短签名表不是数据库：未命中不能证明样本干净；短签名的假阳性/假阴性必须由使用者判断。
+- FASTQ 修剪不做 paired-end merge、semiglobal adapter alignment、UMI；也不做
+  quality-score recalibration。
+- `molbio_fastq_qc` 仍只读；修剪后的报告需对输出文件再跑一次 QC。
+
 ## [0.23.0] — 2026-10-31（跨内含子引物朝向修复；调用卡；两个轻量工具；DSH 0.2.2-rc.1 适配）
 
 **工具数 60 → 62，benchmark 61 → 63 题（62/62 覆盖）。** 三块工作：修掉路线图 2.0 的遗留

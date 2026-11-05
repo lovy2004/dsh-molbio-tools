@@ -158,6 +158,7 @@ export const NAMED_SEQUENCES = {
   pcr_forward: FIXTURES.CONSTRUCT.slice(100, 120),
   pcr_reverse: reverseComplementOf(FIXTURES.CONSTRUCT.slice(281, 301)),
   gg_vector: FIXTURES.GG_VECTOR,
+  contamination: FIXTURES.CONTAMINATION_SEQUENCE,
   intron_genomic: FIXTURES.INTRON_GENOMIC,
   gg_insert_1: FIXTURES.GG_INSERTS[0],
   gg_insert_2: FIXTURES.GG_INSERTS[1],

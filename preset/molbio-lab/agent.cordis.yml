@@ -17,7 +17,7 @@
 #
 # Edit THIS file, then run `node build/preset-patch.mjs`.
 #
-# NOTE: the mode is the ONLY place these 62 tools load. The same bundle patch's
+# NOTE: the mode is the ONLY place these 64 tools load. The same bundle patch's
 # other insert (`molbio-client` → `./host.mjs`) deliberately registers nothing —
 # registering the tool at the host level as well would put it in every session
 # and is not what this package is for.
@@ -207,7 +207,7 @@
   name: '@deepseek-ai/dsh-plugin-market/tools'
   disabled: true
 
-# dsh-molbio-tools: molecular-biology toolset (62 tools across sequence
+# dsh-molbio-tools: molecular-biology toolset (64 tools across sequence
 # analysis, primers (incl. TaqMan probes and multiplex compatibility),
 # in-silico PCR, cloning (incl. Golden Gate), enzyme catalog, methylation-aware
 # and double digests, plasmids, Sanger verification, proteins (incl. helical

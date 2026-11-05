@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.24.0 | — | **数据卫生版**：新增 `molbio_contamination_screen`（内置载体/接头短签名，双链、0–2 错配）与 `molbio_fastq_trim`（质量/接头/引物/poly/N/长度，写 FASTQ/FASTA）；修 FASTQ QC 接头表 Small RNA 5' 的 RNA→DNA 静默错 | 62 → 64 |
 | 0.23.0 | — | **2.0 遗留修复 + 2.9a 调用卡 + 两个候选池工具**：跨内含子引物报告真实反向分子（F 在 R 上游）、logo/gRNA 调用卡、`molbio_protein_charge`、`molbio_dotplot`；同版完成 **DSH 0.2.2-rc.1 适配**（删掉上游已移除的 `list-agents` 子路径行、subagent 模型选择改用新键、守卫补上 specifier 解析） | 60 → 62 |
 | 0.22.2 | — | **DSH 0.2.1-rc.5 适配**：基线 rc.3 → rc.5（上游 standard 逐字节未变）；contract 声明守卫兼容桌面版裁掉 `lib/types` 的打包形态（+突变自检）；engines.node 与 CI 降到 24 | 60 |
 | 0.22.1 | — | **PubMed key 改走 DSH 凭据库**：解析顺序 `api_key` → 凭据库 → 环境变量；无凭据库时行为同 0.22.0 | 60 |
@@ -47,6 +48,29 @@
 | — | v12–v14 | Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view | — |
 
 ---
+
+## v0.24.0（2026-11-05，包 0.24.0）
+
+**三条教训，都关于“表/边界看起来对、实际不对”。**
+
+**(1) 接头表是 RNA，reads 是 DNA。** `fastq-qc.mjs` 的 Illumina Small RNA 5' 条目一直是
+`GUUCAG…`（RNA，含 U），而 `adapterContent` 直接拿它去 DNA reads 里做 `indexOf`。正向分子
+永远匹配不上，只有它的反向互补能命中，所以旧测试/使用中会看到“接头只报一半”。这不是算法错，
+是**数据表示**错：现在表放在 `contamination.mjs` 并以 DNA 形式定义（U→T），`fastq-qc` 只是
+导入/再导出；smoke 用正向与反向互补两条 read 断言两者都命中。
+
+**(2) 短签名筛查必须把“不是数据库”写进输出。** 内置表能回答“有没有 pUC/pET/attB/Illumina
+接头”，但不能回答“有没有未知载体”。描述、README 与 render 都写明：命中是线索，**未命中
+不等于干净**；默认 exact，`max_mismatches` 才启用 seed-and-verify（不扫描每个窗口）。
+
+**(3) 修剪工具的价值在“顺序与边界”，不在旋钮数量。** `molbio_fastq_trim` 固定 5' 引物 →
+3' 接头 → 3' 质量尾 → poly 尾 → 长度/N 的顺序，并把每个阶段的计数与条件回显在 `criteria` 里。
+不做 paired-end merge、semiglobal adapter alignment、UMI；这些另开工具比塞进一个“全能”工具
+更诚实。
+
+**顺带记录**：`seqio.mjs` 新增 `toFastq` 进了浏览器半的模块图，所以 0.24.0 虽然不改面板行为，
+仍重建了两个 `lib/client.js` 并把面板包 `0.1.8 → 0.1.9`；不 bump 会在发布时用同版本号发不同字节。
+定向模型跑分覆盖 `contamination-screen` 与 `fastq-trim`，两题 2/2（409,576 tokens，70 s；详见 CHANGELOG）。
 
 ## v0.23.0（2026-10-31，包 0.23.0）
 

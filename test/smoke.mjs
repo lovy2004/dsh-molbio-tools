@@ -3477,6 +3477,22 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   assert.equal(adapterUncapped.adapter.per_base_percent[23], 12.5, 'through its last base at position 24');
   assert.equal(adapterUncapped.adapter.per_base_percent[24], 0, 'and stops there');
 
+  // 6b. The Small RNA 5' entry is documented as RNA; the table is DNA-normalized
+  // so BOTH the forward molecule and its reverse complement are detectable in
+  // cDNA reads. Before the fix only one of these two reads matched.
+  const smallRna = 'GTTCAGAGTTCTACAGTCCGACGATC';
+  const smallRnaFastq = [
+    '@rna_f', 'ACGT' + smallRna + 'ACGT', '+', 'I'.repeat(8 + smallRna.length),
+    '@rna_r', 'ACGT' + reverseComplementOf(smallRna) + 'ACGT', '+', 'I'.repeat(8 + smallRna.length),
+    '',
+  ].join('\n');
+  const qcRna = await run('molbio_fastq_qc', { fastq: smallRnaFastq, adapter_scan_reads: 10, max_plot_bases: 100 });
+  assert.deepEqual(
+    qcRna.adapter.hits.map((hit) => [hit.name, hit.reads, hit.percent]),
+    [["Illumina Small RNA 5'", 2, 100]],
+    'the DNA-normalized Small RNA adapter matches the forward and reverse-complement reads',
+  );
+
   // 7. Over-representation names the threshold that produced it — and on a
   //    sample this small that threshold legitimately yields nothing, because
   //    the bar is max(20 reads, 0.1% of the sample).
@@ -4324,6 +4340,128 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   await assert.rejects(() => run('molbio_dotplot', { sequence, word: 13 }), /word/);
   await assert.rejects(() => run('molbio_dotplot', { sequence: 'ACGTACGT', word: 8 }), /at least/);
   await assert.rejects(() => run('molbio_dotplot', { sequence, mode: 'diagonal' }), /must be one of/);
+}
+
+
+// ── 0.24.0: contamination screening + FASTQ trimming ─────────────────────────
+{
+  // Two known embedded signatures: a pUC/pBR322 origin fragment at the start and
+  // the Illumina Universal adapter at the end. The middle is a neutral repeat.
+  const contaminated = 'GTTTGCCGGATCAAGAGCTACCAACTCTTT' + 'ACGT'.repeat(20) + 'AGATCGGAAGAG';
+  const screen = await run('molbio_contamination_screen', { sequence: contaminated });
+  assert.equal(screen.input_type, 'sequence');
+  assert.equal(screen.total_entries, 1);
+  assert.equal(screen.hit_count, 2);
+  assert.deepEqual(screen.hits.map((hit) => hit.name), ['Illumina Universal', 'pUC/pBR322 origin']);
+  const pucHit = screen.hits.find((hit) => hit.name === 'pUC/pBR322 origin');
+  assert.deepEqual(
+    [pucHit.kind, pucHit.category, pucHit.example.start, pucHit.example.end, pucHit.example.strand, pucHit.best_mismatches],
+    ['vector', 'origin', 1, 30, '+', 0],
+  );
+  const adapterHit = screen.hits.find((hit) => hit.name === 'Illumina Universal');
+  assert.deepEqual([adapterHit.example.start, adapterHit.example.end, adapterHit.example.strand], [111, 122, '+']);
+
+  // A reverse-strand hit is reported on the forward coordinate system.
+  const t7 = 'TAATACGACTCACTATAGGG';
+  const reverse = await run('molbio_contamination_screen', { sequence: 'ACGT'.repeat(10) + reverseComplementOf(t7) });
+  const t7Hit = reverse.hits.find((hit) => hit.name === 'pET T7 promoter');
+  assert.equal(t7Hit.example.strand, '-');
+  assert.equal(t7Hit.example.start, 41);
+
+  // One mismatch is invisible at max_mismatches 0 and found at 1. The mutated
+  // pUC signature still leaves the adapter hit in place.
+  const mutated = contaminated.replace('GTTTGCCGGATCAAGAGCTACCAACTCTTT', 'GTTTGCCGGATCAAGAGCTACCAACTCTTA');
+  const exact = await run('molbio_contamination_screen', { sequence: mutated });
+  assert.equal(exact.hits.some((hit) => hit.name === 'pUC/pBR322 origin'), false);
+  const loose = await run('molbio_contamination_screen', { sequence: mutated, max_mismatches: 1 });
+  const loosePuc = loose.hits.find((hit) => hit.name === 'pUC/pBR322 origin');
+  assert.equal(loosePuc.best_mismatches, 1);
+  assert.equal(loosePuc.example.mismatches, 1);
+
+  // FASTA/FASTQ inputs are scanned entry by entry, and max_reads caps the work.
+  memFs.files.set(at('contam.fa'), '>a\n' + contaminated + '\n');
+  const fromFasta = await run('molbio_contamination_screen', { path: at('contam.fa') });
+  assert.equal(fromFasta.input_type, 'fasta');
+  assert.equal(fromFasta.scanned_entries, 1);
+  memFs.files.set(at('contam.fq'), '@a\n' + contaminated + '\n+\n' + 'I'.repeat(contaminated.length) + '\n');
+  const fromFastq = await run('molbio_contamination_screen', { path: at('contam.fq') });
+  assert.equal(fromFastq.input_type, 'fastq');
+  assert.equal(fromFastq.hits.length, 2);
+  const capped = await run('molbio_contamination_screen', { path: at('contam.fa'), max_reads: 1 });
+  assert.equal(capped.scanned_entries, 1);
+  assert.equal(capped.truncated, false);
+
+  await assert.rejects(() => run('molbio_contamination_screen', { sequence: contaminated, path: at('contam.fa') }), /exactly one/);
+  await assert.rejects(() => run('molbio_contamination_screen', {}), /exactly one/);
+  await assert.rejects(() => run('molbio_contamination_screen', { sequence: contaminated, kinds: 'plasmid' }), /must be one of/);
+
+  // ── FASTQ trim: known per-read outcomes ─────────────────────────────────
+  const trimReadsInput = [
+    '@r1', 'ACGT'.repeat(10), '+', 'I'.repeat(30) + '!'.repeat(10),
+    '@r2', 'ACGT'.repeat(7) + 'AC' + 'AGATCGGAAGAG' + 'TTTTT', '+', 'I'.repeat(47),
+    '@r3', 'ACGT'.repeat(5) + 'G'.repeat(10), '+', 'I'.repeat(30),
+    '@r4', 'ACGT'.repeat(2) + 'AC', '+', 'I'.repeat(10),
+    '',
+  ].join('\n');
+  memFs.files.set(at('trim-in.fq'), trimReadsInput);
+  const trim = await run('molbio_fastq_trim', {
+    path: at('trim-in.fq'),
+    output_path: at('trim-out.fq'),
+    min_quality: 30,
+    quality_window: 3,
+    poly_g: true,
+    adapter: 'AGATCGGAAGAG',
+    min_length: 20,
+  });
+  assert.equal(trim.reads_in, 4);
+  assert.equal(trim.reads_out, 3);
+  assert.equal(trim.bases_in, 127);
+  assert.equal(trim.bases_out, 80);
+  assert.equal(trim.trimmed_reads, 3);
+  assert.equal(trim.dropped_reads, 1);
+  assert.deepEqual(trim.trim_counts, { quality: 1, adapter: 1, poly_g: 1, poly_a: 0, primer: 0 });
+  assert.deepEqual(trim.drop_counts, { length: 1, n: 0 });
+  assert.equal(trim.output_format, 'fastq');
+  assert.equal(trim.saved_to, at('trim-out.fq'));
+  const trimmedText = memFs.files.get(at('trim-out.fq'));
+  assert.equal(trimmedText.split('\n').filter((line) => line.startsWith('@')).length, 3);
+  const trimmedLines = trimmedText.trimEnd().split('\n');
+  assert.equal(trimmedLines.length, 12, 'three four-line FASTQ records');
+  for (let index = 0; index < trimmedLines.length; index += 4) {
+    assert.equal(trimmedLines[index + 2], '+');
+    assert.equal(trimmedLines[index + 1].length, trimmedLines[index + 3].length, 'quality length follows the trimmed sequence');
+  }
+  assert.ok(trimmedLines.includes('ACGTACGTACGTACGTACGT'), 'r3 lost exactly its 10-base poly-G tail');
+
+  const fastaTrim = await run('molbio_fastq_trim', {
+    path: at('trim-in.fq'),
+    output_path: at('trim-out.fa'),
+    output_format: 'fasta',
+    min_quality: 30,
+    quality_window: 3,
+    poly_g: true,
+    adapter: 'AGATCGGAAGAG',
+    min_length: 20,
+  });
+  assert.equal(fastaTrim.output_format, 'fasta');
+  assert.ok(memFs.files.get(at('trim-out.fa')).startsWith('>r1\n'));
+
+  // Phred+64: 'h' is Q40 under that encoding; a high-quality read survives.
+  memFs.files.set(at('trim64.fq'), '@p64\nACGTACGTACGT\n+\nhhhhhhhhhhhh\n');
+  const phred64 = await run('molbio_fastq_trim', {
+    path: at('trim64.fq'),
+    output_path: at('trim64-out.fq'),
+    phred: 64,
+    min_quality: 30,
+    quality_window: 3,
+  });
+  assert.equal(phred64.reads_out, 1);
+  assert.equal(phred64.trim_counts.quality, 0);
+
+  await assert.rejects(() => run('molbio_fastq_trim', { path: at('trim-in.fq') }), /output_path/);
+  await assert.rejects(() => run('molbio_fastq_trim', { path: at('seqs.fa'), output_path: at('x.fq') }), /FASTA/);
+  await assert.rejects(() => run('molbio_fastq_trim', { path: at('trim-in.fq'), output_path: at('x.fq'), min_quality: 61 }), /min_quality/);
+  await assert.rejects(() => run('molbio_fastq_trim', { path: at('trim-in.fq'), output_path: at('x.fq'), adapter: 'ACGTX' }), /invalid/);
 }
 
 // ── plugin surface ──────────────────────────────────────────────────────────

@@ -74,6 +74,7 @@ const FILE_SETUPS = {
   'chart-volcano': { 'de.csv': FIXTURES.DE_CSV },
   'chart-heatmap': { 'expression.tsv': FIXTURES.HEATMAP_TSV },
   'batch-analysis': { 'pUC118.gb': GENBANK_TEXT },
+  'fastq-trim': { 'reads.fq': FIXTURES.TRIM_FASTQ_TEXT },
 };
 
 /**
@@ -257,6 +258,12 @@ export function invocationsFor(task) {
     ],
     dotplot: () => [
       { tool: 'molbio_dotplot', args: { sequence: FIXTURES.DOTPLOT_SEQUENCE, word: 5, output_path: at('dot.svg') } },
+    ],
+    'contamination-screen': () => [
+      { tool: 'molbio_contamination_screen', args: { sequence: FIXTURES.CONTAMINATION_SEQUENCE } },
+    ],
+    'fastq-trim': () => [
+      { tool: 'molbio_fastq_trim', args: { path: at('reads.fq'), output_path: at('trimmed.fq'), min_quality: 30, quality_window: 3, poly_g: true, adapter: 'AGATCGGAAGAG', min_length: 20 } },
     ],
 
     // bench analysis

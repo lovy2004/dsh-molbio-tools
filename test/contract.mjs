@@ -439,7 +439,7 @@ check('the published tarball carries the client half and exactly one plugin mani
   // SUBMISSION_PACKAGE_AMBIGUOUS, plus a duplicate 427 KB client bundle in every
   // download. The panel does not disappear for npm users: the root package's own
   // `lib/client.js` already carries it (the panel-only package exists for people
-  // who want the tab without the 62 tools).
+  // who want the tab without the 64 tools).
   assert.ok(
     !files.includes('packages'),
     'the root tarball must not embed packages/molbio-panel: a second `dsh` manifest inside one package is an ambiguous submission, and the panel is published separately',
