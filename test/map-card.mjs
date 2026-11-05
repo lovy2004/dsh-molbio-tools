@@ -344,6 +344,144 @@ assert.ok(unparseableText.includes('could not be parsed as SVG'), 'unparseable m
 assert.ok(unparseableText.includes('pCARD · 206 bp'), 'and the header is still there, above the explanation');
 unparseable.unmount();
 
+// ── figure cards: sequence logo and gRNA design ─────────────────────────────
+
+/** Deterministic pseudo-random DNA for the gRNA fixture. */
+function dnaFixture(n, seed) {
+  let s = seed;
+  const bases = 'ACGT';
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    s = (s * 1103515245 + 12345) % 2147483648;
+    out += bases[(s >> 16) % 4];
+  }
+  return out;
+}
+
+const logoTool = registered.find((entry) => entry.name === 'molbio_sequence_logo');
+const grnaTool = registered.find((entry) => entry.name === 'molbio_grna_design');
+assert.ok(logoTool !== undefined && grnaTool !== undefined, 'both figure tools register');
+
+const logoArgs = { sequences: ['ACGTACGTACGTACGT', 'ACGTACGTACGTACGA', 'ACGTACGTTCGTACGT'] };
+const logoValue = await logoTool.execute(logoArgs, exec);
+const logoMeta = logoTool.output.presentationMeta(logoArgs, logoValue);
+assert.equal(logoMeta.kind, 'molbio-figure');
+assert.equal(logoMeta.figure, 'logo');
+assert.equal(logoMeta.svg_path, logoValue.svg_path);
+assert.ok(typeof logoMeta.svg === 'string' && logoMeta.svg.startsWith('<svg'), 'the logo card meta carries the markup');
+assert.equal(logoMeta.svg_bytes, logoMeta.svg.length);
+assert.match(logoMeta.summary, /3 sequences × 16 columns/, 'the summary states the alignment size');
+
+const logoView = panelCore.figureCardView(logoMeta);
+assert.equal(logoView.kind, 'figure', 'the card resolves the logo projection');
+assert.equal(logoView.svg, logoMeta.svg);
+assert.equal(logoView.svgPath, logoValue.svg_path);
+assert.equal(panelCore.figureCardSummary(logoView), logoMeta.summary);
+
+const grnaArgs = {
+  sequence: dnaFixture(320, 7),
+  map_path: at('grna-map.svg'),
+  save_path: at('grna-order.csv'),
+  max_guides: 5,
+};
+const grnaValue = await grnaTool.execute(grnaArgs, exec);
+assert.ok(grnaValue.guides.length > 0, 'the gRNA fixture yields at least one guide');
+const grnaMeta = grnaTool.output.presentationMeta(grnaArgs, grnaValue);
+assert.equal(grnaMeta.kind, 'molbio-figure');
+assert.equal(grnaMeta.figure, 'grna');
+assert.equal(grnaMeta.svg_path, grnaValue.map_path);
+assert.ok(typeof grnaMeta.svg === 'string' && grnaMeta.svg.startsWith('<svg'), 'the gRNA card carries the map markup');
+assert.ok(grnaMeta.guides.length >= 1 && grnaMeta.guides.length <= 5, 'the card carries at most five guide rows');
+assert.equal(grnaMeta.guides[0].sequence, grnaValue.guides[0].sequence);
+assert.equal(grnaMeta.csv_path, grnaValue.saved_to);
+assert.match(grnaMeta.summary, /SpCas9/, 'the summary names the Cas family');
+
+const grnaView = panelCore.figureCardView(grnaMeta);
+assert.equal(grnaView.kind, 'figure');
+assert.equal(grnaView.guides.length, grnaMeta.guides.length);
+assert.equal(grnaView.guides[0].offTargets, grnaValue.guides[0].off_target_count ?? 0);
+
+// A gRNA call WITHOUT a map still gets the ranked-guide table, with an
+// explanation for the absent picture rather than a blank card.
+const plainGrnaValue = await grnaTool.execute({ sequence: dnaFixture(320, 7), max_guides: 5 }, exec);
+const plainMeta = grnaTool.output.presentationMeta({ sequence: dnaFixture(320, 7) }, plainGrnaValue);
+assert.equal(plainMeta.svg_missing, true);
+const plainView = panelCore.figureCardView(plainMeta);
+assert.equal(plainView.kind, 'notice');
+assert.match(plainView.message, /No picture was requested/i);
+assert.ok(plainView.guides.length > 0, 'the table survives the missing picture');
+
+// ── figure-card fallbacks: never throw inside a transcript ──────────────────
+
+assert.equal(panelCore.figureCardView({ kind: 'molbio-map' }).kind, 'notice', 'a map meta is not a figure');
+assert.equal(panelCore.figureCardView(undefined).kind, 'notice');
+assert.equal(panelCore.figureCardView(null).kind, 'notice');
+assert.equal(panelCore.figureCardView('nonsense').kind, 'notice');
+assert.equal(panelCore.figureCardView([]).kind, 'notice');
+assert.equal(panelCore.figureCardView({ kind: 'molbio-figure', figure: 'unknown' }).kind, 'notice');
+const oversizedFigure = panelCore.figureCardView({
+  kind: 'molbio-figure',
+  figure: 'logo',
+  summary: 'Sequence logo',
+  svg_omitted: true,
+  svg_bytes: 900_000,
+  svg_path: at('big-logo.svg'),
+});
+assert.equal(oversizedFigure.kind, 'notice');
+assert.match(oversizedFigure.message, /too large/i);
+assert.equal(oversizedFigure.svgPath, at('big-logo.svg'));
+assert.equal(panelCore.figureCardView({ kind: 'molbio-figure', figure: 'logo', svg: '<div>hi</div>' }).kind, 'notice');
+const sanitized = panelCore.figureCardView({
+  kind: 'molbio-figure',
+  figure: 'grna',
+  summary: 's',
+  svg_missing: true,
+  guides: [null, 7, { sequence: 42 }, { sequence: 'ACGT', rank: 'x', start: 1.5 }, { sequence: 'ACGT', rank: 1 }, { sequence: 'ACGT', rank: 2 }, { sequence: 'ACGT', rank: 3 }, { sequence: 'ACGT', rank: 4 }],
+});
+assert.equal(sanitized.guides.length, 5, 'malformed rows are dropped and the list is capped at five');
+assert.equal(sanitized.guides[0].rank, 0, 'a non-integer rank degrades to 0 rather than being trusted');
+
+// ── the figure component: logo and gRNA render through the same card ────────
+
+const FigureCard = slots.registrations.find(
+  (entry) => entry.registration.name === 'tool.call.toolview' && entry.registration.key === 'molbio_sequence_logo',
+).component;
+assert.equal(typeof FigureCard, 'function', 'the figure card is registered for molbio_sequence_logo');
+
+globalThis.__molbioTestHooks = mount(FigureCard);
+const logoCard = globalThis.__molbioTestHooks;
+logoCard.setProps({ block: { kind: 'tool-result', callId: 'l1', isError: false, meta: logoMeta, content: [{ type: 'text', text: 'logo saved' }] }, inspect: undefined });
+await logoCard.render();
+const logoText = texts(logoCard.tree).join('\n');
+assert.ok(logoText.includes('Sequence logo · 3 sequences × 16 columns'), 'the logo card header summarises the alignment');
+assert.ok(logoText.includes(logoValue.svg_path), 'the logo card names the written file');
+const logoHosts = (function find(node, out = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) find(child, out);
+    return out;
+  }
+  if (node !== null && typeof node === 'object' && node.props !== undefined) {
+    if (node.props.ref !== undefined && node.props.ref !== null) out.push(node);
+    find(node.props.children, out);
+  }
+  return out;
+})(logoCard.tree);
+assert.equal(logoHosts.length, 1, 'the logo card mounts one SVG host');
+assert.equal(logoHosts[0].props.ref.current.children.length, 1, 'and appended the parsed logo into it');
+logoCard.unmount();
+
+globalThis.__molbioTestHooks = mount(FigureCard);
+const grnaCard = globalThis.__molbioTestHooks;
+grnaCard.setProps({ block: { kind: 'tool-result', callId: 'g1', isError: false, meta: grnaMeta, content: [{ type: 'text', text: 'guides designed' }] }, inspect: undefined });
+await grnaCard.render();
+const grnaText = texts(grnaCard.tree).join('\n');
+assert.ok(grnaText.includes('SpCas9'), 'the gRNA card header names the family');
+assert.ok(grnaText.includes(grnaValue.guides[0].sequence), 'the gRNA card lists the top guide');
+assert.ok(grnaText.includes('Off-targets'), 'the gRNA card shows the guide table header');
+assert.ok(grnaText.includes(grnaValue.map_path), 'and the written map path');
+assert.ok(grnaText.includes(grnaValue.saved_to), 'and the ordering CSV path');
+grnaCard.unmount();
+
 await rm(shimPath, { force: true });
 await rm(entryPath, { force: true });
-console.log('map card checks passed (host projection -> card view -> rendered SVG)');
+console.log('tool card checks passed (map + logo/gRNA: host projection -> card view -> rendered SVG)');

@@ -144,6 +144,8 @@ assert.deepEqual(effects, [
   'molbio panel: papers tab title',
   'molbio panel: molbio_plasmid_map card',
   'molbio panel: molbio_plasmid_map_file card',
+  'molbio panel: molbio_sequence_logo card',
+  'molbio panel: molbio_grna_design card',
   'molbio panel: NCBI key section gate',
   'molbio panel: NCBI key section',
 ]);
@@ -186,9 +188,9 @@ assert.deepEqual(
 assert.equal(slots.registrations.length, 4, 'both tab bodies and titles land as soon as their seat exists');
 slots.declare('tool.call.toolview');
 
-// Body + title register in the keyed seats under each type's id, and the two
-// map tools claim their own `tool.call.toolview` key (an unclaimed key falls
-// back to the generic tool row, so claiming ours is additive).
+// Body + title register in the keyed seats under each type's id; two map tools
+// and two figure tools claim their own `tool.call.toolview` keys (an unclaimed
+// key falls back to the generic tool row, so claiming ours is additive).
 assert.deepEqual(
   slots.registrations.map((entry) => [entry.registration.name, entry.registration.key]),
   [
@@ -198,6 +200,8 @@ assert.deepEqual(
     ['sidebar.right.pane.tab.title', 'dsh-molbio-tools/papers'],
     ['tool.call.toolview', 'molbio_plasmid_map'],
     ['tool.call.toolview', 'molbio_plasmid_map_file'],
+    ['tool.call.toolview', 'molbio_sequence_logo'],
+    ['tool.call.toolview', 'molbio_grna_design'],
   ],
 );
 const claim = (name, key) => slots.registrations.find(
@@ -206,6 +210,9 @@ const claim = (name, key) => slots.registrations.find(
 assert.equal(typeof claim('sidebar.right.pane.tab', 'dsh-molbio-tools').component, 'function', 'the plasmid body is a component');
 assert.equal(typeof claim('sidebar.right.pane.tab', 'dsh-molbio-tools/papers').component, 'function', 'the papers body is a component');
 assert.equal(typeof claim('tool.call.toolview', 'molbio_plasmid_map').component, 'function', 'the map card is a component');
+assert.equal(typeof claim('tool.call.toolview', 'molbio_sequence_logo').component, 'function', 'the logo card is a component');
+assert.equal(claim('tool.call.toolview', 'molbio_sequence_logo').component, claim('tool.call.toolview', 'molbio_grna_design').component, 'the two figure tools share one card component');
+assert.equal(claim('tool.call.toolview', 'molbio_grna_design').registration.inject, undefined, 'the figure card declares no injection');
 for (const key of ['dsh-molbio-tools', 'dsh-molbio-tools/papers']) {
   const face = claim('sidebar.right.pane.tab', key).registration.inject('session-1', {});
   assert.equal(typeof face.remote.workspaceFiles.list, 'function', 'the inject factory hands the body the workspace Remote');
@@ -220,13 +227,13 @@ assert.equal(claim('tool.call.toolview', 'molbio_plasmid_map').registration.inje
 // A re-declaration of the seat (the shell's declaration-epoch rule) re-runs the
 // wait: the previous entries are disposed first, so claims never accumulate.
 slots.declare('tool.call.toolview');
-assert.equal(slots.registrations.length, 6, 're-declaring the seat re-installs both cards instead of duplicating them');
+assert.equal(slots.registrations.length, 8, 're-declaring the seat re-installs all four cards instead of duplicating them');
 
 // The Plugins page's detail seat belongs to the plugin manager. The section
 // lands when that seat is declared, and the component itself decides whether
 // the open subject is this package.
 slots.declare('plugins.detail.section');
-assert.equal(slots.registrations.length, 7, 'the key section lands when the plugin manager declares its seat');
+assert.equal(slots.registrations.length, 9, 'the key section lands when the plugin manager declares its seat');
 const keyClaim = slots.registrations.find((entry) => entry.registration.name === 'plugins.detail.section');
 assert.ok(keyClaim, 'the key section is claimed in plugins.detail.section');
 assert.equal(keyClaim.registration.id, 'molbio-ncbi-key', 'the list seat is addressed by an id of our own');

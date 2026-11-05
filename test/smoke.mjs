@@ -1587,8 +1587,8 @@ function makeTemplate(n, seed = 42) {
 
 {
   // cross-intron primer design (fixture seeds chosen to pass the v12
-  // Primer3-style structural defaults)
-  const e1 = makeTemplate(120, 10);
+  // Primer3-style structural defaults under the corrected orientation)
+  const e1 = makeTemplate(120, 49);
   const e2 = makeTemplate(120, 14);
   const e3 = makeTemplate(120, 34);
   const genomic = e1 + makeTemplate(800, 29) + e2 + makeTemplate(800, 31) + e3;
@@ -1603,15 +1603,26 @@ function makeTemplate(n, seed = 42) {
   });
   assert.ok(out.pairs.length > 0, 'should find junction-spanning pairs');
   const pair = out.pairs[0];
-  assert.ok(pair.forward.junction_left >= 6 && pair.forward.junction_right >= 6);
-  assert.equal(pair.forward.exons.length, 2);
-  assert.equal(Math.abs(Number(pair.forward.exons[1]) - Number(pair.forward.exons[0])), 1);
+  // 0.23.0: the junction is carried by the REVERSE primer (the assay sits 5' of
+  // the junction); forward is upstream and inside one exon. The reverse sequence
+  // is the molecule to order, i.e. the reverse complement of its spliced site.
+  assert.ok(pair.reverse.junction_left >= 6 && pair.reverse.junction_right >= 6);
+  assert.equal(pair.reverse.exons.length, 2);
+  assert.equal(Math.abs(Number(pair.reverse.exons[1]) - Number(pair.reverse.exons[0])), 1);
   assert.ok(pair.genomic_amplicon_length >= 900);
   assert.ok(pair.spliced_amplicon.length >= 80 && pair.spliced_amplicon.length <= 200);
-  assert.ok(pair.reverse.exon !== Number(pair.forward.exons[1]));
+  assert.ok(pair.forward.exon >= 1 && pair.forward.exon < Number(pair.reverse.exons[1]), 'forward sits in an earlier exon than the reverse primer\'s downstream exon');
+  assert.ok(pair.forward.spliced_start < pair.reverse.spliced_start, 'F is upstream of R');
+  assert.equal(pair.forward.spliced_start, pair.spliced_amplicon.start, 'amplicon opens at the forward 5\' end');
+  assert.equal(pair.reverse.spliced_end, pair.spliced_amplicon.end, 'amplicon closes at the reverse 5\' end');
   const spliced = e1 + e2 + e3;
   assert.ok(spliced.includes(pair.forward.sequence), 'forward primer is a spliced-sequence substring');
-  assert.ok(spliced.includes(pair.reverse.sequence), 'reverse primer is a spliced-sequence substring');
+  assert.equal(
+    pair.reverse.sequence,
+    lib.reverseComplement(spliced.slice(pair.reverse.spliced_start - 1, pair.reverse.spliced_end)),
+    'reverse primer is the reverse complement of its spliced site (the molecule to order)',
+  );
+  assert.ok(pair.reverse.spliced_start <= 120 && pair.reverse.spliced_end > 120, 'the reverse primer straddles the exon 1/2 junction');
 }
 
 // ── v12: mismatch tolerance in primer design ────────────────────────────────
@@ -1782,9 +1793,23 @@ function makeTemplate(n, seed = 42) {
     assert.equal(primer.mismatch_count, primer.mismatches.length);
     for (const m of primer.mismatches) {
       assert.equal(m.primer_base, primer.sequence[m.position - 1]);
-      assert.equal(m.template_base, spliced[m.spliced_position - 1], 'spliced position maps to the transcript base');
+      // The perfect-match base is the transcript base for the forward primer and
+      // its COMPLEMENT for the reverse primer (which is reported as the molecule
+      // to order, i.e. the reverse complement of its spliced site).
+      const transcriptBase = spliced[m.spliced_position - 1];
+      assert.equal(m.template_base, isForward ? transcriptBase : lib.complement(transcriptBase), 'template_base is the perfect-match base on this strand');
       assert.equal(m.genomic_position, splicedToGenomic(m.spliced_position, exons), 'genomic position maps consistently');
       assert.ok(m.distance_from_3prime >= 1, 'no terminal-base mismatch in intron mode');
+    }
+    // The reported molecule must equal its spliced site (forward) or that
+    // site's reverse complement (reverse) outside the reported mismatches.
+    const expected = isForward
+      ? spliced.slice(primer.spliced_start - 1, primer.spliced_end)
+      : lib.reverseComplement(spliced.slice(primer.spliced_start - 1, primer.spliced_end));
+    const positions = new Set(primer.mismatches.map((m) => m.position));
+    for (let i = 0; i < expected.length; i++) {
+      if (positions.has(i + 1)) continue;
+      assert.equal(primer.sequence[i], expected[i], 'reported primer equals its site outside the reported mismatches');
     }
   }
 }
@@ -2133,8 +2158,10 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   assert.equal(plain.pairs[0].target_distance, undefined, 'no target_distance without target_position');
   await assert.rejects(() => run('molbio_design_primers', { template, target_position: 601 }), /outside the template/);
   await assert.rejects(() => run('molbio_design_primers', { template, target_penalty: -1 }), /target_penalty/);
-  // cross-intron design reports spliced-coordinate target distances too
-  const e1 = makeTemplate(120, 10);
+  // cross-intron design reports spliced-coordinate target distances too, and
+  // (0.23.0) measures each one from the primer's actual 3' end: the forward's
+  // highest coordinate and the reverse's LOWEST coordinate.
+  const e1 = makeTemplate(120, 49);
   const e2 = makeTemplate(120, 14);
   const e3 = makeTemplate(120, 34);
   const genomic = e1 + makeTemplate(800, 29) + e2 + makeTemplate(800, 31) + e3;
@@ -2143,6 +2170,8 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   assert.ok(intron.pairs.length > 0);
   for (const pair of intron.pairs) {
     assert.equal(pair.target_distance, Math.min(pair.forward.target_distance, pair.reverse.target_distance));
+    assert.equal(pair.forward.target_distance, Math.abs(pair.forward.spliced_end - 150), 'forward distance is from its 3\' end');
+    assert.equal(pair.reverse.target_distance, Math.abs(pair.reverse.spliced_start - 150), 'reverse distance is from its 3\' end');
     assert.ok(pair.forward.target_distance <= 359);
   }
 }
@@ -3323,6 +3352,7 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
     'molbio_grna_design', 'molbio_qpcr_efficiency', 'molbio_plot', 'molbio_virtual_gel',
     'molbio_sequence_logo', 'molbio_helical_wheel', 'molbio_hydropathy_plot',
     'molbio_fastq_qc', 'molbio_phylogenetic_tree', 'molbio_pcr_simulate', 'molbio_gc_composition',
+    'molbio_protein_charge', 'molbio_dotplot',
   ];
   for (const toolName of pictureTools) {
     const tool = toolByName(toolName);
@@ -3330,7 +3360,7 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
     assert.ok(Object.hasOwn(tool.output.schema.properties, 'image'), `${toolName} can report the attached image`);
     assert.ok(Object.hasOwn(tool.output.schema.properties, 'image_note'), `${toolName} can explain a missing image`);
   }
-  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 15, 'exactly the 15 picture tools — the report-only analysis tools are untouched');
+  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 17, 'exactly the 17 picture tools — the report-only analysis tools are untouched');
 
   // 9. Rendering text alone still works (the attachment must not break render).
   const logo = await runWith('molbio_sequence_logo', { alignment: ['ACGTACGT', 'ACGTTCGT'], attach_image: true }, routedExec);
@@ -4185,6 +4215,115 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   await assert.rejects(() => run('molbio_gc_composition', { sequence: '   ' }), /sequence is empty/);
   await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGTACGTAC', criteria: 'emboss' }), /must be one of gardiner, takai/);
   await assert.rejects(() => run('molbio_gc_composition', { sequence: 'ACGTACGTAC', window: 5 }), /window must be an integer of at least 10/);
+}
+
+// ── 0.23.0: protein charge vs pH ───────────────────────────────────────────
+{
+  // KKDD has two positive and two negative side chains plus the termini, so the
+  // two ends of the curve are exactly +3 and -3 (within the 1e-4 sampling
+  // rounding) and the pI is the zero crossing between them.
+  const sequence = 'KKDD';
+  const props = await run('molbio_protein_props', { sequence });
+  const out = await run('molbio_protein_charge', { sequence, output_path: at('charge.svg') });
+  assert.equal(out.length, 4);
+  assert.equal(out.pka_set, 'bjellqvist');
+  assert.equal(out.pka_label, 'Bjellqvist 1993');
+  assert.equal(out.pI, props.pi, 'the default pK set matches molbio_protein_props');
+  assert.equal(out.points.length, 29);
+  assert.equal(out.points[0].ph, 0);
+  assert.equal(out.points[28].ph, 14);
+  assert.ok(Math.abs(out.points[0].charge - 3) < 0.01, 'pH 0: N-terminus + 2 Lys = +3');
+  assert.ok(Math.abs(out.points[28].charge + 3) < 0.01, 'pH 14: C-terminus + 2 Asp = -3');
+  assert.ok(Math.abs(out.charge_at_7_4 + 0.0591) < 0.01);
+  // The pI must lie between the two sampled pH values whose charges bracket 0.
+  let bracketed = false;
+  for (let i = 1; i < out.points.length; i++) {
+    const a = out.points[i - 1];
+    const b = out.points[i];
+    if ((a.charge >= 0 && b.charge <= 0) || (a.charge <= 0 && b.charge >= 0)) {
+      assert.ok(out.pI >= a.ph && out.pI <= b.ph, 'pI is the zero crossing');
+      bracketed = true;
+      break;
+    }
+  }
+  assert.ok(bracketed, 'the sampled curve changes sign');
+  assert.ok(memFs.files.get(at('charge.svg')).includes('<svg'), 'the titration SVG is written');
+
+  // A different pK table is a different answer, and it says which one it used.
+  const emboss = await run('molbio_protein_charge', { sequence, pka_set: 'emboss', output_path: at('charge-emboss.svg') });
+  assert.equal(emboss.pka_set, 'emboss');
+  assert.equal(emboss.pka_label, 'EMBOSS Epk.dat');
+  assert.notEqual(emboss.pI, out.pI, 'the pK set changes the pI, so the set name must travel with it');
+
+  // Errors: range checks in the module, enum check by the argument schema.
+  await assert.rejects(() => run('molbio_protein_charge', { sequence, ph_min: 15 }), /ph_min/);
+  await assert.rejects(() => run('molbio_protein_charge', { sequence, ph_min: 8, ph_max: 7 }), /greater than ph_min/);
+  await assert.rejects(() => run('molbio_protein_charge', { sequence, steps: 1 }), /steps/);
+  await assert.rejects(() => run('molbio_protein_charge', { sequence, pka_set: 'nonsense' }), /must be one of/);
+  await assert.rejects(() => run('molbio_protein_charge', { sequence: 'ACGTX' }), /invalid character/);
+}
+
+// ── 0.23.0: sequence dotplot ────────────────────────────────────────────────
+{
+  // Two 12 bp copies of the same word separated by an 8 bp T stretch: with a
+  // 4-mer word every k-mer in one copy matches the same k-mer in the other.
+  const sequence = 'ACGTACGTACGT' + 'TTTTTTTT' + 'ACGTACGTACGT';
+  const out = await run('molbio_dotplot', { sequence, word: 4, output_path: at('dot.svg') });
+  assert.equal(out.length, 32);
+  assert.equal(out.word, 4);
+  assert.equal(out.mode, 'both');
+  assert.equal(out.direct_matches, 133);
+  assert.equal(out.inverted_matches, 40);
+  assert.equal(out.direct_cells, out.direct_matches, 'this small fixture is under one dot per grid cell');
+  assert.equal(out.truncated, false);
+  assert.equal(out.plot_truncated, false);
+  const dotSvg = memFs.files.get(at('dot.svg'));
+  assert.ok(dotSvg.includes('<svg'), 'the dotplot SVG is written');
+  // Layout guard: the x-axis title and the legend both live BELOW the plot but
+  // inside the panel. The first version put them on/outside the bottom border
+  // (720 px canvas, 628 px square plot); a plain "contains <svg>" check would
+  // pass while the footer was clipped, so assert the vertical budget instead.
+  const dotView = /viewBox="0 0 (\d+) (\d+)"/.exec(dotSvg);
+  assert.ok(dotView !== null, 'the dotplot declares a viewBox');
+  const dotHeight = Number(dotView[2]);
+  const dotTexts = [...dotSvg.matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)]
+    .map((match) => ({ attrs: match[1], text: match[2] }));
+  const yOf = (attrs) => Number(/y="([0-9.]+)"/.exec(attrs)[1]);
+  const xTitle = dotTexts.find((node) => node.text === 'position (bp)' && !node.attrs.includes('transform='));
+  const directLegend = dotTexts.find((node) => node.text === 'direct repeat');
+  assert.ok(xTitle !== undefined, 'the x axis is titled');
+  assert.ok(directLegend !== undefined, 'the direct-repeat legend is drawn');
+  assert.ok(yOf(xTitle.attrs) <= dotHeight - 30, 'the x-axis title is not sitting on the bottom border');
+  assert.ok(yOf(directLegend.attrs) <= dotHeight - 20, 'the legend is inside the canvas');
+  assert.ok(yOf(directLegend.attrs) > yOf(xTitle.attrs), 'the legend sits below the x-axis title, not on top of it');
+
+  // Inverted-only mode does not report direct matches, and an inverted repeat of
+  // the first block shows up as 12 exact 4-mer hits.
+  const inverted = await run('molbio_dotplot', { sequence: 'AAAACCCC' + 'GGGGTTTT', word: 4, mode: 'inverted' });
+  assert.equal(inverted.direct_matches, 0);
+  assert.equal(inverted.inverted_matches, 12);
+  assert.equal(inverted.inverted_cells, 12);
+
+  // Ambiguous k-mers are skipped and counted, never silently matched.
+  const ambiguous = await run('molbio_dotplot', { sequence: 'ACGTNNNNACGTACGT', word: 4 });
+  assert.equal(ambiguous.ambiguous_bases, 7, 'every 4-mer window touching the N run is skipped');
+
+  // The work cap turns a homopolymer into a bounded, explicitly truncated result.
+  const capped = await run('molbio_dotplot', { sequence: 'A'.repeat(600), word: 4 });
+  assert.equal(capped.truncated, true, 'the scan is capped rather than hanging');
+  assert.ok(capped.direct_matches <= 200_000);
+
+  // Determinism: the same input produces the same counts.
+  const again = await run('molbio_dotplot', { sequence, word: 4 });
+  assert.deepEqual(
+    [again.direct_matches, again.inverted_matches, again.direct_cells, again.inverted_cells],
+    [out.direct_matches, out.inverted_matches, out.direct_cells, out.inverted_cells],
+  );
+
+  await assert.rejects(() => run('molbio_dotplot', { sequence, word: 3 }), /word/);
+  await assert.rejects(() => run('molbio_dotplot', { sequence, word: 13 }), /word/);
+  await assert.rejects(() => run('molbio_dotplot', { sequence: 'ACGTACGT', word: 8 }), /at least/);
+  await assert.rejects(() => run('molbio_dotplot', { sequence, mode: 'diagonal' }), /must be one of/);
 }
 
 // ── plugin surface ──────────────────────────────────────────────────────────

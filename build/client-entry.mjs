@@ -36,6 +36,8 @@ import {
   childPath,
   classifyEntry,
   credentialInfo,
+  figureCardSummary,
+  figureCardView,
   isMolbioDetailSubject,
   remoteFailure,
   decodeWorkspaceBytes,
@@ -294,8 +296,10 @@ function papersTitle() {
   return 'Papers';
 }
 
-/** The tool names whose transcript card this package draws. */
+/** The tool names whose transcript card this package draws (plasmid maps). */
 const MAP_TOOL_KEYS = ['molbio_plasmid_map', 'molbio_plasmid_map_file'];
+/** Figure tools: a drawn logo / gRNA map plus (for gRNA) the ranked list. */
+const FIGURE_TOOL_KEYS = ['molbio_sequence_logo', 'molbio_grna_design'];
 
 /**
  * The transcript card for the map tools (`tool.call.toolview`, keyed by tool
@@ -351,6 +355,72 @@ function MolbioMapCard({ block, inspect }) {
     content.push(h('div', { key: 'note', style: styles.cardNote }, view.message));
   }
   if (view.svgPath !== '') content.push(h('div', { key: 'path', style: styles.cardPath }, view.svgPath));
+  if (settled && block.isError === true) {
+    const text = (Array.isArray(block.content) ? block.content : [])
+      .map((item) => (item !== null && typeof item === 'object' && item.type === 'text' ? String(item.text ?? '') : ''))
+      .join('\n')
+      .trim();
+    content.push(h('div', { key: 'err', style: styles.error }, text === '' ? 'The call failed.' : text));
+    if (typeof inspect === 'function') {
+      content.push(h('button', { key: 'inspect', style: styles.cardButton, onClick: () => inspect() }, 'Inspect'));
+    }
+  }
+  return h('div', { style: styles.card }, ...content);
+}
+
+/**
+ * The transcript card for the sequence-logo and gRNA tools. The logo card draws
+ * the logo; the gRNA card draws the map when `map_path` was requested AND lists
+ * the top-ranked guides (a gRNA call without a map still gets the table). Like
+ * the map card it is a pure function of the block, and everything it reads is
+ * validated and bounded by `figureCardView`.
+ */
+function MolbioFigureCard({ block, inspect }) {
+  const settled = block !== null && typeof block === 'object' && block.kind === 'tool-result';
+  const view = figureCardView(settled ? block.meta : undefined);
+  const host = useRef(null);
+  const svg = view.kind === 'figure' ? view.svg : '';
+  const [drawError, setDrawError] = useState(null);
+
+  useEffect(() => {
+    const node = host.current;
+    if (node === null) return;
+    node.replaceChildren();
+    if (svg === '') return;
+    const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    if (parsed.querySelector('parsererror') !== null) {
+      setDrawError('the figure markup could not be parsed as SVG');
+      return;
+    }
+    setDrawError(null);
+    const element = parsed.documentElement;
+    element.setAttribute('style', 'width:100%;height:auto;max-width:640px');
+    node.append(document.importNode(element, true));
+  }, [svg]);
+
+  const content = [h('div', { key: 'head', style: styles.cardHead }, settled ? figureCardSummary(view) : 'Drawing the figure…')];
+  if (view.kind === 'figure') {
+    if (drawError !== null) content.push(h('div', { key: 'drawerr', style: styles.cardNote }, drawError));
+    content.push(h('div', { key: 'svg', ref: host, style: styles.cardSvg }));
+  } else {
+    content.push(h('div', { key: 'note', style: styles.cardNote }, view.message));
+  }
+  if (view.guides.length > 0) {
+    const head = ['#', 'Guide', 'PAM', 'Position', 'Score', 'Off-targets'];
+    const rows = view.guides.map((guide) => h('tr', { key: guide.rank },
+      h('td', { style: styles.td }, String(guide.rank)),
+      h('td', { style: styles.td }, guide.sequence),
+      h('td', { style: styles.td }, guide.pam === '' ? '—' : guide.pam),
+      h('td', { style: styles.td }, `${guide.strand === 'reverse' ? '−' : '+'}${guide.start}-${guide.end}`),
+      h('td', { style: styles.td }, String(guide.score)),
+      h('td', { style: styles.td }, String(guide.offTargets)),
+    ));
+    content.push(h('table', { key: 'guides', style: styles.table },
+      h('thead', null, h('tr', null, ...head.map((label) => h('th', { key: label, style: styles.th }, label)))),
+      h('tbody', null, ...rows)));
+  }
+  if (view.svgPath !== '') content.push(h('div', { key: 'path', style: styles.cardPath }, view.svgPath));
+  if (view.csvPath !== '') content.push(h('div', { key: 'csv', style: styles.cardPath }, view.csvPath));
   if (settled && block.isError === true) {
     const text = (Array.isArray(block.content) ? block.content : [])
       .map((item) => (item !== null && typeof item === 'object' && item.type === 'text' ? String(item.text ?? '') : ''))
@@ -711,6 +781,15 @@ function apply(ctx) {
       name: 'tool.call.toolview',
       key: toolName,
     }, MolbioMapCard)), `molbio panel: ${toolName} card`);
+  }
+  // Figure cards: the sequence-logo and gRNA tools declare a `molbio-figure`
+  // projection; the same component draws a logo or a gRNA map and, for gRNA,
+  // lists the top-ranked guides even when no map was requested.
+  for (const toolName of FIGURE_TOOL_KEYS) {
+    ctx.effect(() => ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
+      name: 'tool.call.toolview',
+      key: toolName,
+    }, MolbioFigureCard)), `molbio panel: ${toolName} card`);
   }
   // Plugins -> the installed plugin's detail page: the one place a user can
   // store the NCBI key without editing a YAML file or exporting a variable.

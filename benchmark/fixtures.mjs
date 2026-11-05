@@ -98,11 +98,19 @@ export function buildFixtures(makeTemplate) {
 
   // ── an intron-spanning qPCR target ────────────────────────────────────────
   //
-  // `designIntronPrimers` needs the forward primer to straddle the exon-exon
-  // junction with `min_junction_bases` on EACH side, so the junction must fall
-  // inside an 18-28 bp primer window. Seeds and boundaries were searched; this
-  // one yields a pair spanning 12 bp of exon 1 and 6 bp of exon 2.
+  // `designIntronPrimers` needs the junction-spanning primer (the REVERSE one
+  // in the reported pair since 0.23.0) to straddle the exon-exon junction with
+  // `min_junction_bases` on EACH side, so the junction must fall inside an
+  // 18-28 bp primer window. Seeds and boundaries were searched; this one yields
+  // a pair whose reverse primer spans 12 bp of exon 1 and 6 bp of exon 2.
   const INTRON_GENOMIC = `${makeTemplate(400, 1)}${makeTemplate(300, 101)}${makeTemplate(400, 201)}`;
+
+  // ── a sequence with a direct repeat for the dotplot task ─────────────────
+  //
+  // The first 23 bp are repeated verbatim at the end; at word 5 that gives a
+  // known, deterministic number of direct and inverted matches (pinned in
+  // tasks/06-analysis.json and re-proven by `bench --offline`).
+  const DOTPLOT_SEQUENCE = 'TTAGGCACGTAGCTAGGCTAACGTTAGGCACGTAGCTAGGCTAACG';
 
   // ── a coding sequence for the codon/ORF tasks ─────────────────────────────
   const CDS = `ATG${'GCT'.repeat(3)}${'GAA'.repeat(3)}${'TTC'.repeat(3)}${'AAA'.repeat(3)}${'GGT'.repeat(3)}${'CGT'.repeat(3)}${'TAC'.repeat(3)}${'GAT'.repeat(3)}${'CTG'.repeat(3)}${'TAA'}`;
@@ -140,6 +148,7 @@ export function buildFixtures(makeTemplate) {
     CLONE_INSERT,
     MUTAGENESIS_TEMPLATE,
     MUTAGENESIS_MUTATION: '200A>G',
+    DOTPLOT_SEQUENCE,
     INTRON_GENOMIC,
     INTRON_EXONS: [
       { start: 1, end: 400 },

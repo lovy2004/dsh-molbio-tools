@@ -29,7 +29,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch, relativeSpecifiers, presetOrderDeclared, orderCollisions } from './preset-health.mjs';
+import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch, relativeSpecifiers, presetOrderDeclared, orderCollisions, specifierProblem } from './preset-health.mjs';
 // The three helpers this probe used to carry its own copies of. Duplicating
 // `findHarnessRoot` was the worst of them: the probe could resolve a DIFFERENT
 // harness than `preset-health` validated against, so a mutation experiment could
@@ -213,6 +213,20 @@ check('the specifier guard is quiet on a package name and catches a relative pat
     ['./plugins/dsh-molbio-tools-v20/index.mjs'],
     'a relative specifier is reported',
   );
+});
+
+check('a row naming a removed package subpath is caught (the 0.2.2-rc.1 list-agents trap)', () => {
+  // 0.2.2-rc.1 folded `list_agents` into `@deepseek-ai/dsh-tool-subagent-control`
+  // and dropped its `./list-agents` export. `packageInstalled` still finds the
+  // package ROOT, so only a real specifier resolution notices — and this probe
+  // must not depend on one version's removals to prove the guard works. A
+  // subpath no release can export is the version-independent mutation.
+  const base = '@deepseek-ai/dsh-tool-subagent-control';
+  assert.equal(specifierProblem(base, harnessRoot), undefined, 'the package root resolves');
+  assert.equal(specifierProblem(`${base}/package.json`, harnessRoot), undefined, 'an exported subpath resolves');
+  const problem = specifierProblem(`${base}/no-such-subpath`, harnessRoot);
+  assert.ok(problem !== undefined, 'an unexported subpath is rejected');
+  assert.match(problem, /does not resolve/, problem);
 });
 
 check('the order guard reads the order under config, not the declaration row id', () => {

@@ -45,7 +45,10 @@ curl.exe -s -b jar -X POST http://127.0.0.1:3099/api/agentPresets/list `
 只发 `{}` 只会得到 `arguments-invalid`。验证完删掉 scratch profile。
 
 `test/preset-health.mjs` 现在直接盯着这条规则：组合里出现任何 `./plugins/…` 形式的
-specifier 就 FAIL，并已用突变实验证明它会失败。
+specifier 就 FAIL，并已用突变实验证明它会失败。同一套守卫还按 **Loader 的方式解析每个行名**
+（`createRequire(...).resolve`，受包 `exports` 映射约束）：0.2.2-rc.1 删掉
+`dsh-tool-subagent-control/list-agents` 子路径时，只查"包目录存在"的旧检查是绿的，
+而那一行在预设挂载时根本 import 不了。
 
 ---
 
@@ -147,7 +150,7 @@ ctx.effect(() => ctx.slots.inject(座位, () => ctx.slots.register({name: 座位
 
 这条规则有两道**机器守卫**，它们让"忘了"变成"红"：
 
-- `test/benchmark-coverage.mjs` 断言 **60/60 个已注册工具都被至少一个任务覆盖**。
+- `test/benchmark-coverage.mjs` 断言 **62/62 个已注册工具都被至少一个任务覆盖**。
   新增工具而没加任务 = **直接 FAIL**。它同时守住 fixture 的前提（Golden Gate 的载体必须
   无 BsaI 位点、诱变模板必须仍能设计出引物）与 tier/占位符的健全性。
 - `test/benchmark-score.mjs` 用**真实模型响应的冻结副本**（`test/fixtures/benchmark-traces.json`）

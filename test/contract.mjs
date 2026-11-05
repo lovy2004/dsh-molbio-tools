@@ -228,7 +228,14 @@ check('the shell derives hook props as use<Capitalised(Source)>', () => {
 check('a session-scope tab body receives sessionId + useSessions (official precedent)', () => {
   const files = clientBundle('@deepseek-ai/dsh-client-ui-sidebar-files');
   assert.ok(files !== undefined, 'ui-sidebar-files is installed');
-  assert.ok(files.text.includes('function FilesBody({ useTabInfo, sessionId'), 'the official tab body destructures sessionId from its props');
+  // 0.2.2-rc.1 renamed the tab body (`FilesBody` -> `FileNavigator`) without
+  // changing what the runtime injects into it. The CONTRACT is the props, not
+  // the function's name, so match the destructuring rather than one identifier.
+  assert.match(
+    files.text,
+    /function [A-Za-z_$][\w$]*\(\{(?=[^}]*\buseTabInfo\b)(?=[^}]*\bsessionId\b)(?=[^}]*\buseSessions\b)/,
+    'the official tab body receives useTabInfo + sessionId + useSessions from its props',
+  );
   assert.ok(files.text.includes('useSessions((sessions) => sessions.byId[sessionId]?.cwd)'), 'and reads the workspace root exactly as the panel does');
   assert.ok(files.text.includes('"slots"') && files.text.includes('"sidebarRightTabs"'), 'and injects the same registries');
 });
@@ -432,7 +439,7 @@ check('the published tarball carries the client half and exactly one plugin mani
   // SUBMISSION_PACKAGE_AMBIGUOUS, plus a duplicate 427 KB client bundle in every
   // download. The panel does not disappear for npm users: the root package's own
   // `lib/client.js` already carries it (the panel-only package exists for people
-  // who want the tab without the 60 tools).
+  // who want the tab without the 62 tools).
   assert.ok(
     !files.includes('packages'),
     'the root tarball must not embed packages/molbio-panel: a second `dsh` manifest inside one package is an ambiguous submission, and the panel is published separately',
@@ -468,8 +475,16 @@ check('the toolview card contract still holds (meta path + keyed seat)', () => {
   // path that still carries the value — consulted, snapshotted, attached as
   // `meta` — rather than a literal upstream is free to drop (the panel does not
   // depend on nested calls being excluded, only on the root call carrying it).
-  const tools = hostHalf('@deepseek-ai/dsh-tools');
-  assert.ok(tools !== undefined, 'dsh-tools is installed');
+  // The projection lives in the assembly pipeline. 0.2.2-rc.1 moved that code
+  // out of `lib/index.js` into `lib/pipeline.js` (same call, same snapshot, same
+  // attachment), so read whichever files the installed package ships instead of
+  // pinning the one upstream happened to use before.
+  const toolsDir = packageDir('@deepseek-ai/dsh-tools');
+  const toolsFiles = ['lib/index.js', 'lib/pipeline.js']
+    .map((rel) => join(toolsDir, rel))
+    .filter((path) => existsSync(path));
+  assert.ok(toolsFiles.length > 0, 'dsh-tools is installed');
+  const tools = { text: toolsFiles.map((path) => readFileSync(path, 'utf8')).join('\n') };
   assert.ok(/output\.presentationMeta\s*!==\s*void 0/.test(tools.text), 'the tool layer still consults output.presentationMeta');
   assert.ok(tools.text.includes('snapshotProjection(tool.name, "presentationMeta"'), 'and records the projection on the result');
   assert.ok(
@@ -493,16 +508,25 @@ check('the toolview card contract still holds (meta path + keyed seat)', () => {
   // key whose tool forgot `presentationMeta`.
   const source = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
   const bundle = readFileSync(join(packageRoot, 'lib', 'client.js'), 'utf8');
-  const keys = /const MAP_TOOL_KEYS = \[([^\]]*)\]/.exec(bundle);
-  assert.ok(keys !== null, 'the bundle declares the tool keys whose cards it draws');
-  const claimed = keys[1].split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, '')).filter((entry) => entry !== '');
+  const keyList = (name) => {
+    const match = new RegExp('const ' + name + ' = \\[([^\\]]*)\\]').exec(bundle);
+    assert.ok(match !== null, 'the bundle declares ' + name + ', the tool keys whose cards it draws');
+    return match[1].split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, '')).filter((entry) => entry !== '');
+  };
+  // Two card shapes share the seat: the plasmid-map card (MAP_TOOL_KEYS) and the
+  // figure card (FIGURE_TOOL_KEYS). Both lists are read from the bundle, so a
+  // third key whose tool forgets its projection fails here either way.
+  const claimed = [...keyList('MAP_TOOL_KEYS'), ...keyList('FIGURE_TOOL_KEYS')];
   assert.ok(claimed.length > 0, 'the bundle claims at least one card key');
   assert.equal(
-    (source.match(/presentationMeta\(_args, value\)/g) ?? []).length,
+    // Anchored: the file-header comment also mentions the signature, and a
+    // substring count would treat that prose as a fourth implementation.
+    (source.match(/^  presentationMeta\((?:args|_args), value\)/gm) ?? []).length,
     claimed.length,
     'every claimed card key belongs to a tool that declares the projection',
   );
-  assert.ok(source.includes('mapCardMeta'), 'and build it through the shared projection');
+  assert.ok(source.includes('mapCardMeta'), 'and build it through the shared map projection');
+  assert.ok(source.includes('figureCardMeta'), 'and the shared figure projection');
   for (const key of claimed) {
     // The host half registers a tool under that exact name.
     assert.ok(source.includes(`name: '${key}'`), `the host registers the tool ${key} whose card the bundle claims`);
@@ -710,8 +734,8 @@ check('a tool may show the model a picture the way read_image does', () => {
   // The count is deliberate: it is what catches a NEW picture tool that forgets
   // the hand-off (or a report tool that quietly grows it).
   const index = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
-  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 15, 'all 15 picture tools declare the image output field');
-  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 15, 'and offer the opt-in attach_image parameter');
+  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 17, 'all 17 picture tools declare the image output field');
+  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 17, 'and offer the opt-in attach_image parameter');
   assert.ok(/output\.render/.test(index) || index.includes('imageBlockFor(value)'), 'the block builder is wired into define()');
 });
 
@@ -724,7 +748,15 @@ check('the workspace still cannot hold a binary file (the reason the picture rid
   // the local backend (the base is consulted last, only as a presence fallback).
   const fsTypes = declarationEvidence('@deepseek-ai/dsh-fs', ['lib/types/types.d.ts', '../dsh-fs-local/lib/index.js', 'lib/index.js']).text;
   const fsReadme = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'README.md'), 'utf8');
-  assert.match(fsReadme, /binary-safe mutations remain deferred/i, 'and still documents binary mutations as deferred');
+  // 0.2.2-rc.1 reworded this: the old "binary-safe mutations remain deferred"
+  // note became the precise rule under "Known Limitations and Deferred Work"
+  // ("Literal edits, patches, and moves require UTF-8 text"). Accept either
+  // spelling of the SAME policy — the seam assertions below are the real gate.
+  assert.match(
+    fsReadme,
+    /binary-safe mutations remain deferred|Literal edits, patches, and moves require UTF-8 text/i,
+    'and still documents the text-only mutation rule the picture hand-off depends on',
+  );
   const fsIndex = readFileSync(join(packageDir('@deepseek-ai/dsh-fs'), 'lib', 'index.js'), 'utf8');
   assertFsSeamDeclared(fsTypes, fsIndex);
 });

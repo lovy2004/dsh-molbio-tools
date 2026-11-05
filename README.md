@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **60 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **62 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 60 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 62 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：在 DSH 插件页安装（3 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**60 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**62 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。**右栏的 Molbio / Papers 两个面板也随这个包
 一起装好**，不需要再装 `dsh-molbio-panel`。
 
@@ -104,9 +104,9 @@ dsh plugin --profile web update dsh-molbio-tools
 | 层（同一个 `cordis.patch.yml` 里的两段） | 作用 |
 | --- | --- |
 | `molbio-client` → `./host.mjs` | 只插一行**惰性宿主锚点**，不注册任何工具 |
-| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，60 个工具在这一层里 |
+| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，62 个工具在这一层里 |
 
-所以 60 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+所以 62 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
 > **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
@@ -122,7 +122,7 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 只要浏览器面板
 
-如果只想要图形面板、不想让该 profile 装 60 个工具（连模式都不装），装面板专用包即可
+如果只想要图形面板、不想让该 profile 装 62 个工具（连模式都不装），装面板专用包即可
 （见[浏览器面板](#浏览器面板可选)）。**它和 `dsh-molbio-tools` 二选一**：两者注册同一组右栏 tab
 （`dsh-molbio-tools` / `dsh-molbio-tools/papers`），同时装会重复注册并报
 `tab type id ... is already registered`。同样在 **插件 → 添加插件** 里输入 `dsh-molbio-panel`，
@@ -138,10 +138,10 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 
 ## 它会做什么
 
-60 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+62 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
-### 1. 序列分析与酶切（7）
+### 1. 序列分析与酶切（8）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -152,13 +152,14 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_enzyme_lookup` | 酶目录查询：识别位点/切点几何/突出端长度；给序列时报告**双链向的全部切点**（IIS 酶的反向识别位点也会被切，这是上一个工具不报告的） |
 | `molbio_methylation_check` | **甲基化会不会挡住酶切**：列出序列中每个 Dam（GATC）/Dcm（CCWGG）位点，把每个酶判为 `cuts` / `impaired` / `blocked` / `no_site`，并给出"哪些酶能用来切"的清单 |
 | `molbio_double_digest` | **双酶切规划**：两个酶各自的切点/片段、合并切点与片段，以及两者**是否共用 buffer**（无共用则提示顺序酶切或换用厂商双酶切 buffer） |
+| `molbio_dotplot` | **序列自身 dotplot**：按 k-mer 精确匹配画直接重复（黑）与反向重复（红），网格分箱以限制文件大小，并报告匹配数与任何扫描/绘图截断；是精确 k-mer 视图，不是滑窗同一性打分图 |
 
 ### 2. 引物设计（6）
 
 | 工具 | 用途 |
 | --- | --- |
 | `molbio_design_primers` | **自动设计 PCR 引物对**：Tm（SantaLucia 1998 最近邻模型，盐/浓度可调）、GC、GC clamp、run/发夹/自互补/二聚体约束、错配容差、非特异结合检查、3' 目标位置偏好（SNP/定点设计），按罚分排序给出多组候选 |
-| `molbio_design_intron_primers` | **跨内含子 qPCR 引物**：给定基因组序列 + 外显子坐标，正向引物跨外显子-外显子连接点，基因组 DNA 不会扩增（可设最小基因组间距） |
+| `molbio_design_intron_primers` | **跨内含子 qPCR 引物**：给定基因组序列 + 外显子坐标，**反向引物**跨外显子-外显子连接点（正向引物在其上游、位于单个外显子内），基因组 DNA 不会扩增；F 在上游、R 是按 5'→3' 可直接订购的分子（可设最小基因组间距） |
 | `molbio_design_taqman` | **TaqMan（水解探针）测定设计**：引物对 + 探针一次给出（探针 5' 端非 G、Tm 比引物高 5 °C 起、无 run/重复、不与引物二聚化），每条候选附逐项罚分；支持 **MGB 化学**（更短、按未修饰 NN Tm 报告并明确标注修饰未建模）和**订购 CSV**（引物/探针、5'/3' 修饰、规模、纯化） |
 | `molbio_primer_tm` | 单条引物 Tm 估算（Na⁺/Mg²⁺/dNTP 盐校正） |
 | `molbio_primer_check` | 引物结构筛查：重复序列、3' 端加权的自互补、发夹、引物对二聚体，以及 Primer3 同款热力学指标 |
@@ -196,11 +197,12 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_plot` | **实验数据图表（8 种）**：柱状图（均值±SD 误差棒）、散点图（可选拟合线）、折线图（按分组列拆多条序列）、直方图（分箱默认 Freedman-Diaconis）、箱型图（Q1–Q3 箱 + 中位线 + 1.5×IQR 须 + 离群点）、**小提琴图**（高斯核密度轮廓 + 内部箱；看分布形状时用它）、**火山图**（log2FC × 显著性，带虚线阈值；**只画不检验**，p 值必须由表提供）、**热力图**（行×列矩阵，一格一色 + 色标；支持宽表与长表两种版式，`scale: row_zscore\|log2` 是**显式申报的展示变换**）。表类图表直接读工作区 **CSV/TSV**（`data_path` + `columns` 指名列），也可用 `data` 内联表格文本；结果里带回算好的统计量，**报数请引用它而不是照图估读** |
 | `molbio_virtual_gel` | **虚拟琼脂糖凝胶**：给出预期片段大小 → SVG 凝胶图 + 分子量 ladder，和真胶对照 |
 
-### 6. 蛋白质（5）
+### 6. 蛋白质（6）
 
 | 工具 | 用途 |
 | --- | --- |
 | `molbio_protein_props` | MW、等电点、A280 消光系数、A280(0.1%)、GRAVY、脂肪族指数 |
+| `molbio_protein_charge` | **电荷-pH 滴定曲线**：Henderson-Hasselbalch 逐 pH 净电荷、pI、pH 7.4 电荷；pK 可选 **Bjellqvist**（与 `protein_props` 的 pI 一致）或 **EMBOSS Epk.dat**，出 SVG |
 | `molbio_peptide_digest` | 质谱用酶切模拟：trypsin/chymotrypsin/LysC/GluC（P 前不切）、漏切 0–3、[M+H]⁺ 质量 |
 | `molbio_codon_optimize` | E. coli/酵母/人密码子优化，可顺便避开指定酶切位点 |
 | `molbio_helical_wheel` | **螺旋轮投影**：残基按 3.6 残基/圈落在圆周上、按性质着色，给出疏水矩 μH（判断是否两亲性），出 SVG |
@@ -277,7 +279,7 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | "这对引物除了目标还会在哪扩增？预期几条带" | `molbio_pcr_simulate(template, primer_pairs:[…])` → 产物大小 + 凝胶图 |
 | "这几条序列谁跟谁最近，这个结论有信心吗" | `molbio_phylogenetic_tree(sequences:[…], bootstrap:100)` → 支持度 + Newick |
 | "这段是不是启动子/CPG 岛？复制起点在哪" | `molbio_gc_composition(sequence)` → CpG 岛区间 + 累积 GC skew 的 ori/ter 提示 |
-| "把这 60 个质粒/reads 一起做个汇总表" | `molbio_batch_analyze(directory, pattern, analysis:'all', enzymes:[…])` → 一张 CSV/TSV |
+| "把这批质粒/reads 一起做个汇总表" | `molbio_batch_analyze(directory, pattern, analysis:'all', enzymes:[…])` → 一张 CSV/TSV |
 | "把 EcoRI 位点静默去掉，蛋白不能变" | `molbio_silent_site_mutagenesis(sequence, enzyme:'EcoRI', action:'remove')` → mutation texts → `molbio_mutagenesis_primers` |
 | "用 Cas12a 设计 gRNA（5' TTTV PAM）" | `molbio_grna_design(sequence, cas_family:'cas12a')` |
 | "用 Cas13a 敲低这个转录本" | `molbio_grna_design(sequence, cas_family:'cas13a', target_strand:'forward')` → 看 PFS 与 require_pfs |
@@ -304,11 +306,12 @@ SVG 文件**并在结果里返回路径：
 | `molbio_phylogenetic_tree` | `<名称>.nwk`（Newick）+ `<名称>-tree.svg` |
 | `molbio_pcr_simulate` | `pcr-gel.svg`（预期凝胶） |
 | `molbio_gc_composition` | `gc-composition.svg`（GC/CpG 三面板图） |
+| `molbio_protein_charge` / `molbio_dotplot` | 电荷-pH 曲线；直接/反向重复 dotplot |
 | `molbio_fasta_fastq` / `molbio_extract_region` / `molbio_paper_export_bibtex` | FASTA / `.bib` |
 
 ### 让模型自己看图：`attach_image`（可选，默认关）
 
-上面这些**画图工具**（共 15 个）都接受一个可选参数 **`attach_image: true`**。打开后，工具会把
+上面这些**画图工具**（共 17 个）都接受一个可选参数 **`attach_image: true`**。打开后，工具会把
 同一张图**当场光栅化成 PNG 并作为图片附件挂到这次调用的结果上**——模型因此能直接"看见"凝胶
 条带、质粒图谱、logo、螺旋轮、曲线，而不是只能读数值。传了就会在结果里回一个 `image` 对象
 （附件的 id/尺寸/字节数），文本里也会写明"图已附上"。
@@ -425,6 +428,20 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 - **目标位置偏好**（`target_position` + `target_penalty`）：按"较近引物 3' 端到目标的距离"加重
   罚分，用于 SNP 分型/定点设计；跨内含子设计里该坐标是**剪接坐标**。
 - **性能**：几十 kb 模板在亚秒级完成；找不到满足约束的组合时返回空并提示放宽条件。
+- **跨内含子设计的方向（0.23.0）**：跨连接点的是**反向引物**，正向引物在上游的单个外显子内。
+  报告的 `reverse.sequence` 是可直接订购的 5'→3' 分子（其剪接位点的反向互补），F 在 R 上游；
+  `exon` 只出现在正向引物上，`exons`/`junction_left`/`junction_right` 只出现在反向引物上。
+  错配报告里的 `template_base` 仍是"完美匹配时该引物会携带的碱基"——正向是转录本碱基，反向是它的互补。
+
+### 蛋白电荷与序列 dotplot（0.23.0）
+
+- **`molbio_protein_charge`**：Henderson-Hasselbalch 求和，N/C 末端各计一次，K/R/H 为正、
+  D/E/C/Y 为负；`pka_set` 选 `bjellqvist`（默认，与 `molbio_protein_props` 的 pI 同一张表）
+  或 `emboss`（Epk.dat）。**pI 只对所用的 pK 表有意义**，结果里同时给出 `pka_set` 与
+  `pka_label`；未建模二硫键、修饰残基、金属结合与离子强度。
+- **`molbio_dotplot`**：精确 k-mer 自比较，黑色是直接重复、红色是反向重复；简并碱基参与的
+  k-mer 被跳过并在 `ambiguous_bases` 计数。`truncated` 表示匹配扫描触顶（计数是下界），
+  `plot_truncated` 表示绘图网格触顶（部分点未画）。对角线是序列与自身，属正常现象。
 
 ### TaqMan 探针（v17）
 
@@ -699,21 +716,22 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 61 题（覆盖 60/60 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 63 题（覆盖 62/62 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
 > `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
 > （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
-> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 60/60 覆盖），
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 62/62 覆盖），
 > `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
 > **benchmark 已经查出的一个真实缺陷**：`molbio_design_primers` 返回的引物对把
 > forward/reverse **标反了**（`F` 在 201-222、`R` 在 105-124，即 F 在 R 下游），
 > 按原样送进 `molbio_pcr_simulate` **不产生产物**。已用工具直接复核，详见
-> [benchmark/README.md](benchmark/README.md) 的 Findings。**尚未修复**——
-> 它需要自己的回归测试（设计出的一对引物按原样必须能模拟出恰好一个产物）。
+> [benchmark/README.md](benchmark/README.md) 的 Findings。**0.16.0 已修**：两条分子的序列、
+> Tm、GC 从来都是对的，错的是"哪条叫 F"与扩增子的两端；回归测试是跨工具的——设计出的每对
+> 引物按原样送进 `molbio_pcr_simulate` 必须恰好得到一个产物，且端点与报告的扩增子一致。
 
 其它文档：
 
@@ -731,7 +749,7 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 60 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 62 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
@@ -739,6 +757,7 @@ dsh-molbio-tools/
 ├── methylation.mjs  # 甲基化敏感位点检查 + 双酶切 buffer 兼容
 ├── protein.mjs      # 蛋白性质 / 肽段酶切 / 密码子优化
 ├── protein-structure.mjs # 螺旋轮与疏水性图
+├── protein-charge.mjs # 电荷-pH 滴定曲线 + pI（bjellqvist/emboss 两套 pK）
 ├── genbank.mjs      # GenBank flatfile 解析器
 ├── snapgene.mjs     # SnapGene .dna 二进制解析器
 ├── plasmid.mjs      # SVG 质粒图谱渲染器
@@ -752,6 +771,7 @@ dsh-molbio-tools/
 ├── sanger.mjs       # ABIF (.ab1) 解析 + 测序验证
 ├── plot.mjs         # SVG 柱状/散点图 + 虚拟琼脂糖凝胶
 ├── charts.mjs       # 实验数据图表：CSV/TSV 读取 + 折线/直方图/箱型/小提琴/火山/热力图（基于 svgio）
+├── dotplot.mjs      # k-mer 自比较 dotplot（直接/反向重复，网格分箱）
 ├── seqio.mjs        # FASTA/FASTQ 解析与统计
 ├── batch.mjs        # 批量文件分析：同一套摘要/ORF/酶切位点 → CSV/TSV
 ├── records.mjs      # 协议库 / 实验日志存储

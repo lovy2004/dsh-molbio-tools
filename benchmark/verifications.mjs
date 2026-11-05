@@ -252,6 +252,12 @@ export function invocationsFor(task) {
     'peptide-digest': () => [{ tool: 'molbio_peptide_digest', args: { sequence: FIXTURES.DIGEST_PEPTIDE, enzyme: 'trypsin', missed: 0 } }],
     'helical-wheel': () => [{ tool: 'molbio_helical_wheel', args: { sequence: FIXTURES.AMPHIPATHIC_PEPTIDE, title: 'amphipathic test' } }],
     hydropathy: () => [{ tool: 'molbio_hydropathy_plot', args: { sequence: FIXTURES.DIGEST_PEPTIDE } }],
+    'protein-charge': () => [
+      { tool: 'molbio_protein_charge', args: { sequence: FIXTURES.DIGEST_PEPTIDE, output_path: at('charge.svg') } },
+    ],
+    dotplot: () => [
+      { tool: 'molbio_dotplot', args: { sequence: FIXTURES.DOTPLOT_SEQUENCE, word: 5, output_path: at('dot.svg') } },
+    ],
 
     // bench analysis
     'codon-optimize': () => [{ tool: 'molbio_codon_optimize', args: { sequence: FIXTURES.CDS, host: 'e_coli' } }],

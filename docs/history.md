@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.23.0 | — | **2.0 遗留修复 + 2.9a 调用卡 + 两个候选池工具**：跨内含子引物报告真实反向分子（F 在 R 上游）、logo/gRNA 调用卡、`molbio_protein_charge`、`molbio_dotplot`；同版完成 **DSH 0.2.2-rc.1 适配**（删掉上游已移除的 `list-agents` 子路径行、subagent 模型选择改用新键、守卫补上 specifier 解析） | 60 → 62 |
 | 0.22.2 | — | **DSH 0.2.1-rc.5 适配**：基线 rc.3 → rc.5（上游 standard 逐字节未变）；contract 声明守卫兼容桌面版裁掉 `lib/types` 的打包形态（+突变自检）；engines.node 与 CI 降到 24 | 60 |
 | 0.22.1 | — | **PubMed key 改走 DSH 凭据库**：解析顺序 `api_key` → 凭据库 → 环境变量；无凭据库时行为同 0.22.0 | 60 |
 | 0.22.0 | — | **DSH 0.2.1-rc.3 适配 + PubMed 官方 API**：`molbio_pubmed_search`/`_abstract` 支持 NCBI API key（E-utilities），无 key 行为不变 | 60 |
@@ -46,6 +47,43 @@
 | — | v12–v14 | Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view | — |
 
 ---
+
+## v0.23.0（2026-10-31，包 0.23.0）
+
+三条教训，都关于"一个约定改了，哪些地方必须跟着改"。
+
+**(1) 方向不是标签问题，是约束落在哪个分子上的问题。** 跨内含子工具把两条引物都报成 sense
+子串，看起来只是"名字反了"；真正的代价是 GC clamp、末端稳定性、末端 GC、self-end 与发夹
+**全都检查在反向引物的 5' 端**（因为扫描方向反了），而报告的那条分子还不是要订购的。
+修法不是交换两个字段：反向候选要改到剪接转录本的**反向互补**上扫描，才让 3' 约束落到
+真正下单的分子上，再由 `anchor` 映回 sense 坐标。这也解释了为什么 smoke 夹具必须换 seed：
+旧夹具能在错误的约束下通过，改正后同一段序列不再产生合法候选。
+
+**(2) 两份字段命名（snake_case/camelCase）之间"看起来能跑"的调用，是静默失效的温床。**
+旧代码把 `mismatchReport` 的 `distance_from_3prime` 报告直接喂给读 `distanceFrom3Prime` 的
+`mismatchPenalty`，于是 3' 关键区加罚在跨内含子模式里**从未生效**——没有报错、没有测试红，
+只是排序少了一项。现在用专门的 `intronMismatchPenalty`，两种命名不再混用。
+
+**(3) 把"一个 key 列表"写成常量时，第二个列表不会自己出现。** 加调用卡时最容易漏的是
+守卫：`contract` 原本只读 `MAP_TOOL_KEYS`，新卡片的工具即使没有 `presentationMeta` 也照样绿。
+现在它从产物里的 `MAP_TOOL_KEYS` 与 `FIGURE_TOOL_KEYS` **两处**读 key，并用行首锚定的正则
+数投影——文件头注释里也提到 `presentationMeta(args, value)`，子串计数会把散文当成第四个实现。
+这类"守卫自己的样本过期"在 0.21.0 的 drift-probe 上已经付过一次账。
+
+**(4) 包还在，不等于行能挂载。** 0.2.2-rc.1 把 `list_agents` 并入了
+`@deepseek-ai/dsh-tool-subagent-control` 主入口，删掉了 `./list-agents` 子路径导出。preset 仍抄着
+rc.5 的那一行，而 `preset-health` 的 `packageInstalled` 只证明**包目录存在**，随后 import 的还是
+包根的 `exports["."]`——于是"包在、子路径没了"的行一路绿。真正的解析发生在 Loader 里
+（`import.meta.resolve`，受 `exports` 映射约束），所以现在的守卫先用 `createRequire(...).resolve`
+解析行名，再用 `no-such-subpath` 做突变自检。**组合树正确不代表行能挂载**，这和规则 1 记录的是
+同一类失败：静态检查看不见，只有真正解析/启动一次才会暴露。
+
+**顺带记录**：新工具的 pK 表与电荷函数从 `protein.mjs` 导出（`PK_SETS`/`netCharge`），
+而不是在 `protein-charge.mjs` 里复制一份；两个工具各自只加一条 benchmark 任务，
+`benchmark-coverage` 的 62/62 与 `benchmark-profile` 的 62 工具是同一批断言的两种读法。
+`dotplot` 的版式在收尾时从 720×720 改为 720×760（绘图区仍是 628 px 正方形），让 x 轴标题与
+图例各占一行；`test/smoke.mjs` 用几何断言盯住「标题不贴底、图例在画布内且在标题下方」。
+定向真实模型跑分（2026-11-05）覆盖 `intron-qpcr` / `protein-charge` / `dotplot`，三题 3/3。
 
 ## v0.22.1（2026-10-25，包 0.22.1）
 

@@ -20,13 +20,13 @@
 | 使用 | 模型找得到、用得对吗？ | `benchmark/`（见 [benchmark/README.md](../benchmark/README.md)） |
 
 ```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 60 个工具 + 输出 schema 校验
+node test/smoke.mjs         # 插件：mock 注册表跑全部 62 个工具 + 输出 schema 校验
 node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
 node test/svgio.mjs         # 共享绘图助手：几何手算值 + 每种助手拼一张文档后光栅化必须干净
 node test/charts.mjs        # 图表：CSV/TSV 读取层 + 八种图表（含色带）的统计量与光栅化
 node test/client.mjs        # 客户端产物：按加载器方式执行 + 面板数据通路（无浏览器）
 node test/panel-render.mjs  # 面板组件：最小钩子宿主里跑真实组件（无 React、无 DOM）
-node test/map-card.mjs      # 图谱调用卡：跨界 meta 投影断言
+node test/map-card.mjs      # 调用卡（图谱 + logo/gRNA）：跨界 meta 投影断言
 node test/client-mount.mjs  # 客户端挂载：复刻宿主侧图扫描，核对 web profile 的行与依赖
 node test/contract.mjs      # DSH 契约：官方是否改了规则或 API
 node test/preset-health.mjs # 组合：逐行按该包自己的 Config schema 校验 preset 可挂载性
@@ -50,7 +50,7 @@ node benchmark/run.mjs --offline # benchmark 的期望值是否仍等于工具�
 
 ### 各套件到底在防什么
 
-- **`smoke.mjs`** 证明**插件**可用：mock 注册表运行全部 60 个工具，并用 harness 自身的
+- **`smoke.mjs`** 证明**插件**可用：mock 注册表运行全部 62 个工具，并用 harness 自身的
   `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
   覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
   SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
@@ -218,7 +218,7 @@ benchmark 不是"每天跑一遍"的门禁，而是**行为的验收测试**—�
 
 | 这次改了什么 | benchmark 要不要动 | 为什么 |
 | --- | --- | --- |
-| 新增一个工具 | **必须**：加任务 + `verifications.mjs` 的 invocation | `test/benchmark-coverage.mjs` 会**直接 FAIL**（`60/60 tools covered` 是断言） |
+| 新增一个工具 | **必须**：加任务 + `verifications.mjs` 的 invocation | `test/benchmark-coverage.mjs` 会**直接 FAIL**（`62/62 tools covered` 是断言） |
 | 改工具的参数、默认值、输出字段、渲染文本 | **必须**：更新受影响任务的断言，重跑 `--offline`，再重跑该任务 | 断言比对的是**渲染文本**，改了文本就改了对错 |
 | 改工具的描述或参数说明（prompt 面） | **必须**：重跑对应任务 | 这正是 benchmark 唯一能测的东西——模型是否还选得对 |
 | 改 `preset/molbio-lab/agent.cordis.yml`（行清单） | **必须**：先 `node test/benchmark-profile.mjs`，再重建 profile | 行清单变了，benchmark 的 headless profile 是**推导**出来的，守卫会 FAIL |
@@ -237,7 +237,7 @@ benchmark 不是"每天跑一遍"的门禁，而是**行为的验收测试**—�
 
 ```bash
 node benchmark/run.mjs --offline    # 每条 where:"tool" 断言是否仍等于工具的真实渲染输出
-node test/benchmark-coverage.mjs    # 60/60 工具有任务覆盖、fixture 前提仍成立、tier 与占位符健全
+node test/benchmark-coverage.mjs    # 62/62 工具有任务覆盖、fixture 前提仍成立、tier 与占位符健全
 node test/benchmark-score.mjs       # 判分器对冻结的真实响应仍判对，且仍能判错
 ```
 
@@ -254,7 +254,7 @@ offline 证明"期望值仍然为真"，model 测量"模型是否仍然会用"�
 | 改了**几个**工具 | `--tools a,b,c`（也接受 `molbio_` 前缀与 `primer_*` 通配） | 并集 |
 | 改了**一个**已知任务 | `--task <id>` | 一题 |
 | 改了**共享模块**，想知道影响面 | `--list --changed`（不花钱） | 0 |
-| 发版前 | `node --run bench:full` | 61 题 |
+| 发版前 | `node --run bench:full` | 63 题 |
 | 只是提交文档 | `--changed` 会回答"无事可跑" | 0 |
 
 ```bash
@@ -299,7 +299,7 @@ $ touch lib.mjs && node benchmark/run.mjs --list --changed
 1. **不可判定 → 全量**：没有 git / 没有 HEAD / 读不到插件结构，一律回落全量并打印原因；
 2. **认不出的文件 → 全量**：新模块、重命名的文件（`not in the plugin's module set`）；
 3. **`index.mjs` → 全量**：它是绑定全部工具的那个入口；
-4. **映射到的工具有题没覆盖 → 全量**（并由 `test/benchmark-coverage.mjs` 断言 60/60 覆盖）。
+4. **映射到的工具有题没覆盖 → 全量**（并由 `test/benchmark-coverage.mjs` 断言 62/62 覆盖）。
 
 反过来，**唯一会返回"无事可跑"的情况**是改动**可证明**不影响工具行为：`docs/`、
 `CHANGELOG.md`、`README.md`、`test/`、`benchmark/`、`package.json`。这不是走后门——
@@ -363,7 +363,7 @@ node test/client.mjs && node test/panel-render.mjs && node test/map-card.mjs && 
 两条实现纪律：投影**必须廉价且不抛**（它跑在调用成功之后，抛错会把这次调用标成失败；
 图谱标记因此走一份有界内存缓存而不是读文件），卡片**必须校验而非信任** meta（缺失/异种/
 异形/超限/失败一律降级为提示，绝不在对话里抛错）。新增卡片时：把工具名加进
-`build/client-entry.mjs` 的 `MAP_TOOL_KEYS`，并在 `test/map-card.mjs` 里补一条跨界断言。
+`build/client-entry.mjs` 的 `MAP_TOOL_KEYS`（图谱）或 `FIGURE_TOOL_KEYS`（图形），并在 `test/map-card.mjs` 里补一条跨界断言。
 另注意 `define()` 包装器会转发 `presentationMeta`——若哪天再包一层，别忘了这条。
 
 ### 安装与修复面板
@@ -456,7 +456,7 @@ git status --short           # lib/client.js 与 packages/molbio-panel/lib/clien
 ### DSH 升级后：preset 组合的维护（必做）
 
 `preset/molbio-lab/agent.cordis.yml` 是官方 `standard` 预设的**行清单**副本 + 末尾一行
-`tool-molbio`（当前基线：**dsh 0.2.1-rc.5**）。它不会自动跟随 DSH 升级，因此每次升级
+`tool-molbio`（当前基线：**dsh 0.2.2-rc.1**）。它不会自动跟随 DSH 升级，因此每次升级
 DSH 后：
 
 1. 取新版的 shipped `standard`：
@@ -469,7 +469,8 @@ DSH 后：
    只比结构，注释漂移抓不住，但下一次人工 diff 会；
 3. 跑 `node build/preset-patch.mjs` 重新生成根目录的 `cordis.patch.yml`；
 4. 跑 `node test/preset-health.mjs` 直到 `OK`（它把任何结构差异当**发布阻断**，不只是打印
-   note），再跑 `node test/drift-probe.mjs` 确认守卫仍能抓到漂移；
+   note；它还会按 Loader 的方式解析每个行名，上游删掉的子路径会在这里直接 FAIL），
+   再跑 `node test/drift-probe.mjs` 确认守卫仍能抓到漂移；
 5. 更新 `agent.cordis.yml` 头部"Baseline: …"那行里的 DSH 版本号；
 6. 跑 `node test/benchmark-profile.mjs`：benchmark 的 headless profile 是从这份行清单**推导**
    出来的，上游加行、改 config 都会在这里失败（它会把每一行逐字段比对），按提示把新行分类

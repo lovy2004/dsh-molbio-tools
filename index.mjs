@@ -2,9 +2,9 @@
  * dsh-molbio-tools/index.mjs
  *
  * DeepSeek Harness Cordis plugin: molecular-biology computation tools for the
- * model. Zero runtime dependencies — the only import is the sibling lib.mjs —
- * so the package is a pair of files that travel with an agent preset and can
- * be referenced by a relative plugin row (see README.md).
+ * model. Zero runtime dependencies — every import is a sibling module of this
+ * package — so the toolset travels with an agent preset and can be referenced
+ * by a package-name row (see README.md and rules.md rule 1).
  *
  * Every tool is pure computation: deterministic, no network, no filesystem.
  * The plugin publishes no service, so the preset row needs no isolate realm.
@@ -50,6 +50,8 @@ import {
 } from './cloning.mjs';
 import { readTraceFromBytes, verifySanger } from './sanger.mjs';
 import { CODON_HOSTS, codonOptimize, peptideDigest, proteinProperties } from './protein.mjs';
+import { chargeCurve, renderChargeCurve } from './protein-charge.mjs';
+import { dotplot, renderDotplot } from './dotplot.mjs';
 import { linearFit, renderBarChart, renderGel, renderScatterChart } from './plot.mjs';
 import {
   SERIES_COLORS,
@@ -2140,7 +2142,7 @@ const plasmidMapTool = (ctx) => define({
   },
   // The map card in the transcript/panel reads this meta (see mapCardMeta).
   presentationMeta(_args, value) {
-    return mapCardMeta(value, rememberedMapSvg(value.svg_path));
+    return mapCardMeta(value, cardSvgFor(value.svg_path));
   },
   async execute(args, exec) {
     const sequence = normalizeSequence(args.sequence, 'plasmid sequence');
@@ -2182,7 +2184,7 @@ const plasmidMapTool = (ctx) => define({
       gc_skew: args.gc_skew === true,
     });
     const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, name);
-    rememberMapSvg(file, svg);
+    rememberCardSvg(file, svg);
     return mergeAttachedImage({
       svg_path: file,
       name,
@@ -2334,7 +2336,7 @@ const plasmidMapFileTool = (ctx) => define({
   },
   // The map card in the transcript/panel reads this meta (see mapCardMeta).
   presentationMeta(_args, value) {
-    return mapCardMeta(value, rememberedMapSvg(value.svg_path));
+    return mapCardMeta(value, cardSvgFor(value.svg_path));
   },
   async execute(args, exec) {
     const lower = args.path.toLowerCase();
@@ -2374,7 +2376,7 @@ const plasmidMapFileTool = (ctx) => define({
       gc_skew: args.gc_skew === true,
     });
     const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, name);
-    rememberMapSvg(file, svg);
+    rememberCardSvg(file, svg);
     return mergeAttachedImage({
       svg_path: file,
       name,
@@ -2423,22 +2425,40 @@ function mapCardMeta(value, svg) {
 }
 
 /**
- * Markup of the most recent maps, keyed by written path, so the card's
+ * Build the meta a figure card reads (sequence logo, gRNA map). Shared by both
+ * tools so the browser half has one shape to validate: `summary` is the header
+ * line, `extra` carries bounded presentation rows, and the markup travels only
+ * when it fits `CARD_SVG_MAX_BYTES`.
+ */
+function figureCardMeta({ figure, summary, svgPath, extra = {} }, svg) {
+  return {
+    kind: 'molbio-figure',
+    figure,
+    summary,
+    svg_path: svgPath,
+    svg_bytes: svg.length,
+    ...extra,
+    ...svg.length === 0 ? { svg_missing: true } : svg.length <= CARD_SVG_MAX_BYTES ? { svg } : { svg_omitted: true },
+  };
+}
+
+/**
+ * Markup of the most recent written figures, keyed by path, so a card's
  * projection never has to read a file back. Bounded on both axes — a handful of
- * maps, each at most `CARD_SVG_MAX_BYTES` — because this is a module-level
+ * figures, each at most `CARD_SVG_MAX_BYTES` — because this is a module-level
  * cache in a long-lived host process, not a store.
  */
-const recentMapSvg = new Map();
+const recentCardSvg = new Map();
 
-function rememberMapSvg(svgPath, svg) {
-  if (recentMapSvg.has(svgPath)) recentMapSvg.delete(svgPath);
-  recentMapSvg.set(svgPath, svg.length <= CARD_SVG_MAX_BYTES ? svg : '');
-  while (recentMapSvg.size > 8) recentMapSvg.delete(recentMapSvg.keys().next().value);
+function rememberCardSvg(svgPath, svg) {
+  if (recentCardSvg.has(svgPath)) recentCardSvg.delete(svgPath);
+  recentCardSvg.set(svgPath, svg.length <= CARD_SVG_MAX_BYTES ? svg : '');
+  while (recentCardSvg.size > 8) recentCardSvg.delete(recentCardSvg.keys().next().value);
 }
 
 /** The markup remembered for one written map ('' when it was too large or is gone). */
-function rememberedMapSvg(svgPath) {
-  return recentMapSvg.get(svgPath) ?? '';
+function cardSvgFor(svgPath) {
+  return recentCardSvg.get(svgPath) ?? '';
 }
 
 // ── cross-intron primer design ──────────────────────────────────────────────
@@ -2449,7 +2469,7 @@ const INTRON_MISMATCH_SCHEMA = {
   required: ['position', 'template_base', 'primer_base', 'spliced_position', 'genomic_position', 'distance_from_3prime'],
   properties: {
     position: { type: 'integer', description: '1-based position of the mismatch in the primer (5\'→3\').' },
-    template_base: { type: 'string', description: 'The base a perfectly matching primer would carry at this position on the spliced transcript.' },
+    template_base: { type: 'string', description: 'The base a perfectly matching primer would carry at this position: the spliced-transcript base for the forward primer, its complement for the reverse primer (which is reported as the molecule to order).' },
     primer_base: { type: 'string', description: 'The base the reported primer actually carries (primer_base !== template_base marks a real mismatch).' },
     spliced_position: { type: 'integer', description: '1-based position on the spliced transcript.' },
     genomic_position: { type: 'integer', description: '1-based position on the genomic sequence.' },
@@ -2501,7 +2521,7 @@ const INTRON_PRIMER_SCHEMA = {
 
 const intronPrimersTool = (ctx) => define({
   name: 'molbio_design_intron_primers',
-  description: 'Design qPCR primer pairs where the forward primer spans an exon-exon junction (>= min_junction_bases on each side) so genomic DNA cannot be amplified, and the reverse primer sits in a different exon. Provide the genomic sequence and the exon spans (1-based, inclusive). min_genomic_span enforces a minimal genomic distance between the primers (making gDNA amplification impossible or easily detectable). Coordinates come back both on the spliced transcript and on the genomic sequence. v12: Primer3-style structural filters (self-complementarity alignment scores, hairpin/dimer folding Tm at 47 °C defaults, end stability/end GC, GC clamp levels); pass max_mismatches > 0 to allow mismatched primers (never on the 3\'-terminal base) with spliced+genomic mismatch reports; pass check_mispriming: true to reject/penalize non-specific 3\'-tail annealing on the transcript.',
+  description: 'Design qPCR primer pairs where ONE primer spans an exon-exon junction (>= min_junction_bases on each side) so genomic DNA cannot be amplified. In the returned pair the junction is carried by the REVERSE primer (the assay sits 5\' of the junction): the forward primer is upstream inside a single exon, and the reverse sequence is the molecule to order (the reverse complement of its spliced site), so F is upstream of R and the pair amplifies as printed. Provide the genomic sequence and the exon spans (1-based, inclusive). min_genomic_span enforces a minimal genomic distance between the primers (making gDNA amplification impossible or easily detectable). Coordinates come back both on the spliced transcript and on the genomic sequence. v12: Primer3-style structural filters (self-complementarity alignment scores, hairpin/dimer folding Tm at 47 °C defaults, end stability/end GC, GC clamp levels); pass max_mismatches > 0 to allow mismatched primers (never on the 3\'-terminal base) with spliced+genomic mismatch reports; pass check_mispriming: true to reject/penalize non-specific 3\'-tail annealing on the transcript.',
   parameters: {
     type: 'object',
     required: ['exons'],
@@ -2621,7 +2641,7 @@ const intronPrimersTool = (ctx) => define({
     }
     const lines = [
       `Tm model conditions: ${value.conditions.na_mm} mM Na+ / ${value.conditions.mg_mm} mM Mg2+ / ${value.conditions.dntp_mm} mM dNTP / ${value.conditions.primer_nm} nM primer (SantaLucia 1998 NN — an estimate).`,
-      `${value.pairs.length} candidate pair(s); the forward primer spans an exon-exon junction (genomic DNA will not amplify):`,
+      `${value.pairs.length} candidate pair(s); the REVERSE primer spans an exon-exon junction, so genomic DNA will not amplify (forward is upstream of it):`,
     ];
     const mismatchLine = (label, primer) => {
       if (primer.mismatch_count > 0) {
@@ -2641,8 +2661,8 @@ const intronPrimersTool = (ctx) => define({
     };
     for (const [index, pair] of value.pairs.entries()) {
       lines.push(`#${index + 1} spliced amplicon ${pair.spliced_amplicon.start}-${pair.spliced_amplicon.end} (${pair.spliced_amplicon.length} bp), genomic span ${pair.genomic_amplicon_length} bp${pair.target_distance !== undefined ? `, nearer 3' end ${pair.target_distance} spliced bp from target_position` : ''}, penalty ${pair.penalty}`);
-      lines.push(`  F ${pair.forward.sequence}  (spliced ${pair.forward.spliced_start}-${pair.forward.spliced_end}; genomic ${pair.forward.genomic_start}-${pair.forward.genomic_end}; exons ${pair.forward.exons.join('/')}, junction ${pair.forward.junction_left}+${pair.forward.junction_right} bp; Tm ${pair.forward.tm} °C, self ${pair.forward.self_any}/${pair.forward.self_end}, hairpin ${pair.forward.hairpin_tm} °C)`);
-      lines.push(`  R ${pair.reverse.sequence}  (spliced ${pair.reverse.spliced_start}-${pair.reverse.spliced_end}; genomic ${pair.reverse.genomic_start}-${pair.reverse.genomic_end}; exon ${pair.reverse.exon}; Tm ${pair.reverse.tm} °C, self ${pair.reverse.self_any}/${pair.reverse.self_end}, hairpin ${pair.reverse.hairpin_tm} °C)`);
+      lines.push(`  F ${pair.forward.sequence}  (spliced ${pair.forward.spliced_start}-${pair.forward.spliced_end}; genomic ${pair.forward.genomic_start}-${pair.forward.genomic_end}; exon ${pair.forward.exon}; Tm ${pair.forward.tm} °C, self ${pair.forward.self_any}/${pair.forward.self_end}, hairpin ${pair.forward.hairpin_tm} °C)`);
+      lines.push(`  R ${pair.reverse.sequence}  (spliced ${pair.reverse.spliced_start}-${pair.reverse.spliced_end}; genomic ${pair.reverse.genomic_start}-${pair.reverse.genomic_end}; exons ${pair.reverse.exons.join('/')}, junction ${pair.reverse.junction_left}+${pair.reverse.junction_right} bp; Tm ${pair.reverse.tm} °C, self ${pair.reverse.self_any}/${pair.reverse.self_end}, hairpin ${pair.reverse.hairpin_tm} °C)`);
       mismatchLine('F', pair.forward);
       mismatchLine('R', pair.reverse);
       misprimingLine('F', pair.forward);
@@ -3521,6 +3541,141 @@ const proteinPropsTool = define({
   },
   execute(args) {
     return proteinProperties(args.sequence);
+  },
+});
+
+const proteinChargeTool = (ctx) => define({
+  name: 'molbio_protein_charge',
+  description: 'Plot a protein\'s net charge across a pH range and report the isoelectric point on the same curve (Henderson-Hasselbalch summation over the terminal groups, K/R/H positive and D/E/C/Y negative). pka_set selects the pK table: bjellqvist (the set molbio_protein_props uses, so the pI matches) or emboss (the Epk.dat values). The SVG is written to the workspace and opened with the OS default viewer (auto_view, default true); the sampled curve and the charge at pH 7.4 are returned too. pI is an estimate and is only meaningful together with the named pK set.',
+  parameters: {
+    type: 'object',
+    required: ['sequence'],
+    properties: {
+      sequence: requiredString('Protein sequence (one-letter amino acid codes).'),
+      pka_set: { type: 'string', enum: ['bjellqvist', 'emboss'], description: 'pK table: bjellqvist (default, matches molbio_protein_props) or emboss (Epk.dat).' },
+      ph_min: { type: 'number', description: 'Lowest pH sampled (0-14, default 0).' },
+      ph_max: { type: 'number', description: 'Highest pH sampled (0-14, default 14).' },
+      steps: { type: 'integer', description: 'Number of sampled points including both ends (2-141, default 29 = 0.5 pH).' },
+      title: { type: 'string', description: 'Title drawn on the SVG (default "Net charge vs pH").' },
+      output_path: { type: 'string', description: 'Optional SVG file path; default protein-charge.svg in the session workspace.' },
+      auto_view: { type: 'boolean', description: 'Open the SVG automatically with the OS default application (default true).' },
+      ...ATTACH_IMAGE_PARAM,
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['length', 'pka_set', 'pka_label', 'pI', 'charge_at_7_4', 'charge_min', 'charge_max', 'ph_min', 'ph_max', 'steps', 'points', 'svg_path', 'auto_viewed'],
+    properties: {
+      length: { type: 'integer' },
+      pka_set: { type: 'string', enum: ['bjellqvist', 'emboss'] },
+      pka_label: { type: 'string' },
+      pI: { type: 'number', description: 'Isoelectric point on the sampled pK set.' },
+      charge_at_7_4: { type: 'number', description: 'Net charge at pH 7.4 (e).' },
+      charge_min: { type: 'number' },
+      charge_max: { type: 'number' },
+      ph_min: { type: 'number' },
+      ph_max: { type: 'number' },
+      steps: { type: 'integer' },
+      points: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['ph', 'charge'],
+          properties: {
+            ph: { type: 'number' },
+            charge: { type: 'number' },
+          },
+        },
+      },
+      svg_path: { type: 'string' },
+      auto_viewed: { type: 'boolean' },
+      image: ATTACHED_IMAGE_SCHEMA,
+      image_note: { type: 'string' },
+    },
+  },
+  render(value) {
+    const direction = value.charge_at_7_4 > 0 ? 'net positive' : value.charge_at_7_4 < 0 ? 'net negative' : 'neutral';
+    return [
+      value.length + ' aa · ' + value.pka_label + ' pK set · pI ' + value.pI + ' · charge at pH 7.4 ' + value.charge_at_7_4 + ' e (' + direction + ')',
+      'Curve over pH ' + value.ph_min + '-' + value.ph_max + ' (' + value.steps + ' points; range ' + value.charge_min + ' .. ' + value.charge_max + ' e), SVG written to ' + value.svg_path + (value.auto_viewed === true ? ' and opened automatically' : '') + '.',
+      'Henderson-Hasselbalch estimate: the pI belongs to the named pK set and is not interchangeable with another calculator.',
+      imageNote(value).trim(),
+    ].filter((line) => line !== '').join('\n');
+  },
+  async execute(args, exec) {
+    const curve = chargeCurve(args.sequence, {
+      pkaSet: args.pka_set ?? 'bjellqvist',
+      phMin: args.ph_min,
+      phMax: args.ph_max,
+      steps: args.steps,
+    });
+    const svg = renderChargeCurve(curve, { title: args.title });
+    const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, 'protein-charge.svg');
+    return mergeAttachedImage({ ...curve, svg_path: file, auto_viewed: viewed }, attached);
+  },
+});
+
+const dotplotTool = (ctx) => define({
+  name: 'molbio_dotplot',
+  description: 'Compute and draw a self-comparison dotplot of a DNA sequence by exact word matching: a black cell at (i,j) means the k-mer at i equals the k-mer at j (direct repeat); a red cell means it equals the REVERSE COMPLEMENT of the k-mer at j (inverted repeat). word defaults to 8 (4-12); lower words find shorter repeats and produce more dots. The plot is binned to a fixed grid so a repetitive sequence cannot produce an enormous file; direct/inverted match counts and any scan/plot caps are reported. The SVG is written and opened with the OS default viewer (auto_view, default true). Exact k-mer view — not a windowed identity/scoring dotplot.',
+  parameters: {
+    type: 'object',
+    required: ['sequence'],
+    properties: {
+      sequence: requiredString('DNA sequence (IUPAC; ambiguous k-mers are skipped and counted).'),
+      word: { type: 'integer', description: 'Word (k-mer) length, 4-12 (default 8).' },
+      mode: { type: 'string', enum: ['both', 'direct', 'inverted'], description: 'Which repeats to plot: both (default), direct only, or inverted only.' },
+      title: { type: 'string', description: 'Title drawn on the SVG (default "Sequence dotplot").' },
+      output_path: { type: 'string', description: 'Optional SVG file path; default dotplot.svg in the session workspace.' },
+      auto_view: { type: 'boolean', description: 'Open the SVG automatically with the OS default application (default true).' },
+      ...ATTACH_IMAGE_PARAM,
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['length', 'word', 'mode', 'direct_matches', 'inverted_matches', 'direct_cells', 'inverted_cells', 'ambiguous_bases', 'truncated', 'plot_truncated', 'svg_path', 'auto_viewed'],
+    properties: {
+      length: { type: 'integer' },
+      word: { type: 'integer' },
+      mode: { type: 'string', enum: ['both', 'direct', 'inverted'] },
+      direct_matches: { type: 'integer' },
+      inverted_matches: { type: 'integer' },
+      direct_cells: { type: 'integer', description: 'Occupied grid cells for direct repeats (the plotted count, not the match count).' },
+      inverted_cells: { type: 'integer' },
+      ambiguous_bases: { type: 'integer', description: 'Ambiguous k-mers skipped (IUPAC bases other than A/C/G/T).' },
+      truncated: { type: 'boolean', description: 'The match scan hit the work cap; counts are lower bounds.' },
+      plot_truncated: { type: 'boolean', description: 'The grid hit the cell cap; some dots are not drawn.' },
+      grid: { type: 'integer', description: 'Grid resolution used for binning the plot (cells per axis).' },
+      svg_path: { type: 'string' },
+      auto_viewed: { type: 'boolean' },
+      image: ATTACHED_IMAGE_SCHEMA,
+      image_note: { type: 'string' },
+    },
+  },
+  render(value) {
+    const lines = [
+      value.length + ' bp · word ' + value.word + ' · ' + value.direct_matches + ' direct / ' + value.inverted_matches + ' inverted match(es); ' + value.direct_cells + ' + ' + value.inverted_cells + ' occupied cell(s)',
+      'SVG written to ' + value.svg_path + (value.auto_viewed === true ? ' and opened automatically' : '') + '.',
+    ];
+    if (value.ambiguous_bases > 0) lines.push(value.ambiguous_bases + ' ambiguous k-mer(s) skipped (IUPAC bases other than A/C/G/T).');
+    if (value.truncated) lines.push('The match scan hit its work cap: the counts are lower bounds. Raise word to focus on longer, rarer repeats.');
+    if (value.plot_truncated) lines.push('The plotted grid hit its cell cap: some dots are not drawn.');
+    lines.push('Exact k-mer view (black = direct, red = inverted); the diagonal is the sequence against itself.');
+    if (imageNote(value) !== '') lines.push(imageNote(value).trim());
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const data = dotplot(args.sequence, {
+      word: args.word ?? 8,
+      mode: args.mode ?? 'both',
+    });
+    const svg = renderDotplot(data, { title: args.title });
+    const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, 'dotplot.svg');
+    const { directGrid, invertedGrid, ...stats } = data;
+    return mergeAttachedImage({ ...stats, svg_path: file, auto_viewed: viewed }, attached);
   },
 });
 
@@ -4907,6 +5062,7 @@ const sequenceLogoTool = (ctx) => define({
       smallSample: args.small_sample !== false,
     });
     const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, 'logo.svg');
+    rememberCardSvg(file, svg);
     const total = compositions.reduce((sum, column) => sum + column.bits, 0);
     const best = compositions.reduce((top, column) => (column.bits > top.bits ? column : top), compositions[0]);
     const round2 = (x) => Math.round(x * 100) / 100;
@@ -4923,6 +5079,17 @@ const sequenceLogoTool = (ctx) => define({
       gap_columns: compositions.filter((column) => column.gaps > 0).length,
       auto_viewed: viewed,
     }, attached);
+  },
+  // The transcript card draws the logo instead of asking the reader to open the
+  // file. The meta is a projection: cheap, total, and bounded (the markup is
+  // dropped when it exceeds CARD_SVG_MAX_BYTES).
+  presentationMeta(args, value) {
+    return figureCardMeta({
+      figure: 'logo',
+      summary: `Sequence logo · ${value.sequence_count} sequences × ${value.columns} columns · ${value.total_bits} bits (${value.score_type})`,
+      svgPath: value.svg_path,
+      extra: { title: args?.title ?? 'Sequence logo' },
+    }, cardSvgFor(value.svg_path));
   },
 });
 
@@ -5199,6 +5366,7 @@ const grnaDesignTool = (ctx) => define({
       mapPath = written.file;
       viewed = written.viewed;
       attached = written.attached;
+      rememberCardSvg(written.file, svg);
     }
     return mergeAttachedImage({
       target_name: name,
@@ -5223,6 +5391,36 @@ const grnaDesignTool = (ctx) => define({
       map_path: mapPath,
       auto_viewed: viewed,
     }, attached);
+  },
+  // The transcript card shows the ranked guides (top five) and, when the caller
+  // asked for map_path, the map itself. The summary is built here so the card
+  // stays a pure function of this projection.
+  presentationMeta(_args, value) {
+    const guides = value.guides.slice(0, 5).map((guide) => ({
+      rank: guide.rank,
+      sequence: guide.sequence,
+      pam: guide.pam,
+      strand: guide.strand,
+      start: guide.start,
+      end: guide.end,
+      score: guide.score,
+      off_target_count: guide.off_target_count ?? 0,
+    }));
+    const recognition = value.pam === '' ? 'no PAM (Cas13)' : value.pam + ' PAM';
+    return figureCardMeta({
+      figure: 'grna',
+      summary: `${value.cas_label} · ${value.guides.length} of ${value.candidate_count} guide(s) · ${recognition} · ${value.target_name} (${value.target_length} bp)`,
+      svgPath: value.map_path,
+      extra: {
+        guides,
+        guide_count: value.guides.length,
+        candidate_count: value.candidate_count,
+        csv_path: value.saved_to,
+        map_path: value.map_path,
+        cas_family: value.cas_family,
+        pam: value.pam,
+      },
+    }, value.map_path === '' ? '' : cardSvgFor(value.map_path));
   },
 });
 
@@ -7650,6 +7848,7 @@ export function apply(ctx) {
     silentSiteTool,
     verifySangerTool(ctx),
     proteinPropsTool,
+    proteinChargeTool(ctx),
     peptideDigestTool,
     codonOptimizeTool,
     helicalWheelTool(ctx),
@@ -7670,6 +7869,7 @@ export function apply(ctx) {
     phylogeneticTreeTool(ctx),
     pcrSimulateTool(ctx),
     gcCompositionTool(ctx),
+    dotplotTool(ctx),
     extractRegionTool(ctx),
     pubmedAbstractTool(ctx),
     bibtexTool(ctx),

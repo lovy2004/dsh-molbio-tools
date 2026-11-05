@@ -36,17 +36,17 @@
  *     from `anchor` and not from the RC-scan `start`. It is the REVERSE primer,
  *     and the amplicon ends at `anchor + length - 1`.
  *
- * NOTE — `designIntronSpanningPrimers` (tool: `molbio_design_intron_primers`)
- * deliberately does NOT follow this convention and is unchanged in 0.16.0: it
- * reports both primers as sense substrings of the spliced transcript, which is
- * what makes its `exon`/`junction_left`/`junction_right` geometry, its
- * spliced-vs-genomic mismatch report and its 3'-tail mispriming check read
- * uniformly on one sequence. Both ends are therefore reported 5'->3' on the
- * sense strand, `forward` is downstream of `reverse`, and the molecule to order
- * as the reverse primer is the reverse complement of the reported `reverse`.
- * That is a real usability wart, not a silent one (nothing feeds this pair to
- * `molbio_pcr_simulate`), so it is recorded on the roadmap rather than changed
- * in the same release that moves `designPrimerPairs`.
+ * `designIntronSpanningPrimers` (tool: `molbio_design_intron_primers`)
+ * follows the SAME convention since 0.23.0. The junction is carried by the
+ * REVERSE primer (the assay sits 5' of the junction), so the reverse candidate
+ * is scanned on the reverse complement of the spliced transcript: every 3'-end
+ * constraint is then evaluated on the molecule that is ordered, and the hit is
+ * mapped back to sense coordinates through `anchor` (its 3' end, the LEFT edge
+ * of its site). `forward` is upstream of `reverse`, the spliced amplicon runs
+ * from the forward 5' end to the reverse 5' end, and the reported reverse
+ * sequence is what goes on the order form. Before 0.23.0 the tool reported both
+ * primers as sense substrings, so `forward` sat downstream of `reverse` and the
+ * reported reverse was the reverse complement of the molecule to order.
  */
 
 import {
@@ -738,37 +738,60 @@ export function designPrimers(rawTemplate, rawOptions) {
 // ── cross-intron primer design ──────────────────────────────────────────────
 
 /**
- * Mismatch report for cross-intron candidates. Both primer scans run on the
- * spliced transcript in the sense orientation (the reported reverse.sequence
- * follows the established sense-substring convention of this tool), so the
- * mapping is uniform: `template_base` is what a perfectly matching primer
- * carries at the position on the spliced transcript, and coordinates come back
- * both spliced and genomic.
+ * Mismatch report for cross-intron candidates. The forward primer is the
+ * sense-strand substring at its binding site; the reverse primer is the REVERSE
+ * COMPLEMENT of the sense-strand substring at its site (the molecule that is
+ * ordered). `anchorStart` is the 0-based sense-strand position of the primer's
+ * 3' end — for the reverse primer that is the LEFT edge of its site — and
+ * `isReverse` flips both the perfect-match base and how a primer offset maps
+ * onto the transcript.
  */
-function intronMismatchReport(candidate, spliced, splicedToGenomic) {
+function intronMismatchReport(candidate, spliced, splicedToGenomic, anchorStart, isReverse) {
   const len = candidate.length;
-  return candidate.mismatches.map(({ p, base }) => ({
-    position: p + 1,
-    template_base: spliced[candidate.start + p],
-    primer_base: base,
-    spliced_position: candidate.start + p + 1,
-    genomic_position: splicedToGenomic[candidate.start + p] + 1,
-    distance_from_3prime: len - 1 - p,
-  }));
+  return candidate.mismatches.map(({ p, base }) => {
+    const offset = isReverse ? len - 1 - p : p;
+    const index = anchorStart + offset;
+    return {
+      position: p + 1,
+      template_base: isReverse ? complement(spliced[index]) : spliced[index],
+      primer_base: base,
+      spliced_position: index + 1,
+      genomic_position: splicedToGenomic[index] + 1,
+      distance_from_3prime: len - 1 - p,
+    };
+  });
 }
 
 /**
- * Design qPCR primer pairs where the forward primer spans an exon-exon
- * junction (>= min_junction_bases on each side) so genomic DNA cannot be
- * amplified, and the reverse primer sits in a different exon. Coordinates are
- * reported both on the spliced transcript and on the genomic sequence.
+ * The same weights as `mismatchPenalty`, over the snake_case report fields.
+ * The old intron path handed snake_case reports to the camelCase helper, so the
+ * 3'-zone surcharge never applied there; this keeps the two conventions apart on
+ * purpose instead of loosening the shared helper.
+ */
+function intronMismatchPenalty(report, zone) {
+  return report.reduce((sum, mismatch) => sum + 8 + (mismatch.distance_from_3prime <= zone ? 4 : 0), 0);
+}
+
+/**
+ * Design qPCR primer pairs across an exon-exon junction so genomic DNA cannot
+ * be amplified: the REVERSE primer straddles the junction (>= minJunctionBases
+ * on each side), the FORWARD primer sits upstream inside a single exon, and the
+ * spliced amplicon crosses the junction inside the reverse primer's site.
+ *
+ * Coordinates are reported both on the spliced transcript and on the genomic
+ * sequence. Orientation follows `designPrimerPairs` (see the file header):
+ * `forward.sequence` is the sense-strand substring at its site and
+ * `reverse.sequence` is the reverse complement of the sense-strand substring at
+ * its site. The reverse candidate is scanned on the reverse complement of the
+ * spliced transcript, so every 3'-end constraint (GC clamp, end stability, end
+ * GC, self-end, hairpin) applies to the molecule that is ordered.
  */
 export function designIntronSpanningPrimers(genomic, exons, opts) {
   if (!Array.isArray(exons) || exons.length < 2) throw new MolbioInputError('exons must be an array of at least two {start, end} spans');
   const sorted = [...exons].sort((a, b) => a.start - b.start);
   for (const exon of sorted) {
     if (!Number.isInteger(exon.start) || !Number.isInteger(exon.end) || exon.start < 1 || exon.end > genomic.length || exon.start > exon.end) {
-      throw new MolbioInputError(`exon ${JSON.stringify(exon)} is outside the genomic sequence (length ${genomic.length})`);
+      throw new MolbioInputError('exon ' + JSON.stringify(exon) + ' is outside the genomic sequence (length ' + genomic.length + ')');
     }
   }
   for (let i = 1; i < sorted.length; i++) {
@@ -791,33 +814,39 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
     }
   });
   if (spliced.length < 24) throw new MolbioInputError('the spliced transcript is too short for primer design');
+  const splicedLength = spliced.length;
+  const rcSpliced = reverseComplement(spliced);
 
   // v13 target position preference (coordinates on the spliced transcript).
   const targetPosition = opts.targetPosition;
-  if (targetPosition !== undefined && (!Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > spliced.length)) {
-    throw new MolbioInputError(`target_position ${targetPosition} is outside the spliced transcript (length ${spliced.length})`);
+  if (targetPosition !== undefined && (!Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > splicedLength)) {
+    throw new MolbioInputError('target_position ' + targetPosition + ' is outside the spliced transcript (length ' + splicedLength + ')');
   }
   const targetWeight = opts.targetPenalty ?? DESIGN_DEFAULTS.targetPenalty;
 
-  // Forward candidates must span a junction with minSide bases on each side.
-  const fwd = [];
-  for (const candidate of scanCandidates(spliced, 0, spliced.length - opts.lenMin, opts)) {
+  // Forward candidates: entirely inside one exon on the sense strand.
+  const fwd = scanCandidates(spliced, 0, splicedLength - opts.lenMin, opts)
+    .filter((candidate) => splicedToExon[candidate.start] === splicedToExon[candidate.start + candidate.length - 1])
+    .map((candidate) => ({ ...candidate, exon: splicedToExon[candidate.start] }))
+    .sort((a, b) => a.start - b.start);
+
+  // Reverse candidates: scanned on the reverse complement (the ordered
+  // molecule), then mapped back to the sense-strand 3' end `anchor`.
+  const rev = [];
+  for (const candidate of scanCandidates(rcSpliced, 0, splicedLength - opts.lenMin, opts)) {
+    const anchor = splicedLength - (candidate.start + candidate.length);
+    const topEnd = anchor + candidate.length - 1;
     for (const junction of junctionPositions) {
-      const left = junction.splicedPos - candidate.start;
-      const right = candidate.start + candidate.length - junction.splicedPos;
+      const left = junction.splicedPos - anchor;
+      const right = topEnd + 1 - junction.splicedPos;
       if (left >= minSide && right >= minSide) {
-        fwd.push({ ...candidate, junction, junction_left: left, junction_right: right });
+        rev.push({ ...candidate, anchor, junction, junction_left: left, junction_right: right });
         break;
       }
     }
   }
-
-  // Reverse candidates sit entirely inside one exon.
-  const rev = scanCandidates(spliced, 0, spliced.length - opts.lenMin, opts)
-    .filter((candidate) => splicedToExon[candidate.start] === splicedToExon[candidate.start + candidate.length - 1])
-    .map((candidate) => ({ ...candidate, exon: splicedToExon[candidate.start] }))
-    .sort((a, b) => a.start - b.start);
-  const revStarts = rev.map((candidate) => candidate.start);
+  rev.sort((a, b) => a.anchor - b.anchor);
+  const revAnchors = rev.map((candidate) => candidate.anchor);
 
   const tmCenter = (opts.tmMin + opts.tmMax) / 2;
   const misprimingIndex = opts.checkMispriming
@@ -826,48 +855,52 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
   const maxSites = opts.misprimingMaxSites ?? DESIGN_DEFAULTS.misprimingMaxSites;
   const pairs = [];
   for (const f of fwd) {
-    const fwdEnd = f.start + f.length - 1;
-    const aMin = fwdEnd - opts.ampliconMax + 1;
-    const aMax = fwdEnd - opts.ampliconMin + 1;
+    // The reverse site must start after the forward 3' end, and the amplicon
+    // (forward 5' -> reverse 5') must fit the window. The bounds are widened by
+    // the primer-length range and the exact length is checked below, because a
+    // long reverse primer can start earlier and still close inside the window.
+    const aMin = Math.max(f.start + f.length, f.start + opts.ampliconMin - opts.lenMax);
+    const aMax = f.start + opts.ampliconMax - opts.lenMin;
+    if (aMax < aMin) continue;
     let lo = 0;
-    let hi = revStarts.length;
+    let hi = revAnchors.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (revStarts[mid] < aMin) lo = mid + 1;
+      if (revAnchors[mid] < aMin) lo = mid + 1;
       else hi = mid;
     }
     for (let i = lo; i < rev.length; i++) {
       const r = rev[i];
-      if (r.start > aMax) break;
-      if (r.exon === f.junction.down) continue; // reverse primer must sit in a different exon
-      const gEnd = splicedToGenomic[fwdEnd];
-      const gStart = splicedToGenomic[r.start];
+      if (r.anchor > aMax) break;
+      const ampliconStart = f.start;
+      const ampliconEnd = r.anchor + r.length - 1;
+      const ampliconLength = ampliconEnd - ampliconStart + 1;
+      if (ampliconLength < opts.ampliconMin || ampliconLength > opts.ampliconMax) continue;
+      const gStart = splicedToGenomic[ampliconStart];
+      const gEnd = splicedToGenomic[ampliconEnd];
       if (gEnd - gStart + 1 < minGenomicSpan) continue;
       if (Math.abs(f.tm - r.tm) > opts.maxTmDelta) continue;
       const dimer = dimerThermo(f.sequence, r.sequence, opts.ctMolar ?? DEFAULT_CT_MOLAR);
       if (dimer.any_tm > opts.maxDimerTm || dimer.end_tm > opts.maxDimerEndTm) continue;
+      const misK = opts.mispriming3PrimeBases ?? DESIGN_DEFAULTS.mispriming3PrimeBases;
       let fMispriming = { count: 0, sites: [] };
       let rMispriming = { count: 0, sites: [] };
       if (misprimingIndex !== undefined) {
-        const misK = opts.mispriming3PrimeBases ?? DESIGN_DEFAULTS.mispriming3PrimeBases;
-        fMispriming = misprimingForCandidate(f, f.sequence.slice(-misK), misprimingIndex, opts, f.start);
+        // Exclude each primer's own 3'-tail window (not its 5' end).
+        fMispriming = misprimingForCandidate(f, f.sequence.slice(-misK), misprimingIndex, opts, f.start + f.length - misK);
         if (fMispriming.count > maxSites) continue;
-        // the reported reverse sequence follows the sense-substring convention:
-        // the real oligo is its reverse complement, so its 3' tail is the RC
-        // of the FIRST k bases and the intended site is r.start
-        const rTail = reverseComplement(r.sequence.slice(0, misK));
-        rMispriming = misprimingForCandidate(r, rTail, misprimingIndex, opts, r.start);
+        rMispriming = misprimingForCandidate(r, r.sequence.slice(-misK), misprimingIndex, opts, r.anchor);
         if (rMispriming.count > maxSites) continue;
       }
-      const fMismatches = intronMismatchReport(f, spliced, splicedToGenomic);
-      const rMismatches = intronMismatchReport(r, spliced, splicedToGenomic);
+      const fMismatches = intronMismatchReport(f, spliced, splicedToGenomic, f.start, false);
+      const rMismatches = intronMismatchReport(r, spliced, splicedToGenomic, r.anchor, true);
       const zone = opts.mismatch3PrimeZone ?? DESIGN_DEFAULTS.mismatch3PrimeZone;
       let fTargetDistance;
       let rTargetDistance;
       let targetDistance;
       if (targetPosition !== undefined) {
-        fTargetDistance = Math.abs(f.start + f.length - targetPosition); // spliced 1-based 3' end
-        rTargetDistance = Math.abs(r.start + 1 - targetPosition);
+        fTargetDistance = Math.abs(f.start + f.length - targetPosition); // forward 3' end (1-based)
+        rTargetDistance = Math.abs(r.anchor + 1 - targetPosition);       // reverse 3' end (1-based)
         targetDistance = Math.min(fTargetDistance, rTargetDistance);
       }
       const penalty = 0.6 * Math.abs(f.tm - r.tm) + Math.abs(f.tm - tmCenter) + Math.abs(r.tm - tmCenter)
@@ -875,8 +908,8 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
         + 1.0 * Math.max(0, f.self_end - 1) + 1.0 * Math.max(0, r.self_end - 1)
         + 0.2 * Math.max(0, f.hairpin_tm - 40) + 0.2 * Math.max(0, r.hairpin_tm - 40)
         + 0.2 * Math.max(0, dimer.any_tm - 40) + 0.2 * Math.max(0, dimer.end_tm - 40)
-        + mismatchPenalty(fMismatches, zone)
-        + mismatchPenalty(rMismatches, zone)
+        + intronMismatchPenalty(fMismatches, zone)
+        + intronMismatchPenalty(rMismatches, zone)
         + 8 * fMispriming.count + 8 * rMispriming.count
         + (targetDistance !== undefined ? targetWeight * targetDistance : 0);
       pairs.push({
@@ -894,9 +927,7 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
           spliced_end: f.start + f.length,
           genomic_start: splicedToGenomic[f.start] + 1,
           genomic_end: splicedToGenomic[f.start + f.length - 1] + 1,
-          exons: [String(f.junction.up + 1), String(f.junction.down + 1)],
-          junction_left: f.junction_left,
-          junction_right: f.junction_right,
+          exon: f.exon + 1,
           mismatch_count: fMismatches.length,
           mismatches: fMismatches,
           mispriming_count: fMispriming.count,
@@ -918,11 +949,13 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
           hairpin_tm: r.hairpin_tm,
           end_stability_kcal: r.end_stability_kcal,
           end_gc_count: r.end_gc_count,
-          spliced_start: r.start + 1,
-          spliced_end: r.start + r.length,
-          genomic_start: splicedToGenomic[r.start] + 1,
-          genomic_end: splicedToGenomic[r.start + r.length - 1] + 1,
-          exon: r.exon + 1,
+          spliced_start: r.anchor + 1,
+          spliced_end: r.anchor + r.length,
+          genomic_start: splicedToGenomic[r.anchor] + 1,
+          genomic_end: splicedToGenomic[r.anchor + r.length - 1] + 1,
+          exons: [String(r.junction.up + 1), String(r.junction.down + 1)],
+          junction_left: r.junction_left,
+          junction_right: r.junction_right,
           mismatch_count: rMismatches.length,
           mismatches: rMismatches,
           mispriming_count: rMispriming.count,
@@ -934,7 +967,7 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
           })),
           ...(rTargetDistance !== undefined ? { target_distance: rTargetDistance } : {}),
         },
-        spliced_amplicon: { start: r.start + 1, end: fwdEnd + 1, length: fwdEnd - r.start + 1 },
+        spliced_amplicon: { start: ampliconStart + 1, end: ampliconEnd + 1, length: ampliconLength },
         genomic_amplicon_length: gEnd - gStart + 1,
         ...(targetDistance !== undefined ? { target_distance: targetDistance } : {}),
         penalty: Math.round(penalty * 100) / 100,
@@ -945,7 +978,7 @@ export function designIntronSpanningPrimers(genomic, exons, opts) {
   const seen = new Set();
   const unique = [];
   for (const pair of pairs) {
-    const key = `${pair.spliced_amplicon.start}:${pair.spliced_amplicon.end}`;
+    const key = pair.spliced_amplicon.start + ':' + pair.spliced_amplicon.end;
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(pair);

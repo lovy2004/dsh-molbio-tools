@@ -89,7 +89,7 @@
       "covers": [
         "molbio_design_intron_primers"
       ],
-      "instruction": "I need a qPCR assay that will NOT amplify contaminating genomic DNA. Here is the genomic sequence and the two exon coordinates — design a pair where the forward primer spans the exon-exon junction. Tell me the spliced amplicon size and how far apart the primers sit on the genome.\n\n{seq:intron_genomic}\n\nExons: 1-400 and 701-1100 (1-based).",
+      "instruction": "I need a qPCR assay that will NOT amplify contaminating genomic DNA. Here is the genomic sequence and the two exon coordinates — design a pair where one primer spans the exon-exon junction (report which one it is). Tell me the spliced amplicon size and how far apart the primers sit on the genome.\n\n{seq:intron_genomic}\n\nExons: 1-400 and 701-1100 (1-based).",
       "timeout_ms": 300000,
       "expect_tools": [
         "molbio_design_intron_primers"
@@ -97,8 +97,8 @@
       "assertions": [
         {
           "where": "tool",
-          "pattern": "forward primer spans an exon-exon junction",
-          "note": "the property that makes the assay genomic-DNA-proof"
+          "pattern": "REVERSE primer spans an exon-exon junction",
+          "note": "the property that makes the assay genomic-DNA-proof; since 0.23.0 the junction is carried by the reverse primer (the assay sits 5' of the junction), and the forward primer is upstream"
         },
         {
           "where": "tool",

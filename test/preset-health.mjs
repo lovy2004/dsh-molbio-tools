@@ -36,6 +36,7 @@
  */
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 // Re-exported for test/drift-probe.mjs, which drives the same reader against
@@ -101,6 +102,34 @@ function flattenRows(rows, at = '') {
   return found;
 }
 
+/**
+ * Resolve a row's specifier the way the Loader does, or say why it cannot.
+ *
+ * The Loader imports a package row BY SPECIFIER (`import.meta.resolve` anchored
+ * in the config project's scope, see `cordis-plugin-loader`), and Node enforces
+ * the target package's `exports` map on that specifier. `packageInstalled` only
+ * proves that a directory exists, so a row naming a SUBPATH the harness dropped
+ * used to pass this suite and then fail at preset mount — that is exactly how
+ * `@deepseek-ai/dsh-tool-subagent-control/list-agents` (removed in 0.2.2-rc.1,
+ * where `list_agents` moved into the control plugin itself) survived until a
+ * manual run against the new harness.
+ *
+ * Exported so `test/drift-probe.mjs` can drive it against a mutated specifier:
+ * a guard nobody has seen fail is not a guard (rules.md rule 9).
+ *
+ * @param {string} name the row's `name`.
+ * @param {string} harnessRoot the installed harness.
+ * @returns {string|undefined} a diagnostic, or undefined when it resolves.
+ */
+export function specifierProblem(name, harnessRoot) {
+  try {
+    createRequire(join(harnessRoot, 'package.json')).resolve(name);
+    return undefined;
+  } catch (error) {
+    return `specifier does not resolve: ${error?.code ?? error?.message ?? error}`;
+  }
+}
+
 /** Validate one row against its package's own `Config` schema. */
 async function checkRow(row, packages, harnessRoot, presetBase) {
   const id = typeof row.id === 'string' ? row.id : row.name;
@@ -116,6 +145,16 @@ async function checkRow(row, packages, harnessRoot, presetBase) {
     return existsSync(target)
       ? { ...result, status: 'ok', detail: 'preset-relative module present' }
       : { ...result, status: 'unresolvable', detail: `preset-relative module not found: ${target}` };
+  }
+
+  // A bare package row is imported by SPECIFIER, so its `exports` map decides
+  // whether it mounts. Check that before looking for the package directory:
+  // `packageInstalled` walks up from the harness root and would happily report a
+  // package whose named subpath no longer exists. `cordis:*` rows name Loader
+  // builtins, not modules, so they are skipped here too.
+  if (!row.name.includes(':') && row.name !== selfName) {
+    const problem = specifierProblem(row.name, harnessRoot);
+    if (problem !== undefined) return { ...result, status: 'unresolvable', detail: problem };
   }
 
   const pkgDir = row.name === selfName

@@ -17,7 +17,7 @@
 #
 # Edit THIS file, then run `node build/preset-patch.mjs`.
 #
-# NOTE: the mode is the ONLY place these 60 tools load. The same bundle patch's
+# NOTE: the mode is the ONLY place these 62 tools load. The same bundle patch's
 # other insert (`molbio-client` → `./host.mjs`) deliberately registers nothing —
 # registering the tool at the host level as well would put it in every session
 # and is not what this package is for.
@@ -48,18 +48,20 @@
 # list carries no comments of its own, so none appear below; provenance and the
 # upgrade rules live in this header.
 #
-# Baseline: the `standard` preset of dsh 0.2.1-rc.3 (harness root
+# Baseline: the `standard` preset of dsh 0.2.2-rc.1 (harness root
 # `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`, file
 # `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`, whose
 # rows live under the `preset-standard` row's `config.plugins:`).
 #
-# 0.2.1-rc.3 ships the SAME row list as 0.2.1-rc.2 (verified by diffing the
-# file), so no row changed in this bump. The last upstream row change was
-# 0.2.1-rc.2: it added `time-context`, `tool-schedule` and `tool-plugin-market`;
-# dropped the two disabled optional subagent providers (`tool-subagent-codex`,
-# `tool-subagent-claude-code`) and `tool-ralph`; dropped the persona `suffix` and
-# both `backgroundMode: continuable` settings; and reworded the plan-mode
-# section. Absorb such a bump verbatim — see workflow.md §4.
+# 0.2.2-rc.1 is the FIRST row change since 0.2.1-rc.2 dropped the optional
+# subagent providers and `tool-ralph`. It folded `list_agents` into
+# `@deepseek-ai/dsh-tool-subagent-control` (the `./list-agents` subpath export is
+# gone, so the `tool-subagent-list-agents` row was dropped here), renamed the
+# `tool-subagent` model-selection settings to `modelSelection` +
+# `modelDiscovery`, and made `applyPatch: false` explicit on `tool-fs`. A row
+# that names a deleted package subpath still PASSES a directory-existence check:
+# `test/preset-health.mjs` now resolves the specifier the way the Loader does.
+# Absorb such a bump verbatim — see workflow.md §4.
 #
 # Keeping the text verbatim is not cosmetic: a preset mounts DSH's OWN
 # packages, so upstream drift here kills the whole preset at mount (the failure
@@ -100,6 +102,11 @@
   disabled: !!js process.platform !== 'win32'
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
+  config:
+    # Set false to drop the apply_patch tool beside edit. (0.2.2-rc.1 makes this
+    # explicit in the shipped standard preset; the package default is false, and
+    # the row is kept verbatim so the two stay comparable.)
+    applyPatch: false
 - id: tool-fs-search
   name: '@deepseek-ai/dsh-tool-fs-search'
   config:
@@ -162,14 +169,13 @@
   config:
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
-    - id: tool-subagent-list-agents
-      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
         provider: spawn
         toolName: subagent
-        modelSelectionSettings: true
+        modelSelection: true
+        modelDiscovery: true
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
@@ -201,7 +207,7 @@
   name: '@deepseek-ai/dsh-plugin-market/tools'
   disabled: true
 
-# dsh-molbio-tools: molecular-biology toolset (60 tools across sequence
+# dsh-molbio-tools: molecular-biology toolset (62 tools across sequence
 # analysis, primers (incl. TaqMan probes and multiplex compatibility),
 # in-silico PCR, cloning (incl. Golden Gate), enzyme catalog, methylation-aware
 # and double digests, plasmids, Sanger verification, proteins (incl. helical

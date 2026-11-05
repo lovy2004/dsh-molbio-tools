@@ -10,12 +10,12 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.22.2）
+## 1. 当前状态（0.23.0）
 
-- 60 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- 62 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.1-rc.5**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
+- 基线：DSH **0.2.2-rc.1**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -45,6 +45,15 @@ L = 需要新机制或外部资源）。
   的 key 解析顺序变为 **`api_key` 参数 → DSH 凭据库 → 环境变量**（环境变量会被 agent 自己的 shell
   子进程继承，凭据库不会）；同时插件详情页出现 **PubMed API key** 表单，用户不必改 YAML。
   没有凭据库的组合行为与 0.22.0 相同。
+- **0.23.0 是工具行为版**：修掉 2.0 的遗留（跨内含子引物现在报告的真实反向分子、F 在 R 上游），
+  落地 2.9a（sequence logo / gRNA 的调用卡），并从候选池新增两个轻量工具：
+  `molbio_protein_charge`（survey #34，电荷-pH 滴定 + 可切换 pK 表）与
+  `molbio_dotplot`（survey #23，k-mer 直接/反向重复）。工具 60 → 62，benchmark 61 → 63 题。
+- **0.23.0 同版完成 0.2.2-rc.1 适配（工具行为零变化）**：基线 rc.5 → 0.2.2-rc.1。上游把
+  `list_agents` 并入 `dsh-tool-subagent-control` 并删除 `./list-agents` 子路径，preset 删掉该行
+  （30 → 29）、`tool-subagent` 改用 `modelSelection`/`modelDiscovery`、`tool-fs` 补
+  `applyPatch: false`；`preset-health` 增加真实 specifier 解析、`contract` 三处断言改回契约。
+  两份 `dshReleases` 增加 `0.2.2-rc.1: compatible`，CI 随基线钉到该版本。
 - **0.22.2 是 rc.5 纯适配版（工具行为零变化）**：基线 rc.3 → rc.5。上游 `standard` 行清单
   **逐字节未变**；真正的变化在**打包形态**——桌面版 `app.asar` 裁掉 `lib/types`，于是
   `contract` 的声明守卫改为"npm 包读 `.d.ts`，桌面版读 `typert.host.js` / runtime 内嵌副本"，
@@ -64,13 +73,17 @@ L = 需要新机制或外部资源）。
 `forward`/`reverse` 曾**标反**（F 在下游、R 在上游），按原样送进 `molbio_pcr_simulate`
 得到 **0 个产物**。修法与"为什么只有串联测试看得见"见 [CHANGELOG 0.16.0](../CHANGELOG.md)。
 
-**遗留的一条同源问题（未改，故意）**：`molbio_design_intron_primers` 用的是**另一个约定**——
-它把两条引物都报成**剪接后转录本的 sense 子串**（这样 `exon` / `junction_left` /
-`junction_right` 几何、剪接 vs 基因组双坐标错配报告、3' 尾错配检查才能统一读在**一条**序列上）。
-代价是：它报的 `reverse` **不是**要订购的那条分子，真正的反向引物是它的反向互补，
-而且 `forward` 在 `reverse` **下游**。这是**可用性瑕疵、不是沉默的错**
-（没有任何工具把这个对送进模拟器），所以没有跟 `designPrimerPairs` 在同一版里一起改。
-要动它就得同时改渲染、错配报告与 `test/smoke.mjs` 的 sense-substring 断言。
+### 2.0b ✅ 已修（0.23.0）跨内含子引物的朝向
+
+`molbio_design_intron_primers` 曾把两条引物都报成剪接后转录本的 sense 子串：报告的 `reverse`
+不是要订购的分子（真正的反向引物是它的反向互补），而且 `forward` 在 `reverse` 下游。
+0.23.0 起反向候选在**剪接转录本的反向互补**上扫描，因此 3' 端约束（GC clamp、末端稳定性、
+末端 GC、self-end、发夹）落在**真正会订购的那条分子**上；命中再经 `anchor` 映回 sense 坐标。
+报告的 `reverse.sequence` 是可直接下单的 5'→3' 分子，F 在 R 上游，剪接扩增子从 F 的 5' 端到
+R 的 5' 端。`exon` 只出现在正向引物上，`exons`/`junction_*` 只出现在反向引物上；错配的
+`template_base` 对反向引物是转录本碱基的**互补**。这次同时改了渲染、错配报告、
+`test/smoke.mjs` 的断言与 benchmark `intron-qpcr` 的措辞；物理扩增子
+（320-406 spliced / 387 bp genomic）保持不变。
 
 ### 2.1 ✅ 已修（0.16.0）`molbio_methylation_check` 的表与 NEB 不一致
 
@@ -145,8 +158,9 @@ v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
 
 ### 2.9 浏览器面板的候选（客户端半，不动 preset 目录）
 
-- 给 `molbio_sequence_logo` / `molbio_grna_design` 等工具加**调用卡**（同一套
-  `presentationMeta` + 卡片模式，上线前先跑 `test/client.mjs` 的抢座位顺序那一层）；
+- ✅ **已做（0.23.0）**：`molbio_sequence_logo` 与 `molbio_grna_design` 有调用卡
+  （`molbio-figure` 投影 + `FIGURE_TOOL_KEYS`；logo 画图，gRNA 画图谱并列出前 5 条 guide）。
+  `test/map-card.mjs` 现在同时跑两种卡片，`contract` 从产物里的两张 key 表反推投影数。
 - 文献库**写回**需先定并发契约（当前只读）；
 - 结构文件的浏览器内预览（`.pdb/.cif/.sdf/.mol`）：`ctx.documentPreviews.register` +
   keyed 座位是**容器**，不是现成的 3D 查看器——要么只做 2D 投影（Cα 轨迹/二级结构条带），
@@ -190,7 +204,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 61 条任务覆盖 **60/60 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 63 条任务覆盖 **62/62 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。
@@ -262,7 +276,7 @@ Linux runner 上这些断言会因**分隔符**而失败——那是在报告宿
 缺陷。`test/client-mount.mjs` 还有一处同类问题（写死 `%APPDATA%\npm`），**0.18.2 已修**，那也
 正是 workflow 第一次运行全红的原因。
 
-**改法（已设计，未做）**：在每个受影响的测试文件顶部加三个助手，把"输入路径"和"期望值"都从
+**改法（已在 0.18.4 落地，此处保留施工记录）**：在每个受影响的测试文件顶部加三个助手，把"输入路径"和"期望值"都从
 同一个根推导出来：
 
 ```js
@@ -290,7 +304,7 @@ Node 做路径运算（Windows 是 `<prefix>/node_modules`，POSIX 是 `<prefix>
 - **agent 驱动浏览器终端**：无 `dsh-tool-terminal`，且面板明确不把输出转给模型。
   `ctx.computerUse`/`ctx.browserUse` 这类 seam 只允许**一个** provider 注册，
   第三方插件即便在未来版本也不能自带一个并行实现去抢。
-- **把 57 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
+- **把 62 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
   提示预算）。真要全局可见需要自己加一层宿主行，而那会让专属模式里的同一行变成死行。
 - **持久 shell 进 preset**：收益有限、风险明确（工具名冲突要 disable 一次性那行，
   且需要未经验证的 `isolate: { terminals: true }` 分组），详见

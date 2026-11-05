@@ -32,11 +32,26 @@ const RESIDUE_MASS = {
 };
 const WATER = 18.015;
 
-// Bjellqvist 1993 pK values (EMBOSS-style)
-const PK = {
-  Nterm: 8.6, Cterm: 3.6, C: 9.0, D: 4.05, E: 4.45, H: 6.04,
-  K: 10.8, R: 12.0, Y: 10.3,
+/**
+ * Selectable pK sets for the Henderson-Hasselbalch charge model. `bjellqvist`
+ * is the set `proteinProperties` has always used for its pI; `emboss` is the
+ * Epk.dat table EMBOSS ships with `iep`. They are NOT interchangeable — the
+ * reported set name travels with every charge/pI value.
+ */
+export const PK_SETS = {
+  bjellqvist: {
+    label: 'Bjellqvist 1993',
+    Nterm: 8.6, Cterm: 3.6, C: 9.0, D: 4.05, E: 4.45, H: 6.04,
+    K: 10.8, R: 12.0, Y: 10.3,
+  },
+  emboss: {
+    label: 'EMBOSS Epk.dat',
+    Nterm: 8.6, Cterm: 3.6, C: 8.5, D: 3.9, E: 4.1, H: 6.5,
+    K: 10.8, R: 12.5, Y: 10.1,
+  },
 };
+
+const PK = PK_SETS.bjellqvist;
 
 const HYDROPATHY = {
   A: 1.8, R: -4.5, N: -3.5, D: -3.5, C: 2.5, Q: -3.5, E: -3.5,
@@ -44,36 +59,43 @@ const HYDROPATHY = {
   P: -1.6, S: -0.8, T: -0.7, W: -0.9, Y: -1.3, V: 4.2,
 };
 
-function countAminoAcids(seq) {
+export function countAminoAcids(seq) {
   const counts = {};
   for (const aa of seq) counts[aa] = (counts[aa] ?? 0) + 1;
   return counts;
 }
 
-function chargeAt(seq, counts, pH) {
+/**
+ * Net charge at a given pH by Henderson-Hasselbalch summation. The terminal
+ * groups count once each; K/R/H are positive, D/E/C/Y negative. `pkaSet` is a
+ * key of PK_SETS (or a set object), so callers can name the table they used.
+ */
+export function netCharge(seq, counts, pH, pkaSet = 'bjellqvist') {
+  const pk = typeof pkaSet === 'string' ? PK_SETS[pkaSet] : pkaSet;
+  if (pk === undefined) throw new MolbioInputError('unknown pK set ' + JSON.stringify(pkaSet) + '; expected one of ' + Object.keys(PK_SETS).join(', '));
   let charge = 0;
   const pos = (pKa) => 1 / (1 + Math.pow(10, pH - pKa));
   const neg = (pKa) => 1 / (1 + Math.pow(10, pKa - pH));
-  charge += pos(PK.Nterm);
-  for (const [aa, pKa] of [['K', PK.K], ['R', PK.R], ['H', PK.H]]) {
+  charge += pos(pk.Nterm);
+  for (const [aa, pKa] of [['K', pk.K], ['R', pk.R], ['H', pk.H]]) {
     if (counts[aa] !== undefined) charge += counts[aa] * pos(pKa);
   }
-  charge -= neg(PK.Cterm);
-  for (const [aa, pKa] of [['D', PK.D], ['E', PK.E], ['C', PK.C], ['Y', PK.Y]]) {
+  charge -= neg(pk.Cterm);
+  for (const [aa, pKa] of [['D', pk.D], ['E', pk.E], ['C', pk.C], ['Y', pk.Y]]) {
     if (counts[aa] !== undefined) charge -= counts[aa] * neg(pKa);
   }
   return charge;
 }
 
 /** Isoelectric point by bisection over the net-charge function. */
-export function isoelectricPoint(seq, counts) {
+export function isoelectricPoint(seq, counts, pkaSet = 'bjellqvist') {
   let lo = 0;
   let hi = 14;
-  let chargeLo = chargeAt(seq, counts, lo);
-  let chargeHi = chargeAt(seq, counts, hi);
+  let chargeLo = netCharge(seq, counts, lo, pkaSet);
+  let chargeHi = netCharge(seq, counts, hi, pkaSet);
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
-    const chargeMid = chargeAt(seq, counts, mid);
+    const chargeMid = netCharge(seq, counts, mid, pkaSet);
     if (Math.abs(chargeMid) < 1e-4) return Math.round(mid * 100) / 100;
     if (Math.sign(chargeMid) === Math.sign(chargeLo)) {
       lo = mid;

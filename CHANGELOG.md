@@ -10,6 +10,125 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.23.0] — 2026-10-31（跨内含子引物朝向修复；调用卡；两个轻量工具；DSH 0.2.2-rc.1 适配）
+
+**工具数 60 → 62，benchmark 61 → 63 题（62/62 覆盖）。** 三块工作：修掉路线图 2.0 的遗留
+（这是本版唯一改变既有输出的修复）、落地 2.9a 的调用卡、从候选池加入两个纯计算工具。
+面板包 `0.1.7 → 0.1.8`（客户端产物变了）。
+
+### 1. 跨内含子引物：报告真实的分子与真实的方向（2.0 遗留）
+
+`molbio_design_intron_primers` 一直把两条引物都报成剪接转录本的 **sense 子串**。后果有两个：
+报告的 `reverse` 不是要订购的那条分子（真正的反向引物是它的反向互补），而且 `forward` 落在
+`reverse` 的下游——把这对引物按原样理解会得到一套不扩增的测定。
+
+- **修法**：反向候选改在**剪接转录本的反向互补**上扫描，因此 GC clamp、末端稳定性、末端 GC、
+  self-end、发夹这些 **3' 端约束第一次落在真正会订购的那条分子上**；命中再经 `anchor`（其 3' 端，
+  即结合位点的左边缘）映回 sense 坐标。正向候选仍是 sense 链上的单外显子窗口。
+- **输出**：`forward.sequence` 是 sense 子串，`reverse.sequence` 是可直接下单的 5'→3' 分子；
+  F 在 R 上游，剪接扩增子从 F 的 5' 端到 R 的 5' 端；`exon` 只在正向引物上，
+  `exons`/`junction_left`/`junction_right` 只在反向引物上。
+- **错配报告**：`template_base` 仍是"完美匹配时该引物会携带的碱基"——正向是转录本碱基，
+  反向是它的**互补**；3' 距离与基因组坐标仍逐条给出。
+- **顺带修掉的静默错**：旧代码把 `mismatchReport` 的 **snake_case** 报告直接喂给
+  `mismatchPenalty`（它读 camelCase 的 `distanceFrom3Prime`），所以跨内含子模式的 3' 关键区
+  加罚**从未生效**。现在用 `intronMismatchPenalty` 读正确字段。
+- **行为变化**：同一 fixture 的物理扩增子没有变（spliced 320-406 / 87 bp，genomic 387 bp，
+  junction 12+6 bp），但反向引物序列变成其反向互补，**候选集也因为 3' 约束落到正确的一端而改变**
+  （smoke 夹具的 exon1 seed 10 → 49，才能在新的约束下仍得到 ≥900 bp 的基因组跨度）。
+- 同时更新了渲染（"the REVERSE primer spans..."）、工具描述、README、benchmark 的
+  `intron-qpcr` 措辞，以及 smoke 的 sense-substring 断言（现在断言 reverse = 其剪接位点的
+  反向互补，且 F 在 R 上游）。
+
+### 2. 调用卡：sequence logo 与 gRNA（路线图 2.9a）
+
+- 新增 `molbio-figure` 投影（`figureCardMeta`）与浏览器半的 `figureCardView`/
+  `figureCardSummary`；`FIGURE_TOOL_KEYS` 声明 `molbio_sequence_logo` 与
+  `molbio_grna_design` 两个 key。
+- logo 卡画出本次生成的 logo；gRNA 卡画 `map_path`（请求了才有）并列出**前 5 条 guide**
+  （rank/序列/PAM/位置/分数/脱靶数），没有 map 时仍显示摘要与表格，而不是空卡。
+- 卡片与地图卡共用 `tool.call.toolview` 座位，仍然逐 key `ctx.slots.inject`；元数据全部
+  校验并限界（summary 300 字符、路径 500、guide 行 5 条、SVG ≤ 256 KB，超出则只报文件路径）。
+- `test/map-card.mjs` 现在同时驱动两种卡（host 投影 → view → 真实组件渲染），并覆盖
+  "无图但仍有表格"、超限、坏形状、坏 SVG 与错误调用。`contract` 从产物里的两张 key 表反推
+  投影数，不再假设只有地图工具。
+
+### 3. 新增两个工具（候选池 survey #34 / #23）
+
+- **`molbio_protein_charge`**（`protein-charge.mjs`）：Henderson-Hasselbalch 净电荷-pH
+  曲线、pI、pH 7.4 电荷与 SVG。`pka_set` 可选 `bjellqvist`（默认，与 `molbio_protein_props`
+  的 pI 同一张表）或 `emboss`（Epk.dat）。pK 表与电荷函数从 `protein.mjs` 导出
+  （`PK_SETS`/`netCharge`/`countAminoAcids`），**两张表不再各存一份**。
+  未建模二硫键、修饰残基、金属结合与离子强度，输出里写明所用 pK 表。
+- **`molbio_dotplot`**（`dotplot.mjs`）：精确 k-mer 自比较，黑色直接重复、红色反向重复；
+  固定网格分箱，`truncated`（扫描上限 200k 对）与 `plot_truncated`（网格 60k 格）分别上报，
+  简并碱基参与的 k-mer 跳过并计数。是"精确 k-mer 视图"，不是滑窗同一性/打分 dotplot。
+  SVG 画布用 720×760、绘图区仍是 628 px 正方形：x 轴标题与图例各占一行，图例落在面板内，
+  不再压在底边框上；`test/smoke.mjs` 加了对应的几何断言（标题/图例的 y 预算与先后顺序）。
+- 两个工具都支持 `attach_image`（画图工具 15 → 17）、`auto_view` 与工作区 SVG。
+- benchmark 新增 `protein-charge` 与 `dotplot` 两题；`test/smoke.mjs` 补了已知值：
+  两端电荷 ±3、pI 是零交叉、两套 pK 给出不同的 pI、dotplot 的 133/40 与 12 个反向命中、
+  扫描截断、重复输入确定性、以及各自的参数错误路径。
+
+### 4. 计数、守卫与文档
+
+- `package.json` 0.22.2 → **0.23.0**；`files` 加入两个新模块；面板包 0.1.7 → **0.1.8**。
+- preset 描述 60 → 62；`agent.cordis.yml` 的注释同步；`cordis.patch.yml` 由
+  `build/preset-patch.mjs` 重新生成。
+- `test/contract.mjs`：picture 工具计数 15 → 17；卡片契约改为从
+  `MAP_TOOL_KEYS` + `FIGURE_TOOL_KEYS` 两处读 key，并用**行首锚定**的正则数
+  `presentationMeta`（文件头注释里也提到这个签名，子串计数会把它算成第四个实现）。
+- `test/client.mjs`：keyed 座位注册数 4 → 8 → 9（两张 tab、四张卡、详情页），
+  并断言两个 figure 工具共用同一个卡片组件。
+- 文档同步：README（工具表、示例、方法学、目录结构、benchmark 计数）、maintainer、
+  roadmap（2.0b/2.9a 标为已修、3.2 的 63/62）、rules 与 workflow 的覆盖率数字、
+  benchmark/README 的题数；`docs/store-preset-exemption*.md` 里残留的 60 → 62；
+  `benchmark/fixtures.mjs` 的 `INTRON_GENOMIC` 缩进对齐。
+- `npm test` 全绿；`bench --offline` 63 题全过；`benchmark-coverage` 62/62；
+  `benchmark-profile` 12 行 / 62 工具；`contract` 17/17；`build/preset-patch.mjs --check`
+  与 `build/client-bundle.mjs --check` 与源一致。
+- **定向真实模型跑分（2026-11-05，DSH 0.2.2-rc.1）**：`intron-qpcr` / `protein-charge` /
+  `dotplot` 三题 **3/3 通过**，tool selection、arguments、final answer 均 3/3（541,946 tokens，
+  108 s）。这只是受影响题目的测量，不是全量 63 题跑分；报告在
+  `benchmark/reports/20261105-190958-suite.md`（reports/ 不进 git）。
+
+### 5. 未做 / 边界
+
+- 跨内含子工具**不**补"正向引物跨连接点"的另一种布局：本版只把已有布局的分子与方向修正，
+  物理扩增子不变。要支持两种布局需要把"哪条引物跨连接点"变成一个显式选项与两套搜索。
+- `molbio_dotplot` 只做自身比较；两个序列之间的 dotplot 与滑窗打分版没有做。
+- `molbio_protein_charge` 不建模二硫键、翻译后修饰、金属结合与离子强度；pI 与厂家计算器
+  不可互换（这与 README 的方法学一致）。
+- 路线图 2.9b（文献库写回）、2.9c（结构预览）、2.6（基因组级脱靶）仍未做。
+
+### 6. DSH 0.2.2-rc.1 适配
+
+**工具行为零变化（62 个）；变的是 preset 行清单与守卫。** 上游 0.2.2-rc.1 把 `list_agents` 并进
+`@deepseek-ai/dsh-tool-subagent-control` 主入口，并删除了 `./list-agents` 子路径导出；本仓库的 preset
+还在按 0.2.1-rc.5 的 standard 抄这一行，于是 rc.1 上该行**按 specifier 解析即失败**
+（`ERR_PACKAGE_PATH_NOT_EXPORTED`），`molbio-lab` 会被报告为 broken，而组合树静态看完全正常。
+
+- `preset/molbio-lab/agent.cordis.yml`：删掉 `tool-subagent-list-agents` 行（30 → 29 行）；
+  `tool-subagent` 的旧键 `modelSelectionSettings: true` 换成 0.2.2 的
+  `modelSelection: true` + `modelDiscovery: true`（旧键仍被 schema 接受但**静默忽略**，子代理的
+  模型选择实际上被关掉了）；`tool-fs` 显式补上游新写的 `applyPatch: false`（包默认值同为 false，
+  补上是为了让两份 composition 逐行可比）。`cordis.patch.yml` 由 `build/preset-patch.mjs` 重新生成。
+- `test/preset-health.mjs` 新增**真实 specifier 解析**（`createRequire(...).resolve`）前置检查：
+  `packageInstalled` 只证明包目录存在，会放过"包还在、子路径已删"的行——这正是 rc.5 → rc.1
+  的漂移能一路绿到手工发现的原因。`test/drift-probe.mjs` 增加一条突变自检（用 `no-such-subpath`
+  证明守卫会失败，不依赖某个版本删了什么）。
+- `test/contract.mjs` 三处由实现字面量改回契约：官方 tab body 改名 `FileNavigator` 后改为校验
+  **入参**（仍收 `useTabInfo`/`sessionId`/`useSessions`）；`presentationMeta` 投影改读
+  `dsh-tools` 的 `lib/index.js` + `lib/pipeline.js`（0.2.2 把装配管线拆了出去，语义未变）；
+  `dsh-fs` README 的 binary 措辞改为接受新旧两种说法，真正的判断仍由 `FS_NOT_TEXT` 与
+  "seam 上没有 `writeBytes`"承担。
+- 两个包 `dshReleases` 增加 `0.2.2-rc.1: compatible`；`engines.dsh` 不变——DSH 的
+  `unmetRequirements` 用 `includePrerelease`，`>=0.2.1-rc.2 <0.3.0-0` 本来就覆盖 0.2.2-rc.1，
+  而 `-0` 上界继续挡住 `0.3.0-*`。
+- 一次性 Profile（tarball，117 文件 / 1 049 323 B）在 0.2.2-rc.1 上重跑：安装 → 启动 HTTP 200 →
+  `agentPresets/list` 的 `broken` 为空、`molbio-lab` 的 `tool-molbio` 为 `fiberPhase: "active"` →
+  卸载无残留；`contract` 17 / `preset-health` 29 行 / `drift-probe` 15 个突变 / `smoke` 62 工具全绿。
+
 ## [0.22.2] — 2026-10-30（DSH 0.2.1-rc.5 适配；契约守卫兼容桌面版）
 
 **工具行为零变化（60 个）。** 0.22.1 的验收基线是 **0.2.1-rc.3**；这一版把基线推到

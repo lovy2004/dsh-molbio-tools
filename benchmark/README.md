@@ -76,11 +76,11 @@ Measured, and printed so the answer can be audited:
 
 ```
 $ touch crispr.mjs && node benchmark/run.mjs --list --changed
-1 of 61 task(s) selected — --tools molbio_grna_design --changed
+1 of 63 task(s) selected — --tools molbio_grna_design --changed
   (from --changed; 2 module(s) affected: crispr.mjs, index.mjs)
 
 $ touch lib.mjs && node benchmark/run.mjs --list --changed
-55 of 61 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
+55 of 63 task(s) selected — --changed (27 module(s) affected: align.mjs, cloning.mjs, …)
 ```
 
 `lib.mjs` selecting nearly everything is the **correct** answer, not a failure to
@@ -102,7 +102,7 @@ you changed, so its task runs even if it is full-only.
 | `--tools a,b,c` / `primer_*` | the union | you changed a few |
 | `--changed --tools X` | the INTERSECTION | "of what I changed, test X" |
 | (default) | **core** — 14 tasks | a broad smoke of the catalog |
-| `--tier full` | all 61, 60/60 tools | before a release |
+| `--tier full` | all 63, 62/62 tools | before a release |
 
 The two `--tools` operators are stated because confusing them is the difference
 between testing what you changed and testing **less** than that: alone it unions,
@@ -134,7 +134,7 @@ and `test/benchmark-changed.mjs` asserts both directions.
 ### The part that still runs in full, on purpose
 
 A model run with `--changed` or `--tools` first executes the **whole** offline
-gate: all 61 tasks' `where: "tool"` expectations are recomputed against the shipped
+gate: all 63 tasks' `where: "tool"` expectations are recomputed against the shipped
 tools (no model, a few hundred milliseconds). That is what makes partial runs safe
 — the expected values are re-proven for the tasks you skipped, so "skipped because
 unchanged" is a checked claim, not a remembered one.
@@ -169,7 +169,7 @@ asserting whatever the tool happened to emit.
 
 Two guards make "someone forgot" fail loudly instead of quietly:
 
-- `test/benchmark-coverage.mjs` asserts **60/60 registered tools are covered by
+- `test/benchmark-coverage.mjs` asserts **62/62 registered tools are covered by
   at least one task**. Adding a tool without a task is a red build. It also
   asserts the fixtures' premises (the Golden Gate backbone is BsaI-free, the
   mutagenesis template still admits a primer pair), that a `covers` entry names a
@@ -210,7 +210,7 @@ recorded tool text, and it says so instead of silently scoring empty text).
 
 ## The headless profile (`benchmark/profile.mjs`)
 
-The model-facing way to get the 60 tools is the **Molecular Biology Lab** agent
+The model-facing way to get the 62 tools is the **Molecular Biology Lab** agent
 preset. The benchmark cannot use it, and the reason is structural rather than
 configurational — `dsh-headless/lib/index.js` refuses an adoption whose session
 records a preset:
@@ -568,7 +568,7 @@ implementation happens to return for one set of arguments.**
   and `args_ok` both true is a *reporting* finding, not a tool bug.
 - **Multimodal hand-off.** `attach_image` is exercised as an argument at most; no
   assertion inspects a decoded PNG (that is `svgpng.mjs` and `contract.mjs`).
-- **Most of the toolset is now covered, but shallowly.** 61 tasks touch all 60
+- **Most of the toolset is now covered, but shallowly.** 63 tasks touch all 62
   tools; most tools appear in exactly one task, and several appearances are a
   single argument check rather than a full workflow. Breadth is asserted by
   `test/benchmark-coverage.mjs`; depth is not, and cannot be.

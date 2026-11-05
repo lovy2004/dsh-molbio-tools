@@ -165,6 +165,76 @@
       ]
     },
     {
+      "id": "protein-charge",
+      "category": "protein",
+      "tier": "full",
+      "covers": [
+        "molbio_protein_charge"
+      ],
+      "instruction": "I need to know how this peptide's charge changes with pH. Plot the net charge from pH 0 to 14, report the isoelectric point and the net charge at pH 7.4, and tell me which pK set the numbers come from. Write the figure to charge.svg.\n\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_protein_charge"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "33 aa · Bjellqvist 1993 pK set · pI 10\\.63 · charge at pH 7\\.4 2\\.9835 e \\(net positive\\)"
+        },
+        {
+          "where": "tool",
+          "pattern": "Curve over pH 0-14 \\(29 points; range -4\\.9682 \\.\\. 7\\.9996 e\\)"
+        },
+        {
+          "where": "answer",
+          "pattern": "10\\.6"
+        },
+        {
+          "where": "answer",
+          "pattern": "2\\.98|3\\.0|net positive"
+        },
+        {
+          "where": "answer",
+          "pattern": "Bjellqvist|pK"
+        }
+      ]
+    },
+    {
+      "id": "dotplot",
+      "category": "bench-analysis",
+      "tier": "full",
+      "covers": [
+        "molbio_dotplot"
+      ],
+      "instruction": "I want to see the repeat structure of this 46 bp sequence. Draw a self dotplot with a 5-mer word, covering both direct and inverted repeats, and tell me how many direct and how many inverted matches it finds. Write the figure to dot.svg.\n\nTTAGGCACGTAGCTAGGCTAACGTTAGGCACGTAGCTAGGCTAACG",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_dotplot"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "46 bp · word 5 · 88 direct / 18 inverted match\\(es\\); 88 \\+ 18 occupied cell\\(s\\)"
+        },
+        {
+          "where": "tool",
+          "pattern": "Exact k-mer view \\(black = direct, red = inverted\\)"
+        },
+        {
+          "where": "answer",
+          "pattern": "88"
+        },
+        {
+          "where": "answer",
+          "pattern": "18"
+        },
+        {
+          "where": "answer",
+          "pattern": "direct|inverted|repeat"
+        }
+      ]
+    },
+    {
       "id": "codon-optimize",
       "category": "bench-analysis",
       "tier": "full",

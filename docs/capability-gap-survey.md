@@ -6,6 +6,11 @@ mainstream bioinformatics landscape offer that this toolset does **not**, and wh
 deterministic algorithms in a few hundred lines of dependency-free JS with **no external data files,
 binaries, network, or reference databases**?
 
+> **Status note (0.23.0).** The baseline below is the 52-tool package this survey was written
+> against. Since then rows 1–7, 23, 30, 34, 40 and the Cas-family half of row 20 have shipped
+> (see [history.md](history.md) and the roadmap); the remaining rows are still candidates unless
+> §3 names a blocker. The rankings are left as written so the original judgement can be audited.
+
 **Method.** Surveyed nine source families (commercial plasmid/cloning suites; bench web calculators;
 Biopython/BioPerl/SeqKit/EMBOSS command-line toolkits; standard sequence/statistics analyses;
 microbiome; population genetics; protein prediction; alignment post-processing; sequencing QC),

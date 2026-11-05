@@ -13,6 +13,7 @@
 | **Molbio**（右栏 tab） | 列出会话工作区里的序列文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图 | `workspaceFiles.readAll`（二进制，含 SnapGene） |
 | **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
 | **图谱调用卡**（`tool.call.toolview`） | `molbio_plasmid_map` / `molbio_plasmid_map_file` 的调用卡：在对话里直接画出这次调用产出的图谱（摘要行 + 写入路径），失败时显示错误文本与 Inspect 入口 | 工具自己声明的 `output.presentationMeta`（见下） |
+| **图形调用卡**（`tool.call.toolview`） | `molbio_sequence_logo` / `molbio_grna_design` 的调用卡：logo 直接画图；gRNA 画 `map_path` 并列出前 5 条 guide（无 map 时仍有摘要与表格） | 同上，kind = `molbio-figure` |
 | **PubMed API key**（`plugins.detail.section`） | 插件 → 已安装插件 → `dsh-molbio-tools` 详情页里的一段表单：password 输入 + Save/Remove，状态只报「已配置 / 来源 / 未配置」，永不回显值 | `ctx.remote.credentials.describe` / `set` / `unset`（host 的凭据 seam） |
 
 **解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`），
@@ -47,11 +48,11 @@ SVG 随 meta 传输有上限（256 KB）：真实载体的图谱 20-60 KB，但�
 | `build/client-bundle-core.mjs` | 打包器的**生成逻辑**（可 import）：`createGenerator({entry, baseDir})` → 模块图 + `renderBundle(packageName)`；`test/contract.mjs` 在进程内用它重算产物做新鲜度检查（不 spawn，受限沙箱下也能验证） |
 | `build/browser-api.mjs` | 浏览器安全面：从**包根的 `.mjs` 源文件**再导出面板可用的一切（单一事实来源） |
 | `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
-| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，两个 map 工具的调用卡，以及插件详情页的 key 配置段 |
+| `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，两个 map 工具与两个 figure 工具的调用卡，以及插件详情页的 key 配置段 |
 | `lib/client.js` | **构建产物**（`exports["./client"]` 指向它；由 `npm run build:client` 生成） |
-| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 57 个工具解耦的交付通道 |
+| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 62 个工具解耦的交付通道 |
 | `test/client.mjs` | 按加载器的方式执行产物 + 驱动两条数据通路（含真实 pUC118 夹具） |
-| `test/map-card.mjs` | 调用卡的**跨界**检查：真实工具的投影 → 卡片读取 → 渲染出 SVG（含四种降级路径） |
+| `test/map-card.mjs` | 调用卡的**跨界**检查：地图卡与图形卡（logo/gRNA）的真实投影 → 卡片读取 → 渲染出 SVG（含降级、超限、坏 meta 路径） |
 | `test/client-mount.mjs` | 复刻宿主侧图扫描，证明两个包都能挂上、依赖可解析 |
 
 命令：`npm run build:client`（构建）、`npm test`（全部测试）、
@@ -250,10 +251,11 @@ shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 - **插件详情页的 key 配置**：✅ 已落地（0.22.1，见第 1 与第 4 节）。后续可把同一个
   `plugins.detail.section` 模式用于其它凭据（例如文献库的机构代理），前提是它们也有一个
   稳定的环境变量名。
-- **`tool.call.toolview`**：✅ 已落地（见第 1 与第 3 节），覆盖两个 map 工具。可继续做的
-  是给 `molbio_sequence_logo` / `molbio_grna_design` 之类的工具也加上卡片（同一套
-  `presentationMeta` + 卡片模式）。**注意上线前先跑 `test/client.mjs` 的抢座位顺序那一层**：
-  0.7.1 的卡片因为裸 `register()` 抢座位而让 GUI 起不来（0.7.2 修复，见 §4 第一条）。
+- **`tool.call.toolview`**：✅ 已落地（见第 1 与第 3 节），覆盖两个 map 工具与
+  `molbio_sequence_logo` / `molbio_grna_design`（0.23.0，`molbio-figure` 投影）。
+  后续可考虑把同样的卡片给 `molbio_dotplot` 等新画图工具。**任何新卡片上线前先跑
+  `test/client.mjs` 的抢座位顺序那一层**：0.7.1 的卡片因为裸 `register()` 抢座位而让 GUI
+  起不来（0.7.2 修复，见 §4 第一条）；`contract` 会从产物里的 key 表反推投影数。
 - **文献库写回**（可选）：若要面板内编辑笔记/标签，需要先定义与 `molbio_paper_*` 工具
   一致的并发契约（乐观版本号或串行化队列），或让工具走同一条 RPC。
 - **上游提案（路径 B）**：preset 渠道挂 client 仍是真实生态需求，可以在社区反馈时

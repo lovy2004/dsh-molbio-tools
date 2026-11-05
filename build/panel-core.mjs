@@ -268,6 +268,91 @@ export function mapCardSummary(view) {
   return parts.join(' · ');
 }
 
+// ── figure cards (the same `tool.call.toolview` seat) ───────────────────────
+
+/** The meta kind the sequence-logo and gRNA tools attach to their results. */
+export const FIGURE_CARD_KIND = 'molbio-figure';
+
+const CARD_SUMMARY_MAX = 300;
+const CARD_PATH_MAX = 500;
+const CARD_GUIDES_MAX = 5;
+
+/** A bounded string, or '' when the value is not a string. */
+function cardText(value, max) {
+  return typeof value === 'string' ? value.slice(0, max) : '';
+}
+
+/** One guide row, validated field by field; malformed rows are dropped. */
+function cardGuide(row) {
+  if (row === null || typeof row !== 'object' || Array.isArray(row)) return undefined;
+  const sequence = cardText(row.sequence, 60);
+  if (sequence === '') return undefined;
+  return {
+    rank: Number.isInteger(row.rank) ? row.rank : 0,
+    sequence,
+    pam: cardText(row.pam, 12),
+    strand: row.strand === 'reverse' ? 'reverse' : 'forward',
+    start: Number.isInteger(row.start) ? row.start : 0,
+    end: Number.isInteger(row.end) ? row.end : 0,
+    score: typeof row.score === 'number' && Number.isFinite(row.score) ? row.score : 0,
+    offTargets: Number.isInteger(row.off_target_count) ? row.off_target_count : 0,
+  };
+}
+
+/**
+ * Read a tool-result block's meta into what the figure card draws.
+ *
+ * Like `mapCardView`, the value is a projection this package produced itself,
+ * but the card renders inside the conversation, so every field is checked and
+ * bounded rather than trusted: a block from an older version, another tool, a
+ * running call or a failed run must degrade to a notice, never throw.
+ *
+ * @param {unknown} meta the block's meta, as the client received it.
+ * @returns {{kind: 'notice', message: string, ...} | {kind: 'figure', figure:
+ *   'logo'|'grna', summary: string, svg: string, svgPath: string,
+ *   csvPath: string, mapPath: string, guides: Array}}
+ */
+export function figureCardView(meta) {
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    return { kind: 'notice', message: 'No figure data was attached to this call.' };
+  }
+  if (meta.kind !== FIGURE_CARD_KIND) {
+    return { kind: 'notice', message: 'This call carries no figure.' };
+  }
+  const figure = meta.figure === 'grna' ? 'grna' : meta.figure === 'logo' ? 'logo' : '';
+  if (figure === '') {
+    return { kind: 'notice', message: 'This call carries an unknown figure type.' };
+  }
+  const base = {
+    figure,
+    summary: cardText(meta.summary, CARD_SUMMARY_MAX),
+    svgPath: cardText(meta.svg_path, CARD_PATH_MAX),
+    csvPath: cardText(meta.csv_path, CARD_PATH_MAX),
+    mapPath: cardText(meta.map_path, CARD_PATH_MAX),
+    guides: Array.isArray(meta.guides)
+      // Bound the work before validating, then keep at most five VALID rows:
+      // malformed entries must not consume the budget and hide good ones.
+      ? meta.guides.slice(0, 50).map(cardGuide).filter((guide) => guide !== undefined).slice(0, CARD_GUIDES_MAX)
+      : [],
+    svg: '',
+  };
+  if (!isSvgMarkup(meta.svg)) {
+    const message = meta.svg_missing === true
+      ? 'No picture was requested for this call; the numbers are in the tool result.'
+      : meta.svg_omitted === true
+        ? `The figure is too large to draw inline (${Math.round((Number.isInteger(meta.svg_bytes) ? meta.svg_bytes : 0) / 1024)} KB); the written file is named below.`
+        : 'The figure markup did not travel with this call.';
+    return { kind: 'notice', message, ...base };
+  }
+  return { kind: 'figure', ...base, svg: meta.svg };
+}
+
+/** The header line for a figure card, with a stable fallback. */
+export function figureCardSummary(view) {
+  if (view.summary !== '') return view.summary;
+  return view.figure === 'logo' ? 'Sequence logo' : 'gRNA design';
+}
+
 // ── literature library (papers.json) ────────────────────────────────────────
 
 /** The library file the molbio_paper_* tools write, relative to the workspace. */
