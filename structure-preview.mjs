@@ -642,7 +642,7 @@ export function renderStructureProjection(record, options = {}) {
   }
 
   const legend = [];
-  if (subset.mode === 'trace' && record.chain_count > 1) {
+  if (subset.mode === 'trace') {
     record.chains.slice(0, 8).forEach((chain, position) => {
       const x = plot.x + 8 + position * 72;
       legend.push(circle({ cx: x + 4, cy: plot.y + plot.height - 12, r: 3, fill: CHAIN_COLORS[position % CHAIN_COLORS.length] }));
