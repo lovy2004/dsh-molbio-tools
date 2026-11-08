@@ -19,9 +19,9 @@
  *     my renderer produced).
  *
  * It then asserts what a user would see: the file list, the plasmid metadata
- * and feature table, the logo, the paper list/detail, the search + tag filter
- * narrowing the list, the empty-library hint, and the error state — plus that
- * each panel's effects are disposed on unmount.
+ * and feature table, the logo, the PDB 2D projection, the paper list/detail,
+ * the search + tag filter narrowing the list, the empty-library hint, and the
+ * error state — plus that each panel's effects are disposed on unmount.
  */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -223,6 +223,15 @@ const CWD = 'D:\\work';
 const SESSION = 'session-1';
 const useSessions = (selector) => selector({ byId: { [SESSION]: { cwd: CWD } }, current: SESSION });
 
+const pdbText = [
+  'HEADER    TEST PROTEIN',
+  'TITLE     TINY THREE-CA PEPTIDE',
+  'ATOM      2  CA  GLY A   1       0.000   0.000   0.000  1.00 20.00           C',
+  'ATOM      5  CA  ALA A   2       3.800   0.000   0.000  1.00 20.00           C',
+  'ATOM      6  CA  SER A   3       1.900   3.300   0.000  1.00 20.00           C',
+  'END',
+].join('\n');
+
 const puc118Bytes = new Uint8Array(await readFile(new URL('./fixtures/pUC118.dna', import.meta.url)));
 
 /**
@@ -338,10 +347,12 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
       { name: 'notes.md', type: 'file' },
       { name: 'pUC118.dna', type: 'file' },
       { name: 'reads.fasta', type: 'file' },
+      { name: 'tiny.pdb', type: 'file' },
       { name: 'subdir', type: 'directory' },
     ],
     [`${CWD}/pUC118.dna`]: puc118Bytes,
     [`${CWD}/reads.fasta`]: '>a\nACGTACGT\n>b\nACGTTCGT\n',
+    [`${CWD}/tiny.pdb`]: pdbText,
   });
   globalThis.__molbioTestHooks = mount(MolbioPanel);
   const harness = globalThis.__molbioTestHooks;
@@ -352,6 +363,7 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   // The list shows openable files, not directories, and not unrelated types.
   assert.ok(rendered.includes('pUC118.dna'), 'a .dna file is listed');
   assert.ok(rendered.includes('reads.fasta'), 'a .fasta file is listed');
+  assert.ok(rendered.includes('tiny.pdb'), 'a .pdb structure is listed');
   assert.ok(!rendered.includes('subdir'), 'directories are not offered');
   assert.ok(!rendered.includes('notes.md'), 'unopenable files are not offered');
   assert.ok(rendered.includes('Pick a file to draw it here.'), 'the empty state invites a selection');
@@ -384,6 +396,21 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   rendered = markup(harness.tree);
   assert.ok(rendered.includes('2 sequences'), 'the logo header reports the sequence count');
   assert.ok(rendered.includes('8 aligned columns'), 'the logo header reports the columns');
+
+  // Click the PDB entry: the panel draws the PCA projection, not a logo.
+  const pdbRow = elements(harness.tree, 'div').filter((node) => node.props?.title?.startsWith('tiny.pdb'));
+  assert.equal(pdbRow.length, 1, 'the PDB row is clickable');
+  pdbRow[0].props.onClick();
+  await harness.render();
+  rendered = markup(harness.tree);
+  assert.ok(rendered.includes('TINY THREE-CA PEPTIDE'), 'the PDB title is shown');
+  assert.ok(rendered.includes('PDB'), 'the format is shown');
+  assert.ok(rendered.includes('3 atoms'), 'the atom count is shown');
+  assert.ok(rendered.includes('1 chain(s)'), 'the chain count is shown');
+  assert.ok(rendered.includes('not a molecular viewer'), 'the projection is labelled honestly');
+  const structureHost = elements(harness.tree, 'div').find((node) => node.props?.ref !== undefined);
+  assert.equal(structureHost.props.ref.current.children.length, 1, 'one structure SVG was appended');
+  assert.equal(structureHost.props.ref.current.children[0].tagName, 'svg', 'and it is an SVG element');
 
   harness.unmount();
 }

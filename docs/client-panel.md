@@ -10,14 +10,14 @@
 
 | 落点 | 内容 | 数据来源 |
 | --- | --- | --- |
-| **Molbio**（右栏 tab） | 列出会话工作区里的序列文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图 | `workspaceFiles.readAll`（二进制，含 SnapGene） |
+| **Molbio**（右栏 tab） | 列出会话工作区里的序列与结构文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图；`.pdb`/`.ent`/`.cif`/`.mmcif`/`.sdf`/`.mol` → 2D PCA 结构投影 | `workspaceFiles.readAll` / `readBytes`（二进制，含 SnapGene 与结构文件） |
 | **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
 | **图谱调用卡**（`tool.call.toolview`） | `molbio_plasmid_map` / `molbio_plasmid_map_file` 的调用卡：在对话里直接画出这次调用产出的图谱（摘要行 + 写入路径），失败时显示错误文本与 Inspect 入口 | 工具自己声明的 `output.presentationMeta`（见下） |
 | **图形调用卡**（`tool.call.toolview`） | `molbio_sequence_logo` / `molbio_grna_design` 的调用卡：logo 直接画图；gRNA 画 `map_path` 并列出前 5 条 guide（无 map 时仍有摘要与表格） | 同上，kind = `molbio-figure` |
 | **PubMed API key**（`plugins.detail.section`） | 插件 → 已安装插件 → `dsh-molbio-tools` 详情页里的一段表单：password 输入 + Save/Remove，状态只报「已配置 / 来源 / 未配置」，永不回显值 | `ctx.remote.credentials.describe` / `set` / `unset`（host 的凭据 seam） |
 
-**解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`），
-不经过任何工具调用、不落盘 SVG、不弹系统查看器。
+**解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`
+与 `structure-preview`），不经过任何工具调用、不落盘 SVG、不弹系统查看器。
 
 ### 调用卡的数据通路（`presentationMeta`）
 
@@ -174,8 +174,9 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    生效、以及坏库时列表仍宣称"还没有文献"。插件详情页的 key 段也被真实驱动：
    `describe` → 输入 → Save（trim 后写入 `NCBI_API_KEY`）→ 状态刷新 + 清空输入 → Remove →
    provider 拒绝时消息原样显示。
-4. **数据通路（质粒）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，AmpR 2102-2962
-   反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；FASTA → 比对 → logo；
+4. **数据通路（质粒 / 比对 / 结构）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，
+   AmpR 2102-2962 反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；
+   FASTA → 比对 → logo；PDB → 2D PCA 投影（点选后 SVG 真的 append 进宿主）；
    扩展名分类、排序、base64 解码、非法输入的错误路径。
 5. **数据通路（文献库）**：`readWorkspaceText` 的三种结果（有文本 / 文件不存在 / 读取失败）
    分别对应"有库 / 空库 / 报错"；`parseLibrary` 与工具侧契约一致（`{papers: [...]}`）且
@@ -256,6 +257,10 @@ shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
   后续可考虑把同样的卡片给 `molbio_dotplot` 等新画图工具。**任何新卡片上线前先跑
   `test/client.mjs` 的抢座位顺序那一层**：0.7.1 的卡片因为裸 `register()` 抢座位而让 GUI
   起不来（0.7.2 修复，见 §4 第一条）；`contract` 会从产物里的 key 表反推投影数。
+- **结构预览**：✅ 已落地（0.25.0）。Molbio tab 直接读 PDB/mmCIF/SDF-MOL V2000，
+  画 2D PCA 投影（CA 轨迹/重原子、多链着色、元素图例）；明确的边界是 20,000 原子、
+  5 MB、无 V3000、不是 3D 查看器。没有走 `ctx.documentPreviews`：现有 tab 已有文件列表、
+  错误态与 SVG 宿主，新增 keyed 容器换不来新的用户能力。
 - **文献库写回**（可选）：若要面板内编辑笔记/标签，需要先定义与 `molbio_paper_*` 工具
   一致的并发契约（乐观版本号或串行化队列），或让工具走同一条 RPC。
 - **上游提案（路径 B）**：preset 渠道挂 client 仍是真实生态需求，可以在社区反馈时

@@ -5,12 +5,12 @@
  * re-exported from the SAME source files the Node plugin ships, so the browser
  * bundle can never drift from the plugin's behaviour.
  *
- * Only these modules are browser-safe (they import nothing but `./lib.mjs`,
- * which is pure computation): lib, genbank, snapgene, plasmid, msa, logo,
- * crispr, align, seqio, plot, design. The Node-only ones (view, papers,
- * records, sanger, protein is fine but unused here, index) are deliberately
- * absent — importing them would drag `node:child_process` and friends into the
- * browser bundle, which the bundler rejects loudly.
+ * Only these modules are browser-safe (they import nothing but `./lib.mjs` and
+ * `./svgio.mjs`, which are pure computation): lib, genbank, snapgene, plasmid,
+ * msa, logo, crispr, align, seqio, plot, design, protein-structure,
+ * structure-preview. The Node-only ones (view, papers, records, sanger, index)
+ * are deliberately absent — importing them would drag `node:child_process` and
+ * friends into the browser bundle, which the bundler rejects loudly.
  */
 export {
   DNA_BASES,
@@ -53,4 +53,5 @@ export {
 export { designTaqmanProbes, evaluateProbe, probeCandidates } from '../taqman.mjs';
 export { checkMultiplex } from '../multiplex.mjs';
 export { helicalWheel, hydropathyProfile, renderHelicalWheel, renderHydropathyPlot } from '../protein-structure.mjs';
+export { STRUCTURE_EXTENSIONS, parseStructureText, renderStructureProjection, structureFormatOf } from '../structure-preview.mjs';
 export { analyzeMethylation, bufferReport, planDoubleDigest } from '../methylation.mjs';

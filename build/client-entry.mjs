@@ -53,9 +53,11 @@ import {
   parseAlignmentFile,
   parseLibrary,
   parsePlasmidFile,
+  parseStructureFile,
   plasmidSvg,
   readWorkspaceText,
   sortEntries,
+  structureSvg,
 } from './panel-core.mjs';
 
 /** This implementation's identity, and the key its body/title register under. */
@@ -177,7 +179,9 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
         const kind = classifyEntry(selected);
         const parsed = kind === 'plasmid'
           ? { kind, ...parsePlasmidFile(selected.name, bytes) }
-          : { kind, ...parseAlignmentFile(bytes) };
+          : kind === 'alignment'
+            ? { kind, ...parseAlignmentFile(bytes) }
+            : { kind, ...parseStructureFile(selected.name, bytes) };
         setRecord(parsed);
         setStatus({ kind: 'ready' });
       })
@@ -204,7 +208,11 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     // with no explanation, so it becomes the pane's error state instead.
     let markup;
     try {
-      markup = record.kind === 'plasmid' ? plasmidSvg(record) : logoSvg(record);
+      markup = record.kind === 'plasmid'
+        ? plasmidSvg(record)
+        : record.kind === 'alignment'
+          ? logoSvg(record)
+          : structureSvg(record);
     } catch (error) {
       setStatus({ kind: 'error', message: String(error?.message ?? error) });
       return;
@@ -221,13 +229,13 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
 
   const openable = useMemo(() => entries.filter(isOpenable), [entries]);
 
-  const head = h('div', { style: styles.listHead }, 'Sequence files');
+  const head = h('div', { style: styles.listHead }, 'Sequence & structure files');
   const list = h(
     'div',
     { style: styles.list },
     head,
     ...(openable.length === 0
-      ? [h('div', { key: 'none', style: styles.muted }, 'No .dna / .gb / .gbk / .fasta files in this workspace')]
+      ? [h('div', { key: 'none', style: styles.muted }, 'No .dna / .gb / .gbk / .fasta / .pdb / .cif / .sdf files in this workspace')]
       : openable.map((entry) => {
         const kind = classifyEntry(entry);
         return h(
@@ -281,6 +289,16 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
       h('span', null, `${record.rows.length} sequences`),
       h('span', null, `${record.rows[0]?.length ?? 0} aligned columns`)));
     body.push(h('div', { key: 'svg', ref: svgHost, style: styles.svg }));
+  }
+  if (status.kind === 'ready' && record !== null && record.kind === 'structure') {
+    body.push(h('div', { key: 'meta', style: styles.meta },
+      h('span', null, record.title === '' ? record.name : record.title),
+      h('span', null, record.format.toUpperCase()),
+      h('span', null, `${record.atoms.length} atoms`),
+      h('span', null, `${record.chain_count} chain(s)`),
+      h('span', null, `${record.residue_count} residue(s)`)));
+    body.push(h('div', { key: 'svg', ref: svgHost, style: styles.svg }));
+    body.push(h('div', { key: 'note', style: styles.note }, '2D PCA projection drawn in the browser — not a molecular viewer.'));
   }
 
   return h('div', { style: styles.root }, list, h('div', { style: styles.main }, ...body));

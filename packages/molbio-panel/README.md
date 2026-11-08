@@ -1,10 +1,12 @@
 # dsh-molbio-panel
 
-DSH Web GUI 的**浏览器内 Molbio 面板**：右侧栏的一个 tab，列出当前会话工作区的序列文件，
-选中当场画出来——`.dna` / `.gb` / `.gbk` 出质粒图谱，`.fa` / `.fasta` 出序列标识图。
+DSH Web GUI 的**浏览器内 Molbio 面板**：右侧栏的一个 tab，列出当前会话工作区的序列与结构文件，
+选中当场画出来——`.dna` / `.gb` / `.gbk` 出质粒图谱，`.fa` / `.fasta` 出序列标识图，
+`.pdb` / `.ent` / `.cif` / `.mmcif` / `.sdf` / `.mol` 出 2D PCA 结构投影。
 
 解析与渲染在浏览器里跑的是 [`dsh-molbio-tools`](https://github.com/lovy2004/dsh-molbio-tools)
-的**同一份源码**（`lib/genbank/snapgene/plasmid/msa/logo`）——不落盘 SVG、不弹系统查看器、
+的**同一份源码**（`lib/genbank/snapgene/plasmid/msa/logo` 与 `structure-preview`）——
+不落盘 SVG、不弹系统查看器、
 不经过工具调用。
 
 ## 为什么是单独的包
@@ -37,7 +39,9 @@ dsh plugin --profile <profile> add D:\path\to\packages\molbio-panel   # 本地�
 1. 打开右侧栏（会话头部角落的按钮），从引导页选 **Molbio**。
 2. 左栏列出工作区里可打开的文件（质粒文件排在前面）。
 3. 点一个 `.dna` / `.gb` → 右侧出图谱 + 特征表（Feature / Type / Start / End / Strand）；
-   点一个 `.fasta`（≥2 条序列）→ 出序列标识图（信息量 bits，小样本校正默认开）。
+   点一个 `.fasta`（≥2 条序列）→ 出序列标识图（信息量 bits，小样本校正默认开）；
+   点一个 `.pdb` / `.cif` / `.sdf` / `.mol` → 出 2D PCA 投影（Cα 轨迹或重原子，多链着色，
+   元素图例）。它是 2D 预览，不是 3D 查看器；V3000 不支持。
 
 ## 限制
 

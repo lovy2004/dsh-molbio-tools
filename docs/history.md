@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.25.0 | — | **浏览器内结构预览**：Molbio 面板读 PDB/mmCIF/SDF-MOL V2000，2D PCA 投影（CA 轨迹/重原子、多链着色、元素图例）；工具数不变 | 64 |
 | 0.24.1 | — | **输入边界与数据安全加固**：BibTeX 不再覆盖文献库、相对读取按会话工作区、批量/glob/并发声明修复、20 万行输入不再 `RangeError`；工具数不变 | 64 |
 | 0.24.0 | — | **数据卫生版**：新增 `molbio_contamination_screen`（内置载体/接头短签名，双链、0–2 错配）与 `molbio_fastq_trim`（质量/接头/引物/poly/N/长度，写 FASTQ/FASTA）；修 FASTQ QC 接头表 Small RNA 5' 的 RNA→DNA 静默错 | 62 → 64 |
 | 0.23.0 | — | **2.0 遗留修复 + 2.9a 调用卡 + 两个候选池工具**：跨内含子引物报告真实反向分子（F 在 R 上游）、logo/gRNA 调用卡、`molbio_protein_charge`、`molbio_dotplot`；同版完成 **DSH 0.2.2-rc.1 适配**（删掉上游已移除的 `list-agents` 子路径行、subagent 模型选择改用新键、守卫补上 specifier 解析） | 60 → 62 |
@@ -49,6 +50,30 @@
 | — | v12–v14 | Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view | — |
 
 ---
+
+## v0.25.0（2026-11-08，包 0.25.0）
+
+**三条教训，关于“浏览器里看得见”和“同一份源码”的边界。**
+
+**(1) 预览不是查看器，先把“不做什么”写进画面。** 结构面板只做 2D PCA 投影：没有二级结构、
+表面、对称、V3000 或多 model 动画。页脚直接写 "not a molecular viewer"，因为一张看起来像
+3D 的二维投影最容易被误读成结构预测。确定性投影（同一文件同一张图）让测试能钉住坐标，
+而不是只断言“出现了 SVG”。
+
+**(2) 浏览器半不能有第二份解析器。** 新模块 `structure-preview.mjs` 通过
+`build/browser-api.mjs` 进入客户端产物，和 Node 侧共用同一份源码；面板只负责分类、读字节、
+把 SVG append 进宿主。若在 `panel-core.mjs` 里另写一份坐标解析，下一次修 PDB 列宽时
+工具与面板就会悄悄分叉。
+
+**(3) 只改浏览器半，也会改变根包产物。** `lib/client.js` 是根包的一部分；面板包
+`packages/molbio-panel/lib/client.js` 是另一个条目。两者都因这次改动重建，所以根包
+`0.24.1 → 0.25.0`、面板包 `0.1.10 → 0.1.11` 同时升版本——只升一个，发布时就会用
+同一版本号发不同字节。工具数保持 64，benchmark 保持 65 题。
+
+**顺带记录**：没有采用 `ctx.documentPreviews.register`。它需要额外的 keyed 座位与预览容器，
+而现有 Molbio tab 已经有文件列表、错误态和 SVG 宿主；2.9c 的目标是“在浏览器里看见结构”，
+不是新增一条宿主 RPC。测试加在 `test/structure.mjs`（纯解析/投影）与
+`test/panel-render.mjs`（真实组件点选 PDB 后 SVG 落地）。
 
 ## v0.24.1（2026-11-08，包 0.24.1）
 

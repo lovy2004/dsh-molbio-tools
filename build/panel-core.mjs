@@ -18,6 +18,9 @@ import {
   columnComposition,
   renderSequenceLogo,
   progressiveAlign,
+  parseStructureText,
+  renderStructureProjection,
+  STRUCTURE_EXTENSIONS,
 } from './browser-api.mjs';
 
 /** Extensions the panel can open, mapped to the parser that handles them. */
@@ -36,6 +39,9 @@ export const ALIGNMENT_EXTENSIONS = {
   fas: 'fasta',
 };
 
+/** Structure formats the panel opens, mapped to the parser kind. */
+export { STRUCTURE_EXTENSIONS };
+
 /** Lowercase extension without the dot, or '' when there is none. */
 export function extensionOf(name) {
   const match = /\.([A-Za-z0-9]+)$/.exec(String(name));
@@ -45,7 +51,7 @@ export function extensionOf(name) {
 /**
  * How the panel should treat one workspace entry.
  * @param {{name?: string, type?: string}} entry a `workspaceFiles.list` row.
- * @returns {'plasmid'|'alignment'|'other'|'directory'}
+ * @returns {'plasmid'|'alignment'|'structure'|'other'|'directory'}
  */
 export function classifyEntry(entry) {
   if (entry === null || typeof entry !== 'object') return 'other';
@@ -54,18 +60,19 @@ export function classifyEntry(entry) {
   const extension = extensionOf(entry.name ?? '');
   if (PLASMID_EXTENSIONS[extension] !== undefined) return 'plasmid';
   if (ALIGNMENT_EXTENSIONS[extension] !== undefined) return 'alignment';
+  if (STRUCTURE_EXTENSIONS[extension] !== undefined) return 'structure';
   return 'other';
 }
 
 /** Whether the panel can open this entry at all. */
 export function isOpenable(entry) {
   const kind = classifyEntry(entry);
-  return kind === 'plasmid' || kind === 'alignment';
+  return kind === 'plasmid' || kind === 'alignment' || kind === 'structure';
 }
 
-/** Sort entries: plasmid files first, then alignments, then the rest, by name. */
+/** Sort entries: plasmid files first, then alignments, structures, the rest. */
 export function sortEntries(entries) {
-  const rank = { plasmid: 0, alignment: 1, other: 2, directory: 3 };
+  const rank = { plasmid: 0, alignment: 1, structure: 2, other: 3, directory: 4 };
   return [...entries].sort((left, right) => {
     const byKind = rank[classifyEntry(left)] - rank[classifyEntry(right)];
     if (byKind !== 0) return byKind;
@@ -162,6 +169,42 @@ export function plasmidSvg(record, options = {}) {
     enzymes: [],
     sequence: record.sequence,
   });
+}
+
+/**
+ * Parse a structure file into the record the panel draws.
+ *
+ * The size guard is the same browser-specific cap as {@link parsePlasmidFile}:
+ * parsing runs on the UI thread, so a 200 MB PDB must be refused with a message
+ * rather than freeze the tab. The format comes from the extension, exactly as
+ * the Node tools choose their parser.
+ * @param {string} name file name.
+ * @param {Uint8Array} bytes raw file content.
+ * @returns {object} a parseStructureText record.
+ */
+export function parseStructureFile(name, bytes) {
+  if (!(bytes instanceof Uint8Array)) throw new MolbioInputError('file content must be a Uint8Array');
+  const extension = extensionOf(name);
+  const format = STRUCTURE_EXTENSIONS[extension];
+  if (format === undefined) {
+    throw new MolbioInputError(`the panel does not open .${extension} structure files; use .pdb, .ent, .cif, .mmcif, .sdf or .mol`);
+  }
+  if (bytes.length > MAX_PANEL_FILE_BYTES) {
+    throw new MolbioInputError(
+      `${name} is ${(bytes.length / 1024 / 1024).toFixed(1)} MB; the panel opens structure files up to ${MAX_PANEL_FILE_BYTES / 1024 / 1024} MB`,
+    );
+  }
+  return parseStructureText(format, new TextDecoder('utf-8').decode(bytes), name);
+}
+
+/**
+ * Render a parsed structure as the 2D PCA projection the panel injects.
+ * @param {object} record a {@link parseStructureFile} result.
+ * @param {{width?: number, height?: number}} [options]
+ * @returns {string} SVG text.
+ */
+export function structureSvg(record, options = {}) {
+  return renderStructureProjection(record, options);
 }
 
 /**
