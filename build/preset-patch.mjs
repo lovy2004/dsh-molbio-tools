@@ -101,7 +101,7 @@ const ANCHOR = [
   '#',
   '# Keep the tool in the PRESET and only the anchor here. An earlier version of',
   "# this file inserted a host row for the tool itself (`name: dsh-molbio-tools`),",
-  "# which both registered all 60 tools globally and collided with the preset's own",
+  "# which both registered every tool globally and collided with the preset's own",
   '# copy of that row:',
   '#',
   '#     broken: "tool-molbio (...): never started"',

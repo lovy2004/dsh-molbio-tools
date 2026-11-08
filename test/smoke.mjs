@@ -35,6 +35,8 @@ const plugin = await import('../index.mjs');
 const lib = await import('../lib.mjs');
 const view = await import('../view.mjs');
 const snapgene = await import('../snapgene.mjs');
+const { fastqQcReport } = await import('../fastq-qc.mjs');
+const { entryStats } = await import('../seqio.mjs');
 const { reverseComplement: reverseComplementOf } = lib;
 
 // The auto-view opener would spawn real viewer processes on the machine
@@ -1461,6 +1463,33 @@ function makeTemplate(n, seed = 42) {
   const qc = await run('molbio_fasta_fastq', { path: at('reads.fq'), action: 'qc' });
   assert.equal(qc.stats.quality_mean, 39.5);
   assert.equal(qc.stats.low_quality_fraction, 0);
+
+  // Large-input guards: these arrays are within the documented limits, and the
+  // old Math.min(...)/Math.max(...) forms threw RangeError on them.
+  const manyReads = Array.from({ length: 1000 }, (_, index) => ({
+    id: `bulk-${index}`,
+    description: '',
+    sequence: 'ACGT'.repeat(37) + 'AC',
+    quality: 'I'.repeat(150),
+  }));
+  const bulkStats = entryStats(manyReads, true);
+  assert.equal(bulkStats.entries, 1000);
+  assert.equal(bulkStats.quality_mean, 40);
+  assert.equal(bulkStats.quality_per_position_mean.length, 150);
+
+  const bulkQc = fastqQcReport(Array.from({ length: 130000 }, (_, index) => ({
+    id: `read-${index}`,
+    sequence: 'ACGTACGTAC',
+    quality: 'IIIIIIIIII',
+  })));
+  assert.equal(bulkQc.reads, 130000);
+  assert.equal(bulkQc.quality_mean, 40);
+  assert.equal(bulkQc.per_base.length, 10);
+
+  // A relative path is a SESSION-workspace path, not a provider-cwd path.
+  memFs.files.set(shown('relative.fa'), '>rel1\nACGT\n');
+  const relative = await run('molbio_fasta_fastq', { path: 'relative.fa', action: 'stats' });
+  assert.equal(relative.stats.entries, 1);
 }
 
 {
@@ -1501,6 +1530,15 @@ function makeTemplate(n, seed = 42) {
   const bib = memFs.files.get(at('papers.bib')).toString('utf8');
   assert.ok(bib.includes('@article{pmid111,'));
   assert.ok(bib.includes('title = {Alpha},'));
+
+  // A custom library name without .json must still get a DISTINCT .bib output,
+  // not overwrite the library with BibTeX.
+  await run('molbio_paper_add', { file: at('refs.txt'), papers: [{ title: 'Gamma' }] });
+  const custom = await run('molbio_paper_export_bibtex', { file: at('refs.txt') });
+  assert.equal(custom.output_path, at('refs.txt.bib'));
+  const stillLibrary = await run('molbio_paper_list', { file: at('refs.txt') });
+  assert.equal(stillLibrary.papers.length, 1);
+  assert.equal(stillLibrary.papers[0].title, 'Gamma');
 }
 
 {
@@ -1530,6 +1568,13 @@ function makeTemplate(n, seed = 42) {
   const experiments = await run('molbio_experiment_list', { file: at('experiments2.json') });
   assert.equal(experiments.experiments[0].title, 'Clone #12 miniprep');
   assert.equal(experiments.experiments[0].protocol_id, listed.protocols[0].id);
+
+  // Renaming onto an existing protocol is refused, matching addProtocol.
+  const second = await run('molbio_protocol_add', { file: at('protocols2.json'), name: 'Midiprep' });
+  await assert.rejects(
+    () => run('molbio_protocol_update', { file: at('protocols2.json'), id: second.protocol.id, name: 'miniprep' }),
+    /already exists/,
+  );
 }
 
 // ── official-convention compliance ──────────────────────────────────────────
@@ -1556,6 +1601,15 @@ function makeTemplate(n, seed = 42) {
   assert.equal(tool('molbio_clone_simulate').isConcurrencySafe({ save_path: at('x.fa') }), false);
   assert.equal(tool('molbio_fasta_fastq').isConcurrencySafe({ action: 'stats' }), true);
   assert.equal(tool('molbio_fasta_fastq').isConcurrencySafe({ action: 'convert' }), false);
+  assert.equal(tool('molbio_fasta_fastq').isConcurrencySafe({ action: 'extract', output_path: at('x.fa') }), false);
+  // Every tool that writes a DEFAULT svg file is unsafe even when output_path
+  // is omitted; these four predicates used to claim the opposite.
+  assert.equal(tool('molbio_helical_wheel').isConcurrencySafe({}), false);
+  assert.equal(tool('molbio_hydropathy_plot').isConcurrencySafe({}), false);
+  assert.equal(tool('molbio_protein_charge').isConcurrencySafe({}), false);
+  assert.equal(tool('molbio_dotplot').isConcurrencySafe({}), false);
+  assert.equal(tool('molbio_extract_region').isConcurrencySafe({ output_path: at('x.fa') }), false);
+  assert.equal(tool('molbio_qpcr_efficiency').isConcurrencySafe({ plot_path: at('x.svg') }), false);
 }
 
 // ── IIS enzymes and cross-intron primer design ──────────────────────────────
@@ -2075,6 +2129,15 @@ delete process.env.MOLBIO_NCBI_API_KEY;
   assert.equal(out.abstracts[0].error, '');
   assert.equal(out.abstracts[0].title, 'Test Article Title');
   assert.ok(mockWeb.calls.length === 1 && mockWeb.calls[0].includes('/efetch.fcgi') && mockWeb.calls[0].includes('api_key=test-key-123'));
+
+  // A transport failure is reported as a tool-input error, not a raw throw.
+  const originalFetch = mockWeb.fetch;
+  mockWeb.fetch = async () => { throw new Error('network down'); };
+  try {
+    await assert.rejects(() => run('molbio_pubmed_abstract', { pmids: ['12345678'], api_key: 'test-key' }), /could not be reached/);
+  } finally {
+    mockWeb.fetch = originalFetch;
+  }
 }
 
 // Restore whatever the developer machine had exported.
@@ -2114,6 +2177,21 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
 
   const finalList = await run('molbio_paper_list', { file });
   assert.equal(finalList.papers.length, 1);
+
+  // An update that changes the title must re-derive a title-based id, or a
+  // later add of the renamed paper would not be recognised as a duplicate.
+  const renamedFile = at('paper-rename.json');
+  await run('molbio_paper_add', { file: renamedFile, papers: [{ title: 'Old title', year: '2020' }] });
+  const renamed = await run('molbio_paper_update', { file: renamedFile, id: 'title:Old title:2020', title: 'New title' });
+  assert.equal(renamed.found, true);
+  assert.equal(renamed.paper.id, 'title:New title:2020');
+
+  // A hand-edited library with a null entry is rejected with a named input
+  // error, not a raw TypeError from paperKey()/render().
+  memFs.files.set(at('bad-papers.json'), JSON.stringify({ papers: [null] }));
+  await assert.rejects(() => run('molbio_paper_list', { file: at('bad-papers.json') }), /every entry in "papers" must be an object/);
+  memFs.files.set(at('bad-protocols.json'), JSON.stringify({ protocols: [null] }));
+  await assert.rejects(() => run('molbio_protocol_list', { file: at('bad-protocols.json') }), /every entry in "protocols" must be an object/);
 }
 
 // ── v13: reaction-condition knobs (salt / primer concentration) ─────────────
@@ -2740,6 +2818,11 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   assert.equal(goodDna.feature_count, 10);
   assert.ok(batchDna.files.find((row) => row.path.endsWith('bad.dna')).error.length > 0);
 
+  // A glob is a glob: the dot in "a.fa" is literal, not a regex wildcard.
+  memFs.files.set(at('batch/aXfa'), '>x1\nACGT\n');
+  const literal = await run('molbio_batch_analyze', { directory: 'batch', pattern: 'a.fa', output_path: at('literal.csv') });
+  assert.deepEqual(literal.files.map((row) => row.path), ['batch/a.fa']);
+
   // Recursion is opt-in; the nested file appears only with recursive: true.
   const flat = await run('molbio_batch_analyze', { directory: 'batch', pattern: '*.fa', output_path: at('flat.csv') });
   assert.deepEqual(flat.files.map((row) => row.path), ['batch/a.fa', 'batch/b.fa']);
@@ -2750,6 +2833,13 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   const limited = await run('molbio_batch_analyze', { directory: 'batch', pattern: '*.fa', max_files: 1, output_path: at('limited.csv') });
   assert.equal(limited.file_count, 1);
   assert.equal(limited.truncated, true);
+  const limitedPaths = await run('molbio_batch_analyze', {
+    paths: [at('batch/a.fa'), at('batch/b.fa')],
+    max_files: 1,
+    output_path: at('limited-paths.csv'),
+  });
+  assert.equal(limitedPaths.file_count, 1, 'max_files also bounds an explicit paths list');
+  assert.equal(limitedPaths.truncated, true);
 
   await assert.rejects(() => run('molbio_batch_analyze', { directory: 'batch', analysis: 'enzymes' }), /non-empty enzymes array/);
   await assert.rejects(() => run('molbio_batch_analyze', { directory: 'batch', analysis: 'enzymes', enzymes: ['NotAnEnzyme'] }), /unknown enzyme/);

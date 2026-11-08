@@ -55,6 +55,14 @@ function flag(name) {
 }
 
 const profile = flag('profile') === undefined ? 'web' : String(flag('profile'));
+// DSH profile names are directory names under <dshHome>/profiles. Reject
+// separators/control characters before the value can reach a child process:
+// on Windows this script runs through a shell, where an unquoted metacharacter
+// (for example "web & calc") would be a command injection.
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(profile) || profile === '.' || profile === '..') {
+  console.error(`invalid --profile ${JSON.stringify(profile)}: start with a letter or digit, then letters, digits, ".", "_" or "-"`);
+  process.exit(2);
+}
 const checkOnly = flag('check') === true;
 const dshHomeFlag = flag('dsh-home');
 const dshHome = resolve(

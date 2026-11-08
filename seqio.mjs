@@ -96,10 +96,23 @@ export function toFastq(entries) {
 
 /** Summary statistics over parsed entries. */
 export function entryStats(entries, qualityMode = false) {
-  const lengths = entries.map((entry) => entry.sequence.length);
+  // Count in a loop instead of spreading into Math.min/Math.max: a large FASTQ
+  // can hold hundreds of thousands of reads (and millions of quality
+  // characters), and spreading such an array overflows the engine's argument
+  // limit with a RangeError. The numbers are identical; only the failure mode
+  // changes.
+  let totalBases = 0;
+  let minLength = entries.length === 0 ? 0 : Infinity;
+  let maxLength = 0;
+  let longest = 0;
   let gc = 0;
   let at = 0;
   for (const entry of entries) {
+    const length = entry.sequence.length;
+    totalBases += length;
+    if (length < minLength) minLength = length;
+    if (length > maxLength) maxLength = length;
+    if (length > longest) longest = length;
     for (const base of entry.sequence) {
       if (base === 'G' || base === 'C') gc++;
       else if (base === 'A' || base === 'T') at++;
@@ -107,22 +120,34 @@ export function entryStats(entries, qualityMode = false) {
   }
   const stats = {
     entries: entries.length,
-    total_bases: lengths.reduce((sum, len) => sum + len, 0),
-    min_length: Math.min(...lengths),
-    max_length: Math.max(...lengths),
-    mean_length: Math.round((lengths.reduce((sum, len) => sum + len, 0) / lengths.length) * 100) / 100,
+    total_bases: totalBases,
+    min_length: minLength,
+    max_length: maxLength,
+    mean_length: entries.length === 0 ? 0 : Math.round((totalBases / entries.length) * 100) / 100,
     gc_percent: gc + at === 0 ? 0 : Math.round((gc / (gc + at)) * 1000) / 10,
   };
   if (qualityMode) {
-    const allQ = entries.flatMap((entry) => [...entry.quality].map((ch) => ch.charCodeAt(0) - 33));
-    if (allQ.length > 0) {
-      const mean = allQ.reduce((sum, q) => sum + q, 0) / allQ.length;
-      const low = allQ.filter((q) => q < 20).length / allQ.length;
-      stats.quality_mean = Math.round(mean * 100) / 100;
-      stats.quality_min = Math.min(...allQ);
-      stats.quality_max = Math.max(...allQ);
-      stats.low_quality_fraction = Math.round(low * 1000) / 1000;
-      const maxLen = Math.min(150, Math.max(...entries.map((e) => e.sequence.length)));
+    let qualitySum = 0;
+    let qualityCount = 0;
+    let lowCount = 0;
+    let qualityMin = Infinity;
+    let qualityMax = -Infinity;
+    for (const entry of entries) {
+      for (const ch of entry.quality) {
+        const q = ch.charCodeAt(0) - 33;
+        qualitySum += q;
+        qualityCount++;
+        if (q < 20) lowCount++;
+        if (q < qualityMin) qualityMin = q;
+        if (q > qualityMax) qualityMax = q;
+      }
+    }
+    if (qualityCount > 0) {
+      stats.quality_mean = Math.round((qualitySum / qualityCount) * 100) / 100;
+      stats.quality_min = qualityMin;
+      stats.quality_max = qualityMax;
+      stats.low_quality_fraction = Math.round((lowCount / qualityCount) * 1000) / 1000;
+      const maxLen = Math.min(150, longest);
       const perPosition = [];
       for (let pos = 0; pos < maxLen; pos++) {
         const values = entries.filter((e) => e.sequence.length > pos).map((e) => e.quality.charCodeAt(pos) - 33);

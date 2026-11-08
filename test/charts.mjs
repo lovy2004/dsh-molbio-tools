@@ -284,6 +284,17 @@ test('histogram binning honours an explicit count and degenerates safely', () =>
   assert.ok(tiny.bin_count >= 1 && Number.isFinite(tiny.bin_width), 'a two-value sample still gets a usable bin');
 });
 
+test('a table at the row cap does not overflow the argument limit', () => {
+  // 130k exceeds the engine's argument limit for Math.min(...values); the
+  // chart helpers must use a loop. 130000 is below MAX_ROWS (200000), so the
+  // input is one the tool advertises as supported.
+  const values = Array.from({ length: 130000 }, (_, index) => index % 1000);
+  const shape = histogramBins(values, 10);
+  assert.equal(shape.bins.reduce((sum, bin) => sum + bin.count, 0), values.length);
+  assert.equal(shape.bins[0].start, 0);
+  assert.equal(shape.bins.at(-1).end, 999);
+});
+
 // ── CSV / TSV reader ────────────────────────────────────────────────────────
 
 test('the reader detects the delimiter and keeps quoted fields intact', () => {

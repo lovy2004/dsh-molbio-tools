@@ -10,6 +10,54 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.24.1] — 2026-11-08（输入边界与数据安全加固；工具数不变）
+
+**不新增工具：工具数保持 64，benchmark 保持 65 题 / 64 覆盖。** 这一版只修“已经在产品里、
+但不会报错的错”。面板包 `0.1.9 → 0.1.10`：两个客户端产物因 `seqio.mjs` /
+`protein-structure.mjs` 的加固改动而重建，按仓库规则必须升版本号，否则会用同一版本发不同字节。
+
+### 1. 数据安全与路径语义
+
+- `molbio_paper_export_bibtex`：自定义 `file` 不以 `.json` 结尾时，旧逻辑把库路径本身当
+  输出路径，BibTeX 会**覆盖文献库**。现在始终派生独立的 `.bib`（`refs.txt` →
+  `refs.txt.bib`），库文件保持不变。
+- 相对路径读取改为按**会话工作区**解析（`sandboxPolicy.resolve(...).workspaceRoot`），
+  不再落到 provider 的 `process.cwd()`；绝对路径行为不变。
+- 文献库/记录库加载时拒绝 `null` 或标量条目，返回带文件名的输入错误，而不是
+  `paperKey()` / `record.name.trim()` 抛出的原始 `TypeError`；协议重命名与新增使用
+  同一条重名规则；`molbio_paper_update` 在标题/URL/PMID 变化后重算派生 id。
+- `molbio_batch_analyze`：显式 `paths` 也受 `max_files` 约束；无法解析的路径变成一条
+  错误行而不是整批失败；glob 先转义反斜杠，`.` 不再被当通配符（`a.fa` 不会匹配
+  `aXfa`）。
+
+### 2. 并发声明与大输入
+
+- 四个总会写默认 SVG 的工具——`molbio_helical_wheel`、`molbio_hydropathy_plot`、
+  `molbio_protein_charge`、`molbio_dotplot`——以及带 `output_path` 的
+  `molbio_fasta_fastq extract` 改为 `safe: false`。旧谓词在 `output_path` 省略时
+  声称并发安全，而默认文件仍会被并发调用互相覆盖。
+- 图表/FASTQ/蛋白剖面不再把用户规模数组展开进 `Math.min(...)`/`Math.max(...)`：
+  200,000 行表格、130,000 条 reads 与长蛋白在文档声明的上限内不再抛 `RangeError`；
+  FASTQ 汇总改为单次流式计数，不再物化全部 Phred 值。
+- `molbio_pubmed_abstract` 的 efetch 传输失败改为具名输入错误，不再让原始异常逃出工具。
+
+### 3. 发布与仓库卫生
+
+- `.github/workflows/test.yml` 增加 `permissions: contents: read`；
+  `.gitignore` 忽略 `.codex-tmp/`。
+- `preset/install.mjs` 校验 `--profile`（字母/数字开头，仅 `._-`），避免 profile 名
+  经 Windows shell 时被当作命令元字符。
+- 同步多处注释里过时的工具数（57/60/62 → 64）。
+
+### 4. 验证与边界
+
+- `npm test` 全绿：smoke 64 工具、benchmark 65 题 / 64 覆盖、`preset-health` 29 行、
+  `release` 13 项；`build/client-bundle.mjs --check` 与 `build/preset-patch.mjs --check`
+  与源一致。
+- 不新增工具、不改 preset 行清单、不改 DSH 基线（0.2.2-rc.1）。
+- `benchmark-changed` 的 POSIX 路径断言在本地沙箱因 Node 无法 spawn `git` 未执行；
+  CI 会执行。这是沙箱限制，不是仓库缺陷。
+
 ## [0.24.0] — 2026-11-05（载体/接头污染筛查；FASTQ 修剪；接头表静默错修复）
 
 **工具数 62 → 64，benchmark 63 → 65 题（64/64 覆盖）。** 两块工作都来自候选池 survey：

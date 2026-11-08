@@ -19,9 +19,10 @@
  * consequences of a helper module being imported by feature modules — a real
  * dependency, but not the tool's IMPLEMENTATION.
  *
- * Measured, not guessed: 26 of the 57 tools call bindings from more than one
- * module. So a per-file → tool map is not a partition, it is a graph, and the
- * honest model is:
+ * Measured, not guessed: 26 of the tools call bindings from more than one
+ * module (measured when the suite covered 57; the graph property, not the
+ * count, is what matters). So a per-file → tool map is not a partition, it is
+ * a graph, and the honest model is:
  *
  *     changed file → the module(s) it belongs to
  *                  → every module that transitively depends on them

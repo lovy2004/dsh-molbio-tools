@@ -41,7 +41,7 @@ import { gunzipSync } from 'node:zlib';
  * The two npm entries this repository publishes, in publish order.
  *
  * THEY DO NOT SHARE A VERSION LINE, and that is deliberate rather than an
- * oversight to be "fixed" here. The root package carries the 62 tools and moves
+ * oversight to be "fixed" here. The root package carries the 64 tools and moves
  * with every toolset release; `dsh-molbio-panel` carries only the browser panel
  * and moves when the panel's own artifact moves. The tag names the ROOT version
  * (`v0.19.0`), and each entry is checked against its own declared version —

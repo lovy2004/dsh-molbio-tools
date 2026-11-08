@@ -3,6 +3,9 @@ node_modules/
 test/*.svg
 .DS_Store
 
+# Editor/agent scratch directories seen in this checkout.
+.codex-tmp/
+
 # ── benchmark scratch and measurements ────────────────────────────────────────
 # A report measures one model on one day; it is not a source artifact. The
 # offline grader also writes into a scratch workspace. Neither belongs in git —

@@ -46,7 +46,11 @@ export function detectBatchFormat(path, text) {
 /** Convert a simple basename glob (*, ?) to a RegExp. */
 export function globToRegExp(pattern) {
   const source = String(pattern)
-    .replace(/[.+^$()|[\]{}]/g, '\$&')
+    // A literal backslash must be escaped before anything else; otherwise the
+    // following replaceAll calls turn it into a regex escape instead of a
+    // filename character.
+    .replaceAll('\\', '\\\\')
+    .replace(/[.+^$()|[\]{}]/g, '\\$&')
     .replaceAll('*', '.*')
     .replaceAll('?', '.');
   return new RegExp('^' + source + '$', 'i');

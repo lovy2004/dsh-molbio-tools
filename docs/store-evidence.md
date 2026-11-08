@@ -150,9 +150,9 @@ pnpm 的 hoisted linker 会在 `node_modules/` 留下一个指向仓库目录的
 ```
 node test/contract.mjs       → 17 checks passed（host 契约、client 产物、tarball 覆盖、声明回退的突变自检）
 node test/preset-health.mjs  → all 29 rows load on dsh 0.2.2-rc.1
-node test/smoke.mjs          → registered 62 tools, all smoke tests passed
+node test/smoke.mjs          → registered 64 tools, all smoke tests passed
 node test/drift-probe.mjs    → 16/16（15 个突变全部被抓到）
-node benchmark/run.mjs --offline → 63 tasks checked against the shipped tools
+node benchmark/run.mjs --offline → 65 tasks checked against the shipped tools
 ```
 
 `test/release.mjs` 在完整权限的本地会话里整套通过（包括末尾的 npm 版本探测）；

@@ -1,5 +1,10 @@
 name: tests
 
+# Least privilege: a test run only reads the checkout. Without this block the
+# GITHUB_TOKEN inherits the repository default, which may be read/write.
+permissions:
+  contents: read
+
 # The suite IS this project's quality model — every guard in `docs/rules.md`
 # rule 9 ("a guard nobody has seen fail is not a guard") only counts if it runs
 # where a change lands. Before this file existed, `npm test` ran when a human

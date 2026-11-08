@@ -51,6 +51,12 @@ export async function loadLibrary(fs, path) {
     if (typeof parsed !== 'object' || parsed === null || !Array.isArray(parsed.papers)) {
       throw new Error('expected an object with a "papers" array');
     }
+    // A hand-edited library can contain a null or scalar entry. Without this
+    // check, paperKey()/render() would throw a raw TypeError; a clear input
+    // error names the file instead.
+    if (!parsed.papers.every((paper) => typeof paper === 'object' && paper !== null && !Array.isArray(paper))) {
+      throw new Error('every entry in "papers" must be an object');
+    }
     return parsed;
   } catch (error) {
     throw new MolbioInputError(`the paper library at ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
@@ -115,6 +121,10 @@ export function updatePaper(library, id, changes) {
   if (Array.isArray(changes.tags)) {
     paper.tags = changes.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter((tag) => tag !== '');
   }
+  // The id is DERIVED from pmid, then url, then title+year. Recompute it after
+  // an update: leaving the old title-based id in place means adding the renamed
+  // paper later is not recognised as a duplicate.
+  paper.id = paperKey(paper);
   return paper;
 }
 

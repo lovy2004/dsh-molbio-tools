@@ -2211,7 +2211,14 @@ function fsService(ctx) {
 
 async function readFileBytes(ctx, exec, path) {
   const fs = fsService(ctx);
-  const target = await fs.resolve(path);
+  // Resolve a model-supplied relative name against the SESSION workspace, not
+  // the provider's process cwd. `ctx.fs.resolve(path)` alone uses the backend
+  // default (process.cwd()), which is why tool-fs asks `workingDirectory` for
+  // the agent's cwd; the sandbox policy carries the same root here. Absolute
+  // paths are still accepted unchanged (workspaceFilePath leaves them alone).
+  const sandboxPolicyService = ctx.get('sandboxPolicy');
+  const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+  const target = await fs.resolve(workspaceFilePath(path, exec, policy?.workspaceRoot), { signal: exec?.signal });
   return await fs.readBytes(target, exec?.signal, MAX_DNA_BYTES);
 }
 
@@ -3547,6 +3554,8 @@ const proteinPropsTool = define({
 });
 
 const proteinChargeTool = (ctx) => define({
+  // Always writes protein-charge.svg and may open a viewer.
+  safe: false,
   name: 'molbio_protein_charge',
   description: 'Plot a protein\'s net charge across a pH range and report the isoelectric point on the same curve (Henderson-Hasselbalch summation over the terminal groups, K/R/H positive and D/E/C/Y negative). pka_set selects the pK table: bjellqvist (the set molbio_protein_props uses, so the pI matches) or emboss (the Epk.dat values). The SVG is written to the workspace and opened with the OS default viewer (auto_view, default true); the sampled curve and the charge at pH 7.4 are returned too. pI is an estimate and is only meaningful together with the named pK set.',
   parameters: {
@@ -3620,6 +3629,8 @@ const proteinChargeTool = (ctx) => define({
 });
 
 const dotplotTool = (ctx) => define({
+  // Always writes dotplot.svg and may open a viewer.
+  safe: false,
   name: 'molbio_dotplot',
   description: 'Compute and draw a self-comparison dotplot of a DNA sequence by exact word matching: a black cell at (i,j) means the k-mer at i equals the k-mer at j (direct repeat); a red cell means it equals the REVERSE COMPLEMENT of the k-mer at j (inverted repeat). word defaults to 8 (4-12); lower words find shorter repeats and produce more dots. The plot is binned to a fixed grid so a repetitive sequence cannot produce an enormous file; direct/inverted match counts and any scan/plot caps are reported. The SVG is written and opened with the OS default viewer (auto_view, default true). Exact k-mer view — not a windowed identity/scoring dotplot.',
   parameters: {
@@ -3803,7 +3814,9 @@ const WHEEL_RESIDUE_SCHEMA = {
 };
 
 const helicalWheelTool = (ctx) => define({
-  safe: (args) => args.output_path === undefined || args.output_path === '',
+  // It always writes the SVG (output_path only chooses the name), so it is
+  // never concurrency-safe; the old predicate marked the common case safe.
+  safe: false,
   name: 'molbio_helical_wheel',
   description: 'Draw the helical wheel (Schiffer-Edmundson projection) of a peptide or protein stretch and analyse it: residues are placed 100° apart on the circle (3.6 residues per turn of an ideal alpha-helix), coloured by residue class (hydrophobic/polar/acidic/basic), with the Eisenberg hydrophobic moment μH of the stretch and the maximum μH over every window of moment_window residues (11 by default). An amphipathic helix shows one hydrophobic face and one polar face. The tool WRITES an SVG file and opens it with the OS default viewer (auto_view, default true); all values are sequence-propensity estimates from published scales, not a structure prediction.',
   parameters: {
@@ -3922,7 +3935,8 @@ const HYDROPATHY_PEAK_SCHEMA = {
 };
 
 const hydropathyTool = (ctx) => define({
-  safe: (args) => args.output_path === undefined || args.output_path === '',
+  // Always writes the SVG; see the helical-wheel note.
+  safe: false,
   name: 'molbio_hydropathy_plot',
   description: 'Plot the Kyte-Doolittle hydropathy profile of a protein: a sliding-window average (window, default 9; use 19-21 for transmembrane spans), the GRAVY value, and every peak whose window average reaches the threshold (default 1.6, the classic membrane-spanning cutoff). The tool WRITES an SVG file and opens it with the OS default viewer (auto_view, default true); the per-residue profile is also returned so it can feed further analysis. Values are the Kyte-Doolittle propensity scale, not a topology prediction.',
   parameters: {
@@ -5484,7 +5498,10 @@ function validateGrnaOptions(args) {
 }
 
 const fastaFastqTool = (ctx) => define({
-  safe: (args) => args.action !== 'convert' && args.action !== 'extract',
+  // convert always writes; extract writes only when output_path is given, so
+  // stats/qc (and extract without a path) are the pure cases.
+  safe: (args) => !(args.action === 'convert'
+    || (args.action === 'extract' && args.output_path !== undefined && args.output_path !== '')),
   name: 'molbio_fasta_fastq',
   description: 'Work with FASTA/FASTQ files in the workspace. action=stats: per-entry and overall statistics (length/GC). action=extract: pull entries by id (exact or substring) and optionally write them to a FASTA file. action=convert: FASTQ → FASTA (output_path required). action=qc: FASTQ quality statistics (mean/min/max Phred, low-quality fraction, per-position means).',
   parameters: {
@@ -5652,13 +5669,22 @@ async function batchFileList(ctx, exec, args, policy, root) {
   const files = [];
   let truncated = false;
   if (Array.isArray(args.paths) && args.paths.length > 0) {
-    for (const supplied of args.paths) {
+    // The directory walk enforces max_files; the explicit list must too, or the
+    // documented 1-500 bound disappears for the easier input form.
+    const maxFiles = Math.min(args.max_files ?? 50, BATCH_LIMITS.maxFiles);
+    for (const supplied of args.paths.slice(0, maxFiles)) {
       const absolute = workspaceFilePath(supplied, exec, root);
-      const target = await fs.resolve(absolute);
       const label = relative(root, absolute).split(sep).join('/');
-      files.push({ target, label });
+      try {
+        const target = await fs.resolve(absolute);
+        files.push({ target, label });
+      } catch (error) {
+        // A bad explicit path is one error ROW, not a failed batch: the same
+        // contract the directory walk provides for files it cannot parse.
+        files.push({ label, resolveError: error instanceof Error ? error.message : String(error) });
+      }
     }
-    return { fs, files, truncated, maxBytes };
+    return { fs, files, truncated: args.paths.length > files.length, maxBytes };
   }
   if (typeof fs.listDir !== 'function') {
     throw new MolbioInputError('this harness fs service has no listDir; pass an explicit paths array instead of a directory');
@@ -5818,6 +5844,10 @@ const batchAnalyzeTool = (ctx) => define({
     const rows = [];
     for (const file of files) {
       const format = detectBatchFormat(file.label, '');
+      if (file.resolveError !== undefined) {
+        rows.push(batchErrorRow(file.label, format, file.resolveError));
+        continue;
+      }
       try {
         const info = file.size === undefined ? await fs.stat(file.target) : { size: file.size };
         if (info?.size !== undefined && info.size > maxBytes) {
@@ -7441,7 +7471,14 @@ const pubmedAbstractTool = (ctx) => define({
     }
     const apiKey = await pubmedKey(args, ctx);
     const url = pubmedFetchUrl(pmids, apiKey);
-    const result = await web.fetch({ url }, exec?.signal);
+    let result;
+    try {
+      result = await web.fetch({ url }, exec?.signal);
+    } catch (error) {
+      // Same contract as eutilsRequest: a transport failure is a tool-input
+      // error the caller can report, not a raw exception escaping the tool.
+      throw new MolbioInputError(`PubMed efetch could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const body = result?.body?.content;
     if (typeof body !== 'string' || body === '') {
       throw new MolbioInputError(`efetch returned no content (status ${result?.statusCode ?? 'unknown'})`);
@@ -7501,9 +7538,13 @@ const bibtexTool = (ctx) => define({
     const { fs, path, policy } = paperServiceDeps(ctx, exec, args);
     const library = await loadLibrary(fs, path);
     const bibtex = toBibtex(library.papers, args.tag_filter);
+    // Never fall back to the LIBRARY path itself: a custom `file` without a
+    // .json suffix used to make this replace a no-op, so the export overwrote
+    // the library with BibTeX. Always derive a distinct .bib name.
+    const defaultOutput = /\.json$/i.test(path) ? path.replace(/\.json$/i, '.bib') : `${path}.bib`;
     const output = args.output_path !== undefined && args.output_path !== ''
       ? workspaceFilePath(args.output_path, exec, policy?.workspaceRoot)
-      : path.replace(/\.json$/i, '.bib');
+      : defaultOutput;
     await writeWorkspaceFile(fs, output, bibtex, policy);
     return { output_path: output, count: bibtex.trim() === '' ? 0 : library.papers.filter((paper) => args.tag_filter === undefined || args.tag_filter.length === 0 || (paper.tags !== undefined && args.tag_filter.some((tag) => paper.tags.includes(tag)))).length };
   },

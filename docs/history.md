@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.24.1 | — | **输入边界与数据安全加固**：BibTeX 不再覆盖文献库、相对读取按会话工作区、批量/glob/并发声明修复、20 万行输入不再 `RangeError`；工具数不变 | 64 |
 | 0.24.0 | — | **数据卫生版**：新增 `molbio_contamination_screen`（内置载体/接头短签名，双链、0–2 错配）与 `molbio_fastq_trim`（质量/接头/引物/poly/N/长度，写 FASTQ/FASTA）；修 FASTQ QC 接头表 Small RNA 5' 的 RNA→DNA 静默错 | 62 → 64 |
 | 0.23.0 | — | **2.0 遗留修复 + 2.9a 调用卡 + 两个候选池工具**：跨内含子引物报告真实反向分子（F 在 R 上游）、logo/gRNA 调用卡、`molbio_protein_charge`、`molbio_dotplot`；同版完成 **DSH 0.2.2-rc.1 适配**（删掉上游已移除的 `list-agents` 子路径行、subagent 模型选择改用新键、守卫补上 specifier 解析） | 60 → 62 |
 | 0.22.2 | — | **DSH 0.2.1-rc.5 适配**：基线 rc.3 → rc.5（上游 standard 逐字节未变）；contract 声明守卫兼容桌面版裁掉 `lib/types` 的打包形态（+突变自检）；engines.node 与 CI 降到 24 | 60 |
@@ -48,6 +49,29 @@
 | — | v12–v14 | Primer3 对齐与错配容差；盐/浓度旋钮、Golden Gate、酶目录、虚拟凝胶；线粒体密码子与 Sanger/酶切几何修正 + auto-view | — |
 
 ---
+
+## v0.24.1（2026-11-08，包 0.24.1）
+
+**三条教训，都是“合法输入 + 默认路径”才会暴露的错。**
+
+**(1) “自定义文件名”不能等于“库文件本身”。** `molbio_paper_export_bibtex` 的默认输出是
+`path.replace(/\.json$/i, '.bib')`；当用户传 `file: refs.txt` 时这个替换是 no-op，
+于是导出的 BibTeX **直接覆盖文献库**。修法不是拒绝 `refs.txt`，而是先判断 `.json` 是否存在，
+不存在就追加 `.bib`。教训：**默认值必须是“另一个文件”的证明**，不能依赖字符串替换恰好命中。
+
+**(2) 用户规模数组不能 spread 进 `Math.min`/`Math.max`。** 图表接受 200,000 行、
+FASTQ QC 接受约 200,000 条 reads，而 `Math.min(...values)` 在这些规模上会以
+`RangeError` 失败；错误发生在参数个数上限，不是算法。现在所有可能跟随输入增长的极值
+都用循环；固定的 64 项密码子表之类仍可 spread。教训：**先问数组的上界是谁定的**，再决定写法。
+
+**(3) `safe` 声明要照着“默认写入”写，不是照着“参数是否为空”写。** 四个画图工具在
+`output_path` 省略时仍会写默认 SVG，旧谓词却返回 `true`；并发调用会互相覆盖文件。
+同样的问题在 `molbio_fasta_fastq extract` 带 `output_path` 时也存在。教训：**并发安全
+是“这次调用碰不碰共享状态”，默认值也算碰。**
+
+**顺带记录**：两个客户端产物因 `seqio.mjs` / `protein-structure.mjs` 改动而重建，
+面板包按仓库规则 `0.1.9 → 0.1.10`；工具数保持 64，preset 行清单与 DSH 基线不变。
+`benchmark-changed` 的 POSIX 路径断言在本地沙箱因 Node 无法 spawn `git` 未执行，CI 会执行。
 
 ## v0.24.0（2026-11-05，包 0.24.0）
 

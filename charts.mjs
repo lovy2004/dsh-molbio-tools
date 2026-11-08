@@ -60,6 +60,25 @@ import {
   textRun,
 } from './svgio.mjs';
 
+// ── data-sized min/max ──────────────────────────────────────────────────────
+//
+// A table this module accepts can hold MAX_ROWS (200 000) values. Spreading an
+// array that large into Math.min/Math.max overflows the engine's argument limit
+// with a RangeError, so the data-sized extrema are computed with loops. Fixed-
+// size arrays (bins, colour stops, density grids) still use the spread form.
+
+function minData(values) {
+  let min = Infinity;
+  for (const value of values) if (value < min) min = value;
+  return min;
+}
+
+function maxData(values) {
+  let max = -Infinity;
+  for (const value of values) if (value > max) max = value;
+  return max;
+}
+
 // ── canvas ──────────────────────────────────────────────────────────────────
 
 export const CHART_WIDTH = 720;
@@ -130,8 +149,8 @@ export function histogramBins(values, requestedBins) {
   const finite = values.filter((value) => Number.isFinite(value));
   if (finite.length === 0) throw new MolbioInputError('a histogram needs at least one finite value');
   const n = finite.length;
-  const min = Math.min(...finite);
-  const max = Math.max(...finite);
+  const min = minData(finite);
+  const max = maxData(finite);
   let binCount;
   let rule;
   if (requestedBins !== undefined) {
@@ -634,9 +653,9 @@ export function renderBoxPlot({ title, x_label, y_label, series }) {
     const stats = boxStats(validateFinite(entry.values, `series ${index + 1} values`));
     return { label, stats, color: entry.color ?? SERIES_COLORS[index % SERIES_COLORS.length] };
   });
-  const lows = prepared.map((entry) => Math.min(entry.stats.whisker_low, ...entry.stats.outliers, entry.stats.min));
-  const highs = prepared.map((entry) => Math.max(entry.stats.whisker_high, ...entry.stats.outliers, entry.stats.max));
-  const [domainMin, domainMax] = padDomain(Math.min(...lows), Math.max(...highs));
+  const lows = prepared.map((entry) => Math.min(entry.stats.whisker_low, minData(entry.stats.outliers), entry.stats.min));
+  const highs = prepared.map((entry) => Math.max(entry.stats.whisker_high, maxData(entry.stats.outliers), entry.stats.max));
+  const [domainMin, domainMax] = padDomain(minData(lows), maxData(highs));
   const { parts, plot } = frame(title);
   const y = yAxis(parts, plot, domainMin, domainMax, y_label);
   const slot = plot.width / prepared.length;
@@ -695,8 +714,8 @@ export function renderLineChart({ title, x_label, y_label, series, markers = tru
   });
   const allX = prepared.flatMap((entry) => entry.xs);
   const allY = prepared.flatMap((entry) => entry.ys);
-  const [xMin, xMax] = padDomain(Math.min(...allX), Math.max(...allX));
-  const [yMin, yMax] = padDomain(Math.min(...allY), Math.max(...allY));
+  const [xMin, xMax] = padDomain(minData(allX), maxData(allX));
+  const [yMin, yMax] = padDomain(minData(allY), maxData(allY));
   const { parts, plot } = frame(title);
   const y = yAxis(parts, plot, yMin, yMax, y_label);
   const x = linearScale([xMin, xMax], [plot.x, plot.x + plot.width]);
@@ -719,11 +738,11 @@ export function renderLineChart({ title, x_label, y_label, series, markers = tru
   return {
     svg,
     stats: {
-      series: prepared.map((entry) => ({ label: entry.label, points: entry.xs.length, x_min: Math.min(...entry.xs), x_max: Math.max(...entry.xs), y_min: Math.min(...entry.ys), y_max: Math.max(...entry.ys) })),
+      series: prepared.map((entry) => ({ label: entry.label, points: entry.xs.length, x_min: minData(entry.xs), x_max: maxData(entry.xs), y_min: minData(entry.ys), y_max: maxData(entry.ys) })),
       series_count: prepared.length,
       point_count: prepared.reduce((sum, entry) => sum + entry.xs.length, 0),
-      x_range: [Math.min(...allX), Math.max(...allX)],
-      y_range: [Math.min(...allY), Math.max(...allY)],
+      x_range: [minData(allX), maxData(allX)],
+      y_range: [minData(allY), maxData(allY)],
     },
     marks: prepared.reduce((sum, entry) => sum + entry.xs.length, 0),
     plot,
@@ -815,7 +834,7 @@ export function renderViolinPlot({ title, x_label, y_label, series, bandwidth, s
   });
   const lows = prepared.map((entry) => entry.stats.min);
   const highs = prepared.map((entry) => entry.stats.max);
-  const [domainMin, domainMax] = padDomain(Math.min(...lows), Math.max(...highs));
+  const [domainMin, domainMax] = padDomain(minData(lows), maxData(highs));
   const { parts, plot } = frame(title);
   const y = yAxis(parts, plot, domainMin, domainMax, y_label);
   const slot = plot.width / prepared.length;
@@ -890,8 +909,8 @@ export function renderVolcanoPlot({ title, x_label, y_label, points, fold_change
   const significant = (point) => Math.abs(point.fold) >= fold_change_threshold && point.p <= p_threshold;
   const xs = prepared.map((point) => point.fold);
   const ys = prepared.map((point) => point.significance);
-  const [xMin, xMax] = padDomain(Math.min(0, ...xs), Math.max(0, ...xs));
-  const [yMin, yMax] = padDomain(0, Math.max(...ys, -Math.log10(p_threshold)));
+  const [xMin, xMax] = padDomain(Math.min(0, minData(xs)), Math.max(0, maxData(xs)));
+  const [yMin, yMax] = padDomain(0, Math.max(maxData(ys), -Math.log10(p_threshold)));
   const { parts, plot } = frame(title);
   const y = yAxis(parts, plot, yMin, yMax, y_label ?? '-log10 p');
   const x = linearScale([xMin, xMax], [plot.x, plot.x + plot.width]);
@@ -936,7 +955,7 @@ export function renderVolcanoPlot({ title, x_label, y_label, points, fold_change
       down_count: prepared.filter((point) => significant(point) && point.fold < 0).length,
       fold_change_threshold,
       p_threshold,
-      max_significance: Math.max(...ys),
+      max_significance: maxData(ys),
       labelled: [...labelled],
     },
     marks: prepared.length,
@@ -1000,8 +1019,8 @@ export function renderHeatmap({ title, x_label, y_label, rows, columns, matrix, 
   }
   const flat = values.flat().filter((value) => value !== null);
   if (flat.length === 0) throw new MolbioInputError('the matrix has no finite values to draw');
-  const min = Math.min(...flat);
-  const max = Math.max(...flat);
+  const min = minData(flat);
+  const max = maxData(flat);
   const ramp = color_scale ?? (min < 0 ? 'divergingRedBlue' : 'viridis');
   if (COLOR_RAMPS[ramp] === undefined) {
     throw new MolbioInputError(`unknown color_scale ${JSON.stringify(color_scale)}; use ${Object.keys(COLOR_RAMPS).join(', ')}`);

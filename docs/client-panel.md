@@ -243,7 +243,7 @@ dsh plugin --profile <profile> add dsh-molbio-tools              # 或 npm 包
 `/plugins/dsh-molbio-tools/client.js?rev=<hash>` → 页面刷新时按需拉取、物化、执行
 `apply`。**不需要重建 Web 应用**（这正是客户端模块体系的设计目的）。
 
-与 preset 渠道共存时：preset 提供 57 个工具，bundle 提供面板；同名工具由 preset 层
+与 preset 渠道共存时：preset 提供 64 个工具，bundle 提供面板；同名工具由 preset 层
 shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 
 ## 7. 下一步

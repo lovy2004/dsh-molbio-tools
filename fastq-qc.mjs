@@ -115,7 +115,10 @@ function entropyOf(counts) {
  * that tapers is not mistaken for a quality drop.
  */
 function perPosition(entries, maxBases) {
-  const longest = Math.max(...entries.map((entry) => entry.sequence.length));
+  // A loop, not Math.max(...lengths): a 200k-read run is within the supported
+  // cap and would otherwise overflow the argument limit with a RangeError.
+  let longest = 0;
+  for (const entry of entries) if (entry.sequence.length > longest) longest = entry.sequence.length;
   const length = Math.min(longest, maxBases);
   const rows = [];
   for (let position = 0; position < length; position++) {
@@ -411,9 +414,24 @@ export function fastqQcReport(entries, options = {}) {
   }
 
   const perBase = perPosition(selected, settings.max_plot_bases);
-  const summaryQualities = selected.flatMap((entry) => [...entry.quality].map(phredOf));
-  const q20 = summaryQualities.filter((value) => value >= 20).length;
-  const q30 = summaryQualities.filter((value) => value >= 30).length;
+  // One streaming pass over the qualities. The previous version materialised
+  // every Phred score of every sampled read in one array (200k reads x 150 bp
+  // is 30 million numbers) and then filtered it twice; the counters need none
+  // of that memory, and the statistics are unchanged.
+  let qualitySum = 0;
+  let qualityCount = 0;
+  let q20 = 0;
+  let q30 = 0;
+  for (const entry of selected) {
+    for (const character of entry.quality) {
+      const value = phredOf(character);
+      qualitySum += value;
+      qualityCount++;
+      if (value >= 20) q20++;
+      if (value >= 30) q30++;
+    }
+  }
+  if (qualityCount === 0) throw new MolbioInputError('the FASTQ reads contain no quality values');
   const gcCount = selected.reduce((sum, entry) => {
     let gc = 0;
     for (const base of entry.sequence) if (base === 'G' || base === 'C') gc++;
@@ -441,9 +459,9 @@ export function fastqQcReport(entries, options = {}) {
     gc_percent: Math.round(gcFraction * 10000) / 100,
     n_bases: nCount,
     n_percent: Math.round((nCount / allBases) * 10000) / 100,
-    quality_mean: Math.round(mean(summaryQualities) * 100) / 100,
-    quality_q20_percent: Math.round((q20 / summaryQualities.length) * 10000) / 100,
-    quality_q30_percent: Math.round((q30 / summaryQualities.length) * 10000) / 100,
+    quality_mean: Math.round((qualitySum / qualityCount) * 100) / 100,
+    quality_q20_percent: Math.round((q20 / qualityCount) * 10000) / 100,
+    quality_q30_percent: Math.round((q30 / qualityCount) * 10000) / 100,
     quality_tail_below_30: tailPosition(perBase, 30),
     quality_tail_below_20: tailPosition(perBase, 20),
     per_base: perBase,

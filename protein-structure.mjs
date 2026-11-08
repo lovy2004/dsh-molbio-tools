@@ -278,14 +278,22 @@ export function hydropathyProfile(rawSequence, options = {}) {
   }
   if (current !== null) peaks.push(current);
   const total = points.reduce((sum, point) => sum + point.hydropathy, 0);
+  // Loop rather than Math.min(...points): the protein length is not capped and
+  // a long input would overflow the argument limit with a RangeError.
+  let minimumHydropathy = Infinity;
+  let maximumHydropathy = -Infinity;
+  for (const point of points) {
+    if (point.hydropathy < minimumHydropathy) minimumHydropathy = point.hydropathy;
+    if (point.hydropathy > maximumHydropathy) maximumHydropathy = point.hydropathy;
+  }
   return {
     length: sequence.length,
     window,
     threshold,
     gravy: sequence.length === 0 ? 0 : round2([...sequence].reduce((sum, aa) => sum + KYTE_DOOLITTLE[aa], 0) / sequence.length),
     mean_profile: round3(total / points.length),
-    minimum_hydropathy: round3(Math.min(...points.map((point) => point.hydropathy))),
-    maximum_hydropathy: round3(Math.max(...points.map((point) => point.hydropathy))),
+    minimum_hydropathy: round3(minimumHydropathy),
+    maximum_hydropathy: round3(maximumHydropathy),
     peaks: peaks.map((peak) => ({ ...peak, maximum: round3(peak.maximum), length: peak.end - peak.start + 1 })),
     points,
   };

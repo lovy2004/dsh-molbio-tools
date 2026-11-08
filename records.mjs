@@ -27,6 +27,11 @@ export async function loadRecords(fs, path, key) {
     if (typeof parsed !== 'object' || parsed === null || !Array.isArray(parsed[key])) {
       throw new Error(`expected an object with a "${key}" array`);
     }
+    // See papers.mjs: a null/scalar entry would otherwise reach
+    // record.name.trim() (protocols) as a raw TypeError.
+    if (!parsed[key].every((record) => typeof record === 'object' && record !== null && !Array.isArray(record))) {
+      throw new Error(`every entry in "${key}" must be an object`);
+    }
     return parsed;
   } catch (error) {
     throw new MolbioInputError(`${path} is not a valid record file: ${error instanceof Error ? error.message : String(error)}`);
@@ -54,7 +59,7 @@ export function addProtocol(records, entry) {
   if (typeof entry !== 'object' || entry === null || typeof entry.name !== 'string' || entry.name.trim() === '') {
     throw new MolbioInputError('each protocol needs a non-empty "name"');
   }
-  if (records.some((record) => record.name.trim().toLowerCase() === entry.name.trim().toLowerCase())) {
+  if (records.some((record) => typeof record?.name === 'string' && record.name.trim().toLowerCase() === entry.name.trim().toLowerCase())) {
     throw new MolbioInputError(`a protocol named ${JSON.stringify(entry.name)} already exists`);
   }
   const protocol = {
@@ -78,7 +83,17 @@ export function addProtocol(records, entry) {
 export function updateProtocol(records, id, changes) {
   const protocol = records.find((record) => record.id === id);
   if (protocol === undefined) return undefined;
-  if (typeof changes.name === 'string' && changes.name.trim() !== '') protocol.name = changes.name.trim();
+  if (typeof changes.name === 'string' && changes.name.trim() !== '') {
+    const nextName = changes.name.trim();
+    // addProtocol enforces unique names; update must too, or a rename can
+    // create a duplicate the next add refuses to explain.
+    if (records.some((record) => record !== protocol
+      && typeof record?.name === 'string'
+      && record.name.trim().toLowerCase() === nextName.toLowerCase())) {
+      throw new MolbioInputError(`a protocol named ${JSON.stringify(nextName)} already exists`);
+    }
+    protocol.name = nextName;
+  }
   if (typeof changes.category === 'string' && changes.category.trim() !== '') protocol.category = changes.category.trim();
   if (Array.isArray(changes.steps)) {
     protocol.steps = changes.steps.filter((step) => typeof step === 'string').map((step) => step.trim()).filter((step) => step !== '');

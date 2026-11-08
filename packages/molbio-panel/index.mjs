@@ -2,7 +2,7 @@
  * dsh-molbio-panel — host half.
  *
  * This package exists so the browser panel can be installed WITHOUT dragging
- * the 46 molbio tools into every session of a profile. It is a `dsh.client`
+ * the molbio toolset into every session of a profile. It is a `dsh.client`
  * dual-face package: the host half below, and the browser half built from the
  * `dsh-molbio-tools` sources into `lib/client.js`.
  *

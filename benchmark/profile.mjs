@@ -5,7 +5,7 @@
  *
  * ── Why a hand-built profile exists at all ──────────────────────────────────
  *
- * The model-facing way to get the 57 tools is the "Molecular Biology Lab" agent
+ * The model-facing way to get the 64 tools is the "Molecular Biology Lab" agent
  * preset, and the benchmark would obviously rather run THAT than a
  * reconstruction of it. It cannot: `dsh-headless` refuses a preset for a
  * structural reason, not a configuration one —

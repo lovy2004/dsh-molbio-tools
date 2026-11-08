@@ -12,12 +12,12 @@ DSH Web GUI 的**浏览器内 Molbio 面板**：右侧栏的一个 tab，列出�
 面板必须走 **bundle 渠道**（`dsh.client` 双面包）：preset 渠道挂不了客户端 UI
 （详见 `dsh-molbio-tools` 仓库的 `docs/client-pipeline-exploration.md`）。
 
-而 `dsh-molbio-tools` 的宿主半边会注册 **46 个工具**——把它挂进一个共享的 Web profile，
+而 `dsh-molbio-tools` 的宿主半边会注册 **64 个工具**——把它挂进一个共享的 Web profile，
 等于给**该 profile 的每个会话**都塞进这些工具。所以面板单独成包：
 
 | 包 | 宿主半边 | 用途 |
 | --- | --- | --- |
-| `dsh-molbio-tools` | 46 个 molbio 工具 | 分子生物学专用 profile / preset |
+| `dsh-molbio-tools` | 64 个 molbio 工具 | 分子生物学专用 profile / preset |
 | `dsh-molbio-panel` | **不注册任何工具**（空实现） | 只想在共享 profile 里加一个面板 |
 
 宿主半边刻意保持空：客户端扫描按 **Loader 条目**取包清单，条目只要能加载，浏览器半就能

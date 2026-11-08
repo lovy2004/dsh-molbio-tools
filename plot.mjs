@@ -70,6 +70,20 @@ function validateNumbers(values, label) {
   return values;
 }
 
+/** Smallest datum, by loop: spreading a long series into Math.min overflows the argument limit. */
+function minValue(values) {
+  let min = Infinity;
+  for (const value of values) if (value < min) min = value;
+  return min;
+}
+
+/** Largest datum, by loop (same reason as {@link minValue}). */
+function maxValue(values) {
+  let max = -Infinity;
+  for (const value of values) if (value > max) max = value;
+  return max;
+}
+
 function frameParts(title, xLabel, yLabel) {
   const parts = [];
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" font-family="${FIGURE_FONT}" role="img">`);
@@ -110,11 +124,13 @@ export function renderBarChart({ title, x_label, y_label, labels, values, errors
     }
     errs = errors;
   }
-  let min = Math.min(0, ...vals);
-  let max = Math.max(0, ...vals);
+  let min = Math.min(0, minValue(vals));
+  let max = Math.max(0, maxValue(vals));
   if (errs !== undefined) {
-    min = Math.min(min, ...vals.map((v, i) => v - errs[i]));
-    max = Math.max(max, ...vals.map((v, i) => v + errs[i]));
+    for (let index = 0; index < vals.length; index++) {
+      min = Math.min(min, vals[index] - errs[index]);
+      max = Math.max(max, vals[index] + errs[index]);
+    }
   }
   if (max === min) max = min + 1;
   const parts = frameParts(title, x_label, y_label);
@@ -158,15 +174,15 @@ export function renderScatterChart({ title, x_label, y_label, x, y, fit }) {
     }
     fitLine = fit;
   }
-  let xMin = Math.min(...xs);
-  let xMax = Math.max(...xs);
+  let xMin = minValue(xs);
+  let xMax = maxValue(xs);
   if (xMax === xMin) {
     const pad = Math.abs(xMax) * 0.1 + 1;
     xMin -= pad;
     xMax += pad;
   }
-  let yMin = Math.min(...ys);
-  let yMax = Math.max(...ys);
+  let yMin = minValue(ys);
+  let yMax = maxValue(ys);
   if (fitLine !== undefined) {
     yMin = Math.min(yMin, fitLine.intercept + fitLine.slope * xMin, fitLine.intercept + fitLine.slope * xMax);
     yMax = Math.max(yMax, fitLine.intercept + fitLine.slope * xMin, fitLine.intercept + fitLine.slope * xMax);
