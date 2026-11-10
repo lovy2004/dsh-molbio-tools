@@ -19,8 +19,11 @@ import {
   renderSequenceLogo,
   progressiveAlign,
   parseStructureText,
-  renderStructureProjection,
+  renderStructureImage,
+  DEFAULT_STRUCTURE_VIEW,
+  STRUCTURE_ELEMENT_COLORS,
   STRUCTURE_EXTENSIONS,
+  STRUCTURE_REPRESENTATIONS,
 } from './browser-api.mjs';
 
 /** Extensions the panel can open, mapped to the parser that handles them. */
@@ -40,7 +43,7 @@ export const ALIGNMENT_EXTENSIONS = {
 };
 
 /** Structure formats the panel opens, mapped to the parser kind. */
-export { STRUCTURE_EXTENSIONS };
+export { DEFAULT_STRUCTURE_VIEW, STRUCTURE_ELEMENT_COLORS, STRUCTURE_EXTENSIONS, STRUCTURE_REPRESENTATIONS };
 
 /** Lowercase extension without the dot, or '' when there is none. */
 export function extensionOf(name) {
@@ -198,13 +201,15 @@ export function parseStructureFile(name, bytes) {
 }
 
 /**
- * Render a parsed structure as the 2D PCA projection the panel injects.
+ * Render a parsed structure to an RGB buffer for the canvas.
  * @param {object} record a {@link parseStructureFile} result.
- * @param {{width?: number, height?: number}} [options]
- * @returns {string} SVG text.
+ * @param {{width?: number, height?: number, yaw?: number, pitch?: number,
+ *   zoom?: number, representation?: string, supersample?: 1|2}} [options]
+ * @returns {{width:number, height:number, rgb:Uint8Array, atoms:number,
+ *   bonds:number, representation:string}}
  */
-export function structureSvg(record, options = {}) {
-  return renderStructureProjection(record, options);
+export function structureImage(record, options = {}) {
+  return renderStructureImage(record, options);
 }
 
 /**

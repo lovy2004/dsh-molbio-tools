@@ -10,13 +10,17 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
-## [0.25.0] — 2026-11-08（浏览器内结构预览：PDB / mmCIF / SDF）
+## [0.25.0] — 2026-11-10（浏览器内 3D 结构预览：真实原子模型）
 
 **工具数不变（64），benchmark 不变（65 题 / 64 覆盖）。** 这一版把结构文件接进已有的
 **Molbio** 右栏面板：选中 `.pdb` / `.ent` / `.cif` / `.mmcif` / `.sdf` / `.mol`，
-浏览器当场画一张 2D PCA 投影，不需要工具调用、不落盘 SVG、不弹系统查看器。
+浏览器当场渲染一个可旋转、可缩放的**真实 3D 原子模型**（ball-and-stick / space-filling），
+不需要工具调用、不落盘 SVG、不弹系统查看器，也没有引入任何第三方库。
 
-### 1. 新模块 `structure-preview.mjs`
+> 0.25.0 在发布前从 2D PCA 投影改成了 3D。2D 预览只有一张固定投影，丢失深度、遮挡和
+> 原子空间关系；学术界常见的结构配图是立体原子/表面模型，而不是单张 PCA 线图。
+
+### 1. 解析：`structure-preview.mjs`
 
 - **PDB**：只读第一个 MODEL，跳过非 A/A 的 altLoc；读 `ATOM`/`HETATM` 的坐标、元素、
   残基、链与 `CONECT`。
@@ -24,33 +28,48 @@
   缺列时回退 `label_*`；只取第一个 model。
 - **SDF/MOL**：只读第一条记录（`$$$$` 之前），解析 V2000 的原子与键；**V3000 明确拒绝**
   并提示导出 V2000，而不是猜。
-- **投影**：对 CA 轨迹（≥3 个 CA）或全部重原子做 3×3 协方差 + Jacobi 特征分解，取方差最大的
-  两个轴；同一文件每次得到同一张图。多链按链着色；小分子按键连线、按元素着色并给图例。
-- **边界**：单文件最多 20,000 个原子；面板的 5 MB 读取上限照旧；轨迹/键的绘制段数有上限并
-  在图上注明 "drawing capped"；标题与页脚写明 "2D PCA projection — not a molecular viewer"。
-- **不做**：二级结构、表面、对称、V3000、多 model 动画、真正的 3D 查看器。结构文件不是
-  工具输入，也没有新增 `molbio_*` 工具。
+- 解析器只负责坐标/元素/链/键；渲染在独立模块里，浏览器与 Node 测试共用同一份源码。
 
-### 2. 面板与产物
+### 2. 软件渲染：`structure-render.mjs`
 
-- Molbio tab 的文件分类新增 `structure`；列表、排序（质粒 → 比对 → 结构 → 其它）、
-  元信息（标题/格式/原子数/链数/残基数）与 SVG 宿主都复用现有面板状态机。
-- `build/browser-api.mjs` 导出新模块，浏览器半与 Node 半跑**同一份源码**；
-  客户端产物从 19 个模块增至 **20** 个（`structure-preview.mjs`）。
+- **不依赖 WebGL / Three.js**：纯 JS 软件光栅化，返回 RGB 缓冲，Canvas 只负责
+  `putImageData`。这样同一套像素可以被 Node 测试和文档截图复用。
+- 透视投影 + **z-buffer** + 球面/柱面 Phong 光照 + 深度雾化；CPK 配色
+  （C 灰、N 蓝、O 红、S 黄、P 橙）。
+- 两种表示：**ball-and-stick**（小球 + 键）与 **space-filling**（范德华球）。
+- 键图：SDF 用显式键；PDB/mmCIF 用共价半径空间网格推断，并与 `CONECT` 合并
+  （1CRN 的 CONECT 只有 6 条，不能直接当完整键表）。
+- 边界：面板最多渲染 **12,000 个重原子**；水与氢默认不画；拖动时 1× 采样、松开后 2×；
+  单帧约 50–120 ms（1CRN 327 原子 / 1BNA 486 原子），不做分子表面、静电势或测量。
+- 明确写"preview, not for measurements"：这是看的模型，不是分析工具。
+
+### 3. 面板
+
+- Molbio tab 的文件分类新增 `structure`；列表、排序、元信息（标题/格式/原子数/链数/残基数）
+  复用现有状态机。
+- 结构记录改用 `<canvas>`：**拖拽旋转、滚轮缩放、双击复位**；工具栏切换
+  ball-and-stick / space-filling；元素图例与操作提示在画布下方。
+- 质粒图谱与 sequence logo 仍用原来的 SVG 宿主；只有结构记录走 canvas。
 - 只改浏览器半也改变了 `lib/client.js`，所以根包 `0.24.1 → 0.25.0`、面板包
-  `0.1.10 → 0.1.11` 同时升版本；否则会用同一版本号发不同字节。
+  `0.1.10 → 0.1.11` 同时升版本。
 
-### 3. 测试与边界
+### 4. 顺带修掉的 bundler 缺陷
 
-- 新增 `test/structure.mjs`：PDB/mmCIF/SDF 的已知坐标、链/残基/键计数、投影确定性、
-  所有圆点落在绘图矩形内、V3000/空坐标/原子上限的错误路径。
-- `test/panel-render.mjs` 增加真实 PDB 用例：点选 `.pdb` 后元信息出现，且一个
-  `<svg>` 真的 append 进宿主。
+客户端 bundler 在生成 re-export 时丢掉了 imported name，产物里所有
+`browser-api.mjs` 再导出都变成 `require(target).undefined`。格式检查一直是绿的，但真实
+浏览器半会拿到 `undefined`。现在 re-export 保留 `imported`，并在 `test/client.mjs` 里
+加了"产物不得含 `require(...).undefined`"的结构断言。
+
+### 5. 测试与边界
+
+- `test/structure.mjs`：PDB/mmCIF/SDF 已知坐标与计数；共价键推断；渲染像素
+  （中心原子、非背景像素、确定性、两种表示、PNG 编码）；V3000/空坐标/原子 cap 的错误路径。
+- `test/panel-render.mjs`：真实 PDB 点选后 canvas 被绘制，拖拽会触发重绘。
 - `test/client.mjs`、`test/client-mount.mjs`、`test/contract.mjs`（17 项）与
   `build/client-bundle.mjs --check` 全绿；工具数仍 64，benchmark 仍 65 题。
-- 没有采用 `ctx.documentPreviews.register`：它需要 keyed 座位与一个新的预览容器，
-  而现有 Molbio tab 已经拥有文件列表、错误态与 SVG 宿主。2.9c 的交付目标是"在浏览器里
-  看见结构"，不是新增一条宿主 RPC。
+- 没有采用 `ctx.documentPreviews.register`：现有 Molbio tab 已有文件列表、canvas 与错误态；
+  新增 keyed 容器换不来新的用户能力。
+- **不做**：卡通 ribbon、分子表面、静电势、对称、V3000、多 model 动画、测量工具。
 
 ## [0.24.1] — 2026-11-08（输入边界与数据安全加固；工具数不变）
 

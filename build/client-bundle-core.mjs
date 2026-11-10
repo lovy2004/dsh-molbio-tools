@@ -79,7 +79,10 @@ function parseModule(source, path) {
   for (const match of source.matchAll(EXPORT_LIST_RE)) {
     for (const name of parseNames(match[1], path)) exports.push({ local: name.local, source: null });
   }
-  for (const name of reexports) exports.push({ local: name.local, source: name.specifier });
+  // The imported name is what the target namespace must be read for; dropping
+  // it emitted `exports.x = require(target).undefined` for EVERY re-export,
+  // which silently broke browser-api.mjs while the format checks stayed green.
+  for (const name of reexports) exports.push({ local: name.local, imported: name.imported, source: name.specifier });
   const listCount = (source.match(EXPORT_LIST_RE) ?? []).length;
   const reexportCount = (source.match(REEXPORT_RE) ?? []).length;
   const keywordCount = (source.match(/^export\s/gm) ?? []).length;

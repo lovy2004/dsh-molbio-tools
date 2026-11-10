@@ -7913,31 +7913,21 @@ window.__ModuleLoader__.load({
 			/**
 			 * dsh-molbio-tools/structure-preview.mjs
 			 *
-			 * Pure parsing and 2D rendering for structure files shown in the browser
-			 * panel: PDB, mmCIF and MDL SDF/MOL V2000.
+			 * Pure parsing for structure files shown in the browser panel: PDB, mmCIF and
+			 * MDL SDF/MOL V2000. Rendering lives in structure-render.mjs, which turns this
+			 * record into a realistic ball-and-stick or space-filling RGB frame.
 			 *
 			 * WHAT THIS IS
 			 * ------------
-			 * A compact, dependency-free reader for the coordinates and bonds a bench user
-			 * actually needs to recognise a structure in the sidebar — not a molecular
-			 * viewer. The drawing is a deterministic PCA projection to two dimensions, so
-			 * "which chain is which" and "does this file contain the ligand I expect" are
-			 * answerable without a WebGL stack, a network request or a second parser in the
-			 * browser.
+			 * A compact, dependency-free reader for the coordinates, elements, chains and
+			 * bonds a preview needs. It does not interpret secondary structure, surfaces,
+			 * symmetry or multiple models; a failed/unsupported file throws a
+			 * MolbioInputError naming the file kind, and the panel turns that into a notice.
 			 *
-			 * WHAT THIS IS NOT
-			 * ----------------
-			 * No secondary structure, no surface, no symmetry, no V3000, no multi-model
-			 * animation. A failed or unsupported file throws a MolbioInputError with the
-			 * file kind in the message; the panel turns that into a notice, never a blank
-			 * pane.
-			 *
-			 * The module is browser-safe on purpose: it imports MolbioInputError from
-			 * lib.mjs and the SVG primitives from svgio.mjs, both of which already ship in
-			 * the client bundle. It must not import node:fs, node:path or node:zlib.
+			 * The module is browser-safe on purpose: it imports only MolbioInputError from
+			 * lib.mjs. It must not import node:fs, node:path or node:zlib.
 			 */
 			const { MolbioInputError } = __molbio_require("lib.mjs");
-			const { circle, line, rect, svgDocument, textRun } = __molbio_require("svgio.mjs");
 			/** Extension to parser kind. The keys are lowercase. */
 			const STRUCTURE_EXTENSIONS = {
 			  pdb: 'pdb',
@@ -7966,7 +7956,7 @@ window.__ModuleLoader__.load({
 			 * @param {string} format 'pdb' | 'mmcif' | 'sdf'
 			 * @param {string} text file content (UTF-8 decoded).
 			 * @param {string} [name] display name, used for the title fallback.
-			 * @returns {object} the parsed record consumed by renderStructureProjection.
+			 * @returns {object} the parsed record consumed by structure-render.mjs.
 			 */
 			function parseStructureText(format, text, name = 'structure') {
 			  const kind = String(format).toLowerCase();
@@ -8315,266 +8305,6 @@ window.__ModuleLoader__.load({
 			  };
 			}
 
-			// ── 2D PCA projection ───────────────────────────────────────────────────────
-
-			/** Jacobi eigenvalues/vectors of a symmetric 3x3 matrix (deterministic). */
-			function jacobiEigen(matrix) {
-			  const a = matrix.map((row) => row.slice());
-			  const v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-			  for (let sweep = 0; sweep < 32; sweep++) {
-			    let p = 0;
-			    let q = 1;
-			    let largest = Math.abs(a[0][1]);
-			    for (const [row, column] of [[0, 2], [1, 2]]) {
-			      const candidate = Math.abs(a[row][column]);
-			      if (candidate > largest) {
-			        largest = candidate;
-			        p = row;
-			        q = column;
-			      }
-			    }
-			    if (largest < 1e-12) break;
-			    const app = a[p][p];
-			    const aqq = a[q][q];
-			    const apq = a[p][q];
-			    const theta = 0.5 * Math.atan2(2 * apq, aqq - app);
-			    const cos = Math.cos(theta);
-			    const sin = Math.sin(theta);
-			    for (let k = 0; k < 3; k++) {
-			      if (k === p || k === q) continue;
-			      const akp = a[k][p];
-			      const akq = a[k][q];
-			      a[k][p] = cos * akp - sin * akq;
-			      a[k][q] = sin * akp + cos * akq;
-			      a[p][k] = a[k][p];
-			      a[q][k] = a[k][q];
-			    }
-			    a[p][p] = cos * cos * app - 2 * sin * cos * apq + sin * sin * aqq;
-			    a[q][q] = sin * sin * app + 2 * sin * cos * apq + cos * cos * aqq;
-			    a[p][q] = 0;
-			    a[q][p] = 0;
-			    for (let k = 0; k < 3; k++) {
-			      const vkp = v[k][p];
-			      const vkq = v[k][q];
-			      v[k][p] = cos * vkp - sin * vkq;
-			      v[k][q] = sin * vkp + cos * vkq;
-			    }
-			  }
-			  const values = [a[0][0], a[1][1], a[2][2]];
-			  return { values, vectors: v };
-			}
-
-			/** Project 3D points to their two largest-variance axes. */
-			function projectPoints(points) {
-			  const count = points.length;
-			  const center = [0, 0, 0];
-			  for (const point of points) {
-			    center[0] += point[0];
-			    center[1] += point[1];
-			    center[2] += point[2];
-			  }
-			  center[0] /= count;
-			  center[1] /= count;
-			  center[2] /= count;
-			  const covariance = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-			  for (const point of points) {
-			    const d = [point[0] - center[0], point[1] - center[1], point[2] - center[2]];
-			    for (let row = 0; row < 3; row++) {
-			      for (let column = 0; column < 3; column++) covariance[row][column] += d[row] * d[column];
-			    }
-			  }
-			  const { values, vectors } = jacobiEigen(covariance);
-			  const order = [0, 1, 2].sort((left, right) => values[right] - values[left]);
-			  const axis = (position) => [vectors[0][order[position]], vectors[1][order[position]], vectors[2][order[position]]];
-			  let first = axis(0);
-			  let second = axis(1);
-			  if (!first.every(Number.isFinite)) first = [1, 0, 0];
-			  if (!second.every(Number.isFinite)) second = [0, 1, 0];
-			  return points.map((point) => {
-			    const d = [point[0] - center[0], point[1] - center[1], point[2] - center[2]];
-			    return {
-			      x: d[0] * first[0] + d[1] * first[1] + d[2] * first[2],
-			      y: d[0] * second[0] + d[1] * second[1] + d[2] * second[2],
-			    };
-			  });
-			}
-
-			/** Pick the atoms to draw: CA trace for polymers, heavy atoms otherwise. */
-			function drawingSubset(record) {
-			  const alphaCarbons = record.atoms.filter((atom) => atom.name.toUpperCase() === 'CA' && atom.hetatm === false);
-			  if ((record.format === 'pdb' || record.format === 'mmcif') && alphaCarbons.length >= 3) {
-			    const traceIndexes = record.atoms
-			      .map((atom, index) => ({ atom, index }))
-			      .filter((entry) => entry.atom.name.toUpperCase() === 'CA' && entry.atom.hetatm === false)
-			      .map((entry) => entry.index);
-			    return { mode: 'trace', indexes: traceIndexes };
-			  }
-			  const heavy = record.atoms
-			    .map((atom, index) => ({ atom, index }))
-			    .filter((entry) => entry.atom.element !== 'H')
-			    .map((entry) => entry.index);
-			  return { mode: 'atoms', indexes: heavy.length > 0 ? heavy : record.atoms.map((_, index) => index) };
-			}
-
-			const ELEMENT_COLORS = {
-			  C: '#57606a',
-			  N: '#0969da',
-			  O: '#cf222e',
-			  S: '#bf8700',
-			  P: '#8250df',
-			  F: '#1a7f37',
-			  CL: '#1a7f37',
-			  BR: '#a40e26',
-			  I: '#8250df',
-			  H: '#d0d7de',
-			  FE: '#bc4c00',
-			  ZN: '#6e7781',
-			  MG: '#1a7f37',
-			  CA: '#1a7f37',
-			  NA: '#1a7f37',
-			  K: '#1a7f37',
-			};
-			const CHAIN_COLORS = ['#0969da', '#cf222e', '#1a7f37', '#8250df', '#bf8700', '#0550ae', '#a40e26', '#116329'];
-
-			/** Colour for an element symbol. */
-			function elementColor(element) {
-			  return ELEMENT_COLORS[element] ?? '#1a7f37';
-			}
-
-			/**
-			 * Render a parsed structure as an SVG PCA projection.
-			 *
-			 * The drawing is deliberately deterministic: the same file always produces the
-			 * same coordinates, so a test can assert a point's position rather than merely
-			 * that a circle exists.
-			 * @param {object} record a parseStructureText result.
-			 * @param {{width?: number, height?: number, max_segments?: number}} [options]
-			 * @returns {string} SVG text.
-			 */
-			function renderStructureProjection(record, options = {}) {
-			  if (record === null || typeof record !== 'object' || !Array.isArray(record.atoms) || record.atoms.length === 0) {
-			    throw new MolbioInputError('renderStructureProjection needs a parsed structure with atoms');
-			  }
-			  const width = options.width ?? 640;
-			  const height = options.height ?? 480;
-			  const plot = { x: 24, y: 58, width: width - 48, height: height - 112 };
-			  const subset = drawingSubset(record);
-			  const points = subset.indexes.map((index) => [record.atoms[index].x, record.atoms[index].y, record.atoms[index].z]);
-			  const projected = projectPoints(points);
-			  let xMin = Infinity;
-			  let xMax = -Infinity;
-			  let yMin = Infinity;
-			  let yMax = -Infinity;
-			  for (const point of projected) {
-			    if (point.x < xMin) xMin = point.x;
-			    if (point.x > xMax) xMax = point.x;
-			    if (point.y < yMin) yMin = point.y;
-			    if (point.y > yMax) yMax = point.y;
-			  }
-			  const spanX = Math.max(1e-9, xMax - xMin);
-			  const spanY = Math.max(1e-9, yMax - yMin);
-			  const scale = Math.min(plot.width / spanX, plot.height / spanY) * 0.9;
-			  const centerX = (xMin + xMax) / 2;
-			  const centerY = (yMin + yMax) / 2;
-			  const toScreen = (point) => ({
-			    x: plot.x + plot.width / 2 + (point.x - centerX) * scale,
-			    y: plot.y + plot.height / 2 - (point.y - centerY) * scale,
-			  });
-			  const screen = projected.map(toScreen);
-
-			  const body = [];
-			  body.push(textRun({ x: plot.x, y: 26, text: record.title === '' ? record.name : record.title, size: 14, weight: 'bold', fill: '#24292f' }));
-			  body.push(textRun({
-			    x: plot.x,
-			    y: 44,
-			    text: `${record.format.toUpperCase()} · ${record.atoms.length} atoms · ${record.chain_count} chain(s) · ${record.residue_count} residue(s)`,
-			    size: 10,
-			    fill: '#57606a',
-			  }));
-			  body.push(rect({ x: plot.x, y: plot.y, width: plot.width, height: plot.height, fill: '#fbfcfd', stroke: '#d0d7de' }));
-
-			  const segmentColor = (chain) => {
-			    if (record.chain_count <= 1) return '#57606a';
-			    const position = record.chains.indexOf(chain);
-			    return CHAIN_COLORS[(position < 0 ? 0 : position) % CHAIN_COLORS.length];
-			  };
-			  const maxSegments = options.max_segments ?? 6000;
-			  let segments = 0;
-			  let drawnPoints = screen.length;
-			  let subsampled = false;
-
-			  if (subset.mode === 'trace') {
-			    for (let position = 1; position < subset.indexes.length; position++) {
-			      const previous = record.atoms[subset.indexes[position - 1]];
-			      const current = record.atoms[subset.indexes[position]];
-			      if (previous.chain !== current.chain) continue;
-			      const distance = Math.hypot(current.x - previous.x, current.y - previous.y, current.z - previous.z);
-			      if (distance > 4.5) continue;
-			      if (segments >= maxSegments) {
-			        subsampled = true;
-			        break;
-			      }
-			      const from = screen[position - 1];
-			      const to = screen[position];
-			      body.push(line({ x1: from.x, y1: from.y, x2: to.x, y2: to.y, stroke: segmentColor(current.chain), width: 2, cap: 'round' }));
-			      segments += 1;
-			    }
-			    for (let position = 0; position < screen.length; position++) {
-			      const atom = record.atoms[subset.indexes[position]];
-			      const point = screen[position];
-			      body.push(circle({ cx: point.x, cy: point.y, r: 2.2, fill: segmentColor(atom.chain) }));
-			    }
-			  } else {
-			    const indexOf = new Map(subset.indexes.map((atomIndex, position) => [atomIndex, position]));
-			    for (const bond of record.bonds) {
-			      const from = indexOf.get(bond.a);
-			      const to = indexOf.get(bond.b);
-			      if (from === undefined || to === undefined) continue;
-			      if (segments >= maxSegments) {
-			        subsampled = true;
-			        break;
-			      }
-			      const a = screen[from];
-			      const b = screen[to];
-			      body.push(line({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: '#8c959f', width: bond.order >= 2 ? 2.4 : 1.4 }));
-			      segments += 1;
-			    }
-			    for (let position = 0; position < screen.length; position++) {
-			      const atom = record.atoms[subset.indexes[position]];
-			      const point = screen[position];
-			      body.push(circle({ cx: point.x, cy: point.y, r: 3.1, fill: elementColor(atom.element), stroke: '#ffffff', strokeWidth: 0.6 }));
-			    }
-			  }
-
-			  const legend = [];
-			  if (subset.mode === 'trace') {
-			    record.chains.slice(0, 8).forEach((chain, position) => {
-			      const x = plot.x + 8 + position * 72;
-			      legend.push(circle({ cx: x + 4, cy: plot.y + plot.height - 12, r: 3, fill: CHAIN_COLORS[position % CHAIN_COLORS.length] }));
-			      legend.push(textRun({ x: x + 12, y: plot.y + plot.height - 8, text: `chain ${chain}`, size: 9, fill: '#57606a' }));
-			    });
-			  } else {
-			    const counts = new Map();
-			    for (const index of subset.indexes) {
-			      const element = record.atoms[index].element;
-			      counts.set(element, (counts.get(element) ?? 0) + 1);
-			    }
-			    [...counts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 6).forEach(([element, count], position) => {
-			      const x = plot.x + 8 + position * 64;
-			      legend.push(circle({ cx: x + 4, cy: plot.y + plot.height - 12, r: 3, fill: elementColor(element) }));
-			      legend.push(textRun({ x: x + 12, y: plot.y + plot.height - 8, text: `${element} ${count}`, size: 9, fill: '#57606a' }));
-			    });
-			  }
-
-			  const noteParts = [subset.mode === 'trace' ? 'Cα trace' : 'heavy atoms', '2D PCA projection — not a molecular viewer'];
-			  if (subsampled) noteParts.push('drawing capped');
-			  body.push(textRun({ x: plot.x, y: height - 16, text: noteParts.join(' · '), size: 9, fill: '#6e7781' }));
-			  body.push(...legend);
-
-			  const description = `${record.format} structure ${record.name}: ${record.atoms.length} atoms, ${record.bonds.length} bonds, 2D PCA projection`;
-			  return svgDocument({ width, height, title: record.title === '' ? record.name : record.title, description, body: body.join('\n') });
-			}
-
 			exports.STRUCTURE_EXTENSIONS = STRUCTURE_EXTENSIONS;
 			exports.MAX_STRUCTURE_ATOMS = MAX_STRUCTURE_ATOMS;
 			exports.MAX_STRUCTURE_BONDS = MAX_STRUCTURE_BONDS;
@@ -8583,7 +8313,418 @@ window.__ModuleLoader__.load({
 			exports.parsePdb = parsePdb;
 			exports.parseMmcif = parseMmcif;
 			exports.parseSdf = parseSdf;
-			exports.renderStructureProjection = renderStructureProjection;
+			return exports;
+		};
+		__molbio_modules["structure-render.mjs"] = () => {
+			const exports = {};
+			/**
+			 * dsh-molbio-tools/structure-render.mjs
+			 *
+			 * A small, dependency-free software renderer for the realistic 3D structure
+			 * preview: ball-and-stick and space-filling models with perspective, a z-buffer
+			 * and simple Phong lighting.
+			 *
+			 * WHY A SOFTWARE RENDERER
+			 * -----------------------
+			 * The DSH Web client is a browser, but this package ships zero runtime
+			 * dependencies and must keep the browser half Node-free. Canvas 2D is available
+			 * everywhere, yet gradients/shadow support differs between engines and is hard
+			 * to test in Node. Rendering an RGB buffer here gives:
+			 *
+			 *   - one implementation shared by the panel and the tests;
+			 *   - a PNG the tests can encode and inspect without a browser;
+			 *   - deterministic pixels for a given record and view;
+			 *   - no WebGL context, shader compilation or asset download.
+			 *
+			 * The tradeoff is CPU rasterization. The panel renders at reduced supersampling
+			 * while a pointer drag is active and at full quality when it settles; the
+			 * atom cap keeps a single frame bounded.
+			 *
+			 * WHAT THIS IS NOT
+			 * ----------------
+			 * No molecular surface, no electrostatics, no ambient occlusion, no secondary
+			 * structure ribbons. It is a realistic atom/bond model, not an analysis tool.
+			 */
+			const { MolbioInputError } = __molbio_require("lib.mjs");
+			/** The representations the panel offers, in display order. */
+			const STRUCTURE_REPRESENTATIONS = ['ball-and-stick', 'space-filling'];
+
+			/** CPK-like colours, exported so the panel legend and renderer cannot drift. */
+			const STRUCTURE_ELEMENT_COLORS = Object.freeze({
+			  H: '#e8ebef',
+			  C: '#6b7480',
+			  N: '#2f6fdb',
+			  O: '#d64545',
+			  S: '#d0a02a',
+			  P: '#e07a2f',
+			  F: '#3aa76d',
+			  CL: '#3aa76d',
+			  BR: '#a6512c',
+			  I: '#7b4bb7',
+			  FE: '#c26a2e',
+			  ZN: '#7b8794',
+			  MG: '#3aa76d',
+			  CA: '#3aa76d',
+			  NA: '#3aa76d',
+			  K: '#3aa76d',
+			});
+
+			/** The initial camera the panel uses when a structure is selected. */
+			const DEFAULT_STRUCTURE_VIEW = Object.freeze({
+			  yaw: 0.55,
+			  pitch: 0.18,
+			  zoom: 1,
+			  representation: 'ball-and-stick',
+			});
+
+			/** A single frame above this atom count is refused rather than freezing the tab. */
+			const MAX_RENDER_ATOMS = 12000;
+
+			const VDW = { H: 1.20, C: 1.70, N: 1.55, O: 1.52, P: 1.80, S: 1.80, F: 1.47, CL: 1.75, BR: 1.85, I: 1.98, FE: 1.80, ZN: 1.39, MG: 1.73, CA: 1.95, NA: 2.27, K: 2.75 };
+			const COVALENT = { H: 0.31, C: 0.76, N: 0.71, O: 0.66, P: 1.07, S: 1.05, F: 0.57, CL: 1.02, BR: 1.20, I: 1.39, FE: 1.24, ZN: 1.22, MG: 1.41, CA: 1.76, NA: 1.66, K: 2.03 };
+			const BG = [247, 249, 251];
+			const EMPTY = new Uint8Array(0);
+
+			/** Is this atom a crystallographic water that should not clutter the preview? */
+			function isWater(atom) {
+			  const residue = String(atom.residue ?? '').toUpperCase();
+			  return residue === 'HOH' || residue === 'WAT' || residue === 'DOD';
+			}
+
+			/** Rounded element colour, with a neutral fallback for metals and unknowns. */
+			function elementColor(element) {
+			  return STRUCTURE_ELEMENT_COLORS[String(element ?? '').toUpperCase()] ?? '#5b9b74';
+			}
+
+			/** Hex colour to [r,g,b]. */
+			function rgbOf(hex) {
+			  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+			}
+
+			/** Spatial hash of atom indices on a cubic grid. */
+			function gridIndex(atoms, cell) {
+			  const grid = new Map();
+			  for (let index = 0; index < atoms.length; index++) {
+			    const atom = atoms[index];
+			    const key = `${Math.floor(atom.x / cell)},${Math.floor(atom.y / cell)},${Math.floor(atom.z / cell)}`;
+			    const bucket = grid.get(key);
+			    if (bucket === undefined) grid.set(key, [index]);
+			    else bucket.push(index);
+			  }
+			  return grid;
+			}
+
+			/**
+			 * Infer a covalent bond graph from 3D coordinates.
+			 *
+			 * Covalent radii (not van der Waals radii) are the right scale for a bond: a
+			 * vdW-sum threshold would connect every atom pair in a tightly packed helix.
+			 * The 0.45 Å tolerance absorbs coordinate precision without reaching the next
+			 * bonded neighbour in the common C-C/N-C/O-C cases.
+			 * @param {Array} atoms
+			 * @returns {Array<[number, number]>} index pairs into `atoms`.
+			 */
+			function inferStructureBonds(atoms) {
+			  const bonds = [];
+			  if (!Array.isArray(atoms) || atoms.length < 2 || atoms.length > MAX_RENDER_ATOMS) return bonds;
+			  const cell = 2.4;
+			  const grid = gridIndex(atoms, cell);
+			  for (let i = 0; i < atoms.length; i++) {
+			    const a = atoms[i];
+			    if (a.element === 'H') continue;
+			    const gx = Math.floor(a.x / cell);
+			    const gy = Math.floor(a.y / cell);
+			    const gz = Math.floor(a.z / cell);
+			    for (let dx = -1; dx <= 1; dx++) {
+			      for (let dy = -1; dy <= 1; dy++) {
+			        for (let dz = -1; dz <= 1; dz++) {
+			          const bucket = grid.get(`${gx + dx},${gy + dy},${gz + dz}`);
+			          if (bucket === undefined) continue;
+			          for (const j of bucket) {
+			            if (j <= i) continue;
+			            const b = atoms[j];
+			            if (b.element === 'H') continue;
+			            const distance = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+			            const limit = (COVALENT[a.element] ?? 0.8) + (COVALENT[b.element] ?? 0.8) + 0.45;
+			            if (distance > 0.35 && distance <= limit) bonds.push([i, j]);
+			          }
+			        }
+			      }
+			    }
+			  }
+			  return bonds;
+			}
+
+			/** Filter atoms the preview does not draw, keeping a serial -> index map. */
+			function preparedAtoms(record) {
+			  const atoms = [];
+			  const bySerial = new Map();
+			  for (const atom of record.atoms) {
+			    if (atom.element === 'H' || isWater(atom)) continue;
+			    if (!Number.isFinite(atom.x) || !Number.isFinite(atom.y) || !Number.isFinite(atom.z)) continue;
+			    bySerial.set(atom.serial, atoms.length);
+			    atoms.push(atom);
+			  }
+			  return { atoms, bySerial };
+			}
+
+			/** Explicit bonds from the parser, mapped onto the filtered atom array. */
+			function explicitBonds(record, bySerial) {
+			  const bonds = [];
+			  const seen = new Set();
+			  for (const bond of record.bonds ?? []) {
+			    const fromAtom = record.atoms[bond.a];
+			    const toAtom = record.atoms[bond.b];
+			    if (fromAtom === undefined || toAtom === undefined) continue;
+			    const a = bySerial.get(fromAtom.serial);
+			    const b = bySerial.get(toAtom.serial);
+			    if (a === undefined || b === undefined || a === b) continue;
+			    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+			    if (seen.has(key)) continue;
+			    seen.add(key);
+			    bonds.push([a, b]);
+			  }
+			  return bonds;
+			}
+
+			/** The bond list used by the renderer for one representation. */
+			function bondList(record, atoms, bySerial, representation) {
+			  if (representation === 'space-filling') return [];
+			  if (record.format === 'sdf') return explicitBonds(record, bySerial);
+			  const inferred = inferStructureBonds(atoms);
+			  const explicit = explicitBonds(record, bySerial);
+			  if (explicit.length === 0) return inferred;
+			  const seen = new Set(inferred.map(([a, b]) => (a < b ? `${a}:${b}` : `${b}:${a}`)));
+			  const merged = [...inferred];
+			  for (const [a, b] of explicit) {
+			    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+			    if (seen.has(key)) continue;
+			    seen.add(key);
+			    merged.push([a, b]);
+			  }
+			  return merged;
+			}
+
+			/** Clamp a finite number, or use the fallback. */
+			function numberOr(value, fallback, min, max) {
+			  const numeric = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+			  return Math.max(min, Math.min(max, numeric));
+			}
+
+			/**
+			 * Render one structure frame to an RGB buffer.
+			 *
+			 * @param {object} record a parseStructureText record.
+			 * @param {object} [options]
+			 * @param {number} [options.width=640]
+			 * @param {number} [options.height=480]
+			 * @param {1|2} [options.supersample=2] 1 is the interaction-quality setting.
+			 * @param {number} [options.yaw=0.55]
+			 * @param {number} [options.pitch=0.18]
+			 * @param {number} [options.zoom=1]
+			 * @param {'ball-and-stick'|'space-filling'} [options.representation='ball-and-stick']
+			 * @returns {{width:number,height:number,rgb:Uint8Array,atoms:number,bonds:number,representation:string}}
+			 */
+			function renderStructureImage(record, options = {}) {
+			  if (record === null || typeof record !== 'object' || !Array.isArray(record.atoms)) {
+			    throw new MolbioInputError('renderStructureImage needs a parsed structure record');
+			  }
+			  const representation = options.representation ?? 'ball-and-stick';
+			  if (!STRUCTURE_REPRESENTATIONS.includes(representation)) {
+			    throw new MolbioInputError(`unknown structure representation ${JSON.stringify(representation)}; use ${STRUCTURE_REPRESENTATIONS.join(' or ')}`);
+			  }
+			  const width = Math.round(numberOr(options.width, 640, 64, 1600));
+			  const height = Math.round(numberOr(options.height, 480, 64, 1200));
+			  const supersample = Math.round(numberOr(options.supersample, 2, 1, 2));
+			  const yaw = numberOr(options.yaw, DEFAULT_STRUCTURE_VIEW.yaw, -Math.PI * 8, Math.PI * 8);
+			  const pitch = numberOr(options.pitch, DEFAULT_STRUCTURE_VIEW.pitch, -1.45, 1.45);
+			  const zoom = numberOr(options.zoom, 1, 0.35, 5);
+			  const { atoms, bySerial } = preparedAtoms(record);
+			  if (atoms.length === 0) throw new MolbioInputError('the structure has no heavy atoms to draw');
+			  if (atoms.length > MAX_RENDER_ATOMS) {
+			    throw new MolbioInputError(`the structure has ${atoms.length} heavy atoms; the preview renders at most ${MAX_RENDER_ATOMS}`);
+			  }
+			  const bonds = bondList(record, atoms, bySerial, representation);
+			  const W = width * supersample;
+			  const H = height * supersample;
+
+			  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+			  for (const atom of atoms) {
+			    if (atom.x < minX) minX = atom.x;
+			    if (atom.x > maxX) maxX = atom.x;
+			    if (atom.y < minY) minY = atom.y;
+			    if (atom.y > maxY) maxY = atom.y;
+			    if (atom.z < minZ) minZ = atom.z;
+			    if (atom.z > maxZ) maxZ = atom.z;
+			  }
+			  const cx = (minX + maxX) / 2;
+			  const cy = (minY + maxY) / 2;
+			  const cz = (minZ + maxZ) / 2;
+			  let radius = 6;
+			  for (const atom of atoms) radius = Math.max(radius, Math.hypot(atom.x - cx, atom.y - cy, atom.z - cz));
+			  const camera = (radius * 2.0) / zoom;
+			  const focal = Math.min(W, H) * 1.15;
+			  const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+			  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+
+			  const project = (atom) => {
+			    const x = atom.x - cx;
+			    const y = atom.y - cy;
+			    const z = atom.z - cz;
+			    const x1 = x * cyaw + z * syaw;
+			    const z1 = -x * syaw + z * cyaw;
+			    const y1 = y * cp - z1 * sp;
+			    const z2 = y * sp + z1 * cp;
+			    const depth = camera - z2;
+			    const scale = focal / Math.max(1, depth);
+			    return { x: W / 2 + x1 * scale, y: H / 2 - y1 * scale, depth, scale };
+			  };
+			  const projected = atoms.map(project);
+
+			  const rgb = new Uint8Array(W * H * 3);
+			  for (let y = 0; y < H; y++) {
+			    const t = y / Math.max(1, H - 1);
+			    const r = Math.round(248 - 5 * t);
+			    const g = Math.round(250 - 5 * t);
+			    const b = Math.round(252 - 4 * t);
+			    for (let x = 0; x < W; x++) {
+			      const offset = (y * W + x) * 3;
+			      rgb[offset] = r;
+			      rgb[offset + 1] = g;
+			      rgb[offset + 2] = b;
+			    }
+			  }
+			  const depthBuffer = new Float32Array(W * H).fill(Infinity);
+			  const light = [0.35, 0.45, 0.82];
+			  const lightLength = Math.hypot(light[0], light[1], light[2]);
+			  const L = [light[0] / lightLength, light[1] / lightLength, light[2] / lightLength];
+
+			  const shade = (base, nx, ny, nz, depth) => {
+			    const diffuse = Math.max(0, nx * L[0] + ny * L[1] + nz * L[2]);
+			    const hx = L[0], hy = L[1], hz = L[2] + 1;
+			    const hLength = Math.hypot(hx, hy, hz);
+			    const specular = Math.pow(Math.max(0, (nx * hx + ny * hy + nz * hz) / hLength), 42) * 0.35;
+			    const ambient = 0.30;
+			    const fog = Math.max(0, Math.min(0.28, (depth - camera * 0.45) / (camera * 1.8)));
+			    const lightLevel = ambient + diffuse * 0.68;
+			    return [
+			      Math.round((base[0] * lightLevel + 255 * specular) * (1 - fog) + BG[0] * fog),
+			      Math.round((base[1] * lightLevel + 255 * specular) * (1 - fog) + BG[1] * fog),
+			      Math.round((base[2] * lightLevel + 255 * specular) * (1 - fog) + BG[2] * fog),
+			    ];
+			  };
+
+			  // Bonds are rasterized as shaded capsules. The z-buffer makes draw order
+			  // irrelevant for overlaps, so no global primitive sort is needed.
+			  if (representation !== 'space-filling') {
+			    for (const [i, j] of bonds) {
+			      const a = projected[i];
+			      const b = projected[j];
+			      const bondRadius = 0.18 * ((a.scale + b.scale) / 2);
+			      const dx = b.x - a.x;
+			      const dy = b.y - a.y;
+			      const length2 = dx * dx + dy * dy;
+			      if (length2 < 1e-6 || bondRadius < 0.25) continue;
+			      const padding = bondRadius + 2;
+			      const minPX = Math.max(0, Math.floor(Math.min(a.x, b.x) - padding));
+			      const maxPX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + padding));
+			      const minPY = Math.max(0, Math.floor(Math.min(a.y, b.y) - padding));
+			      const maxPY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + padding));
+			      const base = [116, 126, 141];
+			      for (let py = minPY; py <= maxPY; py++) {
+			        for (let px = minPX; px <= maxPX; px++) {
+			          const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / length2));
+			          const qx = a.x + dx * t;
+			          const qy = a.y + dy * t;
+			          const vx = px - qx;
+			          const vy = py - qy;
+			          const distance = Math.hypot(vx, vy);
+			          if (distance > bondRadius) continue;
+			          const front = Math.sqrt(Math.max(0, bondRadius * bondRadius - distance * distance)) / Math.max(1e-6, (a.scale + b.scale) / 2);
+			          const depth = a.depth + (b.depth - a.depth) * t - front;
+			          const index = py * W + px;
+			          if (depth >= depthBuffer[index]) continue;
+			          const nx = vx / Math.max(1e-6, bondRadius);
+			          const ny = -vy / Math.max(1e-6, bondRadius);
+			          const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+			          const colour = shade(base, nx, ny, nz, depth);
+			          const offset = index * 3;
+			          rgb[offset] = colour[0];
+			          rgb[offset + 1] = colour[1];
+			          rgb[offset + 2] = colour[2];
+			          depthBuffer[index] = depth;
+			        }
+			      }
+			    }
+			  }
+
+			  // Front-to-back atom order reduces z-buffer writes, but correctness comes
+			  // from the depth test, not the order.
+			  const order = atoms.map((_, index) => index).sort((left, right) => projected[left].depth - projected[right].depth);
+			  for (const index of order) {
+			    const atom = atoms[index];
+			    const point = projected[index];
+			    const baseRadius = (VDW[atom.element] ?? 1.5) * (representation === 'space-filling' ? 1.0 : 0.28);
+			    const screenRadius = baseRadius * point.scale;
+			    if (screenRadius < 0.4) continue;
+			    const base = rgbOf(elementColor(atom.element));
+			    const minPX = Math.max(0, Math.floor(point.x - screenRadius - 1));
+			    const maxPX = Math.min(W - 1, Math.ceil(point.x + screenRadius + 1));
+			    const minPY = Math.max(0, Math.floor(point.y - screenRadius - 1));
+			    const maxPY = Math.min(H - 1, Math.ceil(point.y + screenRadius + 1));
+			    const radius2 = screenRadius * screenRadius;
+			    for (let py = minPY; py <= maxPY; py++) {
+			      const dy = py - point.y;
+			      for (let px = minPX; px <= maxPX; px++) {
+			        const dx = px - point.x;
+			        const distance2 = dx * dx + dy * dy;
+			        if (distance2 > radius2) continue;
+			        const dz = Math.sqrt(Math.max(0, radius2 - distance2));
+			        const depth = point.depth - dz / point.scale;
+			        const bufferIndex = py * W + px;
+			        if (depth >= depthBuffer[bufferIndex]) continue;
+			        const nx = dx / screenRadius;
+			        const ny = -dy / screenRadius;
+			        const nz = dz / screenRadius;
+			        const colour = shade(base, nx, ny, nz, depth);
+			        const offset = bufferIndex * 3;
+			        rgb[offset] = colour[0];
+			        rgb[offset + 1] = colour[1];
+			        rgb[offset + 2] = colour[2];
+			        depthBuffer[bufferIndex] = depth;
+			      }
+			    }
+			  }
+
+			  // Box-filter the supersampled image back to the requested size.
+			  const out = new Uint8Array(width * height * 3);
+			  const samples = supersample * supersample;
+			  for (let y = 0; y < height; y++) {
+			    for (let x = 0; x < width; x++) {
+			      let r = 0, g = 0, b = 0;
+			      for (let sy = 0; sy < supersample; sy++) {
+			        for (let sx = 0; sx < supersample; sx++) {
+			          const offset = ((y * supersample + sy) * W + (x * supersample + sx)) * 3;
+			          r += rgb[offset];
+			          g += rgb[offset + 1];
+			          b += rgb[offset + 2];
+			        }
+			      }
+			      const offset = (y * width + x) * 3;
+			      out[offset] = Math.round(r / samples);
+			      out[offset + 1] = Math.round(g / samples);
+			      out[offset + 2] = Math.round(b / samples);
+			    }
+			  }
+			  return { width, height, rgb: out, atoms: atoms.length, bonds: bonds.length, representation };
+			}
+
+			exports.STRUCTURE_REPRESENTATIONS = STRUCTURE_REPRESENTATIONS;
+			exports.STRUCTURE_ELEMENT_COLORS = STRUCTURE_ELEMENT_COLORS;
+			exports.DEFAULT_STRUCTURE_VIEW = DEFAULT_STRUCTURE_VIEW;
+			exports.MAX_RENDER_ATOMS = MAX_RENDER_ATOMS;
+			exports.inferStructureBonds = inferStructureBonds;
+			exports.renderStructureImage = renderStructureImage;
 			return exports;
 		};
 		__molbio_modules["methylation.mjs"] = () => {
@@ -8838,7 +8979,8 @@ window.__ModuleLoader__.load({
 			 * Only these modules are browser-safe (they import nothing but `./lib.mjs` and
 			 * `./svgio.mjs`, which are pure computation): lib, genbank, snapgene, plasmid,
 			 * msa, logo, crispr, align, seqio, plot, design, protein-structure,
-			 * structure-preview. The Node-only ones (view, papers, records, sanger, index)
+			 * structure-preview, structure-render. The Node-only ones (view, papers, records,
+			 * sanger, index)
 			 * are deliberately absent — importing them would drag `node:child_process` and
 			 * friends into the browser bundle, which the bundler rejects loudly.
 			 */
@@ -8861,59 +9003,65 @@ window.__ModuleLoader__.load({
 
 
 
-			exports.DNA_BASES = __molbio_require("lib.mjs").undefined;
-			exports.ENZYME_NAMES = __molbio_require("lib.mjs").undefined;
-			exports.MolbioInputError = __molbio_require("lib.mjs").undefined;
-			exports.baseCounts = __molbio_require("lib.mjs").undefined;
-			exports.complement = __molbio_require("lib.mjs").undefined;
-			exports.enzymeCatalog = __molbio_require("lib.mjs").undefined;
-			exports.enzymeCuts = __molbio_require("lib.mjs").undefined;
-			exports.enzymePattern = __molbio_require("lib.mjs").undefined;
-			exports.findRuns = __molbio_require("lib.mjs").undefined;
-			exports.hairpinThermo = __molbio_require("lib.mjs").undefined;
-			exports.isIisEnzyme = __molbio_require("lib.mjs").undefined;
-			exports.normalizeSequence = __molbio_require("lib.mjs").undefined;
-			exports.primerTm = __molbio_require("lib.mjs").undefined;
-			exports.reverseComplement = __molbio_require("lib.mjs").undefined;
-			exports.selfAnyScore = __molbio_require("lib.mjs").undefined;
-			exports.selfEndScore = __molbio_require("lib.mjs").undefined;
-			exports.parseGenBank = __molbio_require("genbank.mjs").undefined;
-			exports.parseSnapGeneBytes = __molbio_require("snapgene.mjs").undefined;
-			exports.parseXml = __molbio_require("snapgene.mjs").undefined;
-			exports.renderPlasmidMap = __molbio_require("plasmid.mjs").undefined;
-			exports.normalizeAlignedRow = __molbio_require("msa.mjs").undefined;
-			exports.progressiveAlign = __molbio_require("msa.mjs").undefined;
-			exports.conservationAnalysis = __molbio_require("msa.mjs").undefined;
-			exports.pairwiseIdentities = __molbio_require("msa.mjs").undefined;
-			exports.columnComposition = __molbio_require("logo.mjs").undefined;
-			exports.renderSequenceLogo = __molbio_require("logo.mjs").undefined;
-			exports.designGrnas = __molbio_require("crispr.mjs").undefined;
-			exports.findProtospacers = __molbio_require("crispr.mjs").undefined;
-			exports.evaluateGuide = __molbio_require("crispr.mjs").undefined;
-			exports.entryStats = __molbio_require("seqio.mjs").undefined;
-			exports.parseFasta = __molbio_require("seqio.mjs").undefined;
-			exports.digest = __molbio_require("lib.mjs").undefined;
-			exports.BUFFERS = __molbio_require("lib.mjs").undefined;
-			exports.METHYLATION_SENSITIVITY = __molbio_require("lib.mjs").undefined;
-			exports.METHYLATION_SITES = __molbio_require("lib.mjs").undefined;
-			exports.methylationImpact = __molbio_require("lib.mjs").undefined;
-			exports.methylationSites = __molbio_require("lib.mjs").undefined;
-			exports.sharedBuffers = __molbio_require("lib.mjs").undefined;
-			exports.designTaqmanProbes = __molbio_require("taqman.mjs").undefined;
-			exports.evaluateProbe = __molbio_require("taqman.mjs").undefined;
-			exports.probeCandidates = __molbio_require("taqman.mjs").undefined;
-			exports.checkMultiplex = __molbio_require("multiplex.mjs").undefined;
-			exports.helicalWheel = __molbio_require("protein-structure.mjs").undefined;
-			exports.hydropathyProfile = __molbio_require("protein-structure.mjs").undefined;
-			exports.renderHelicalWheel = __molbio_require("protein-structure.mjs").undefined;
-			exports.renderHydropathyPlot = __molbio_require("protein-structure.mjs").undefined;
-			exports.STRUCTURE_EXTENSIONS = __molbio_require("structure-preview.mjs").undefined;
-			exports.parseStructureText = __molbio_require("structure-preview.mjs").undefined;
-			exports.renderStructureProjection = __molbio_require("structure-preview.mjs").undefined;
-			exports.structureFormatOf = __molbio_require("structure-preview.mjs").undefined;
-			exports.analyzeMethylation = __molbio_require("methylation.mjs").undefined;
-			exports.bufferReport = __molbio_require("methylation.mjs").undefined;
-			exports.planDoubleDigest = __molbio_require("methylation.mjs").undefined;
+
+			exports.DNA_BASES = __molbio_require("lib.mjs").DNA_BASES;
+			exports.ENZYME_NAMES = __molbio_require("lib.mjs").ENZYME_NAMES;
+			exports.MolbioInputError = __molbio_require("lib.mjs").MolbioInputError;
+			exports.baseCounts = __molbio_require("lib.mjs").baseCounts;
+			exports.complement = __molbio_require("lib.mjs").complement;
+			exports.enzymeCatalog = __molbio_require("lib.mjs").enzymeCatalog;
+			exports.enzymeCuts = __molbio_require("lib.mjs").enzymeCuts;
+			exports.enzymePattern = __molbio_require("lib.mjs").enzymePattern;
+			exports.findRuns = __molbio_require("lib.mjs").findRuns;
+			exports.hairpinThermo = __molbio_require("lib.mjs").hairpinThermo;
+			exports.isIisEnzyme = __molbio_require("lib.mjs").isIisEnzyme;
+			exports.normalizeSequence = __molbio_require("lib.mjs").normalizeSequence;
+			exports.primerTm = __molbio_require("lib.mjs").primerTm;
+			exports.reverseComplement = __molbio_require("lib.mjs").reverseComplement;
+			exports.selfAnyScore = __molbio_require("lib.mjs").selfAnyScore;
+			exports.selfEndScore = __molbio_require("lib.mjs").selfEndScore;
+			exports.parseGenBank = __molbio_require("genbank.mjs").parseGenBank;
+			exports.parseSnapGeneBytes = __molbio_require("snapgene.mjs").parseSnapGeneBytes;
+			exports.parseXml = __molbio_require("snapgene.mjs").parseXml;
+			exports.renderPlasmidMap = __molbio_require("plasmid.mjs").renderPlasmidMap;
+			exports.normalizeAlignedRow = __molbio_require("msa.mjs").normalizeAlignedRow;
+			exports.progressiveAlign = __molbio_require("msa.mjs").progressiveAlign;
+			exports.conservationAnalysis = __molbio_require("msa.mjs").conservationAnalysis;
+			exports.pairwiseIdentities = __molbio_require("msa.mjs").pairwiseIdentities;
+			exports.columnComposition = __molbio_require("logo.mjs").columnComposition;
+			exports.renderSequenceLogo = __molbio_require("logo.mjs").renderSequenceLogo;
+			exports.designGrnas = __molbio_require("crispr.mjs").designGrnas;
+			exports.findProtospacers = __molbio_require("crispr.mjs").findProtospacers;
+			exports.evaluateGuide = __molbio_require("crispr.mjs").evaluateGuide;
+			exports.entryStats = __molbio_require("seqio.mjs").entryStats;
+			exports.parseFasta = __molbio_require("seqio.mjs").parseFasta;
+			exports.digest = __molbio_require("lib.mjs").digest;
+			exports.BUFFERS = __molbio_require("lib.mjs").BUFFERS;
+			exports.METHYLATION_SENSITIVITY = __molbio_require("lib.mjs").METHYLATION_SENSITIVITY;
+			exports.METHYLATION_SITES = __molbio_require("lib.mjs").METHYLATION_SITES;
+			exports.methylationImpact = __molbio_require("lib.mjs").methylationImpact;
+			exports.methylationSites = __molbio_require("lib.mjs").methylationSites;
+			exports.sharedBuffers = __molbio_require("lib.mjs").sharedBuffers;
+			exports.designTaqmanProbes = __molbio_require("taqman.mjs").designTaqmanProbes;
+			exports.evaluateProbe = __molbio_require("taqman.mjs").evaluateProbe;
+			exports.probeCandidates = __molbio_require("taqman.mjs").probeCandidates;
+			exports.checkMultiplex = __molbio_require("multiplex.mjs").checkMultiplex;
+			exports.helicalWheel = __molbio_require("protein-structure.mjs").helicalWheel;
+			exports.hydropathyProfile = __molbio_require("protein-structure.mjs").hydropathyProfile;
+			exports.renderHelicalWheel = __molbio_require("protein-structure.mjs").renderHelicalWheel;
+			exports.renderHydropathyPlot = __molbio_require("protein-structure.mjs").renderHydropathyPlot;
+			exports.STRUCTURE_EXTENSIONS = __molbio_require("structure-preview.mjs").STRUCTURE_EXTENSIONS;
+			exports.parseStructureText = __molbio_require("structure-preview.mjs").parseStructureText;
+			exports.structureFormatOf = __molbio_require("structure-preview.mjs").structureFormatOf;
+			exports.DEFAULT_STRUCTURE_VIEW = __molbio_require("structure-render.mjs").DEFAULT_STRUCTURE_VIEW;
+			exports.MAX_RENDER_ATOMS = __molbio_require("structure-render.mjs").MAX_RENDER_ATOMS;
+			exports.STRUCTURE_ELEMENT_COLORS = __molbio_require("structure-render.mjs").STRUCTURE_ELEMENT_COLORS;
+			exports.STRUCTURE_REPRESENTATIONS = __molbio_require("structure-render.mjs").STRUCTURE_REPRESENTATIONS;
+			exports.inferStructureBonds = __molbio_require("structure-render.mjs").inferStructureBonds;
+			exports.renderStructureImage = __molbio_require("structure-render.mjs").renderStructureImage;
+			exports.analyzeMethylation = __molbio_require("methylation.mjs").analyzeMethylation;
+			exports.bufferReport = __molbio_require("methylation.mjs").bufferReport;
+			exports.planDoubleDigest = __molbio_require("methylation.mjs").planDoubleDigest;
 			return exports;
 		};
 		__molbio_modules["build/panel-core.mjs"] = () => {
@@ -8930,7 +9078,7 @@ window.__ModuleLoader__.load({
 			 * All parsing and rendering is the SAME code the Node tools run: this module
 			 * re-exports through browser-api.mjs, which points at the root .mjs sources.
 			 */
-			const { MolbioInputError, parseGenBank, parseSnapGeneBytes, renderPlasmidMap, columnComposition, renderSequenceLogo, progressiveAlign, parseStructureText, renderStructureProjection, STRUCTURE_EXTENSIONS } = __molbio_require("build/browser-api.mjs");
+			const { MolbioInputError, parseGenBank, parseSnapGeneBytes, renderPlasmidMap, columnComposition, renderSequenceLogo, progressiveAlign, parseStructureText, renderStructureImage, DEFAULT_STRUCTURE_VIEW, STRUCTURE_ELEMENT_COLORS, STRUCTURE_EXTENSIONS, STRUCTURE_REPRESENTATIONS } = __molbio_require("build/browser-api.mjs");
 			/** Extensions the panel can open, mapped to the parser that handles them. */
 			const PLASMID_EXTENSIONS = {
 			  dna: 'snapgene',
@@ -9105,13 +9253,15 @@ window.__ModuleLoader__.load({
 			}
 
 			/**
-			 * Render a parsed structure as the 2D PCA projection the panel injects.
+			 * Render a parsed structure to an RGB buffer for the canvas.
 			 * @param {object} record a {@link parseStructureFile} result.
-			 * @param {{width?: number, height?: number}} [options]
-			 * @returns {string} SVG text.
+			 * @param {{width?: number, height?: number, yaw?: number, pitch?: number,
+			 *   zoom?: number, representation?: string, supersample?: 1|2}} [options]
+			 * @returns {{width:number, height:number, rgb:Uint8Array, atoms:number,
+			 *   bonds:number, representation:string}}
 			 */
-			function structureSvg(record, options = {}) {
-			  return renderStructureProjection(record, options);
+			function structureImage(record, options = {}) {
+			  return renderStructureImage(record, options);
 			}
 
 			/**
@@ -9476,7 +9626,7 @@ window.__ModuleLoader__.load({
 			exports.parsePlasmidFile = parsePlasmidFile;
 			exports.plasmidSvg = plasmidSvg;
 			exports.parseStructureFile = parseStructureFile;
-			exports.structureSvg = structureSvg;
+			exports.structureImage = structureImage;
 			exports.parseAlignmentFile = parseAlignmentFile;
 			exports.logoSvg = logoSvg;
 			exports.MAP_CARD_KIND = MAP_CARD_KIND;
@@ -9497,7 +9647,10 @@ window.__ModuleLoader__.load({
 			exports.isMolbioDetailSubject = isMolbioDetailSubject;
 			exports.remoteFailure = remoteFailure;
 			exports.credentialInfo = credentialInfo;
+			exports.DEFAULT_STRUCTURE_VIEW = DEFAULT_STRUCTURE_VIEW;
+			exports.STRUCTURE_ELEMENT_COLORS = STRUCTURE_ELEMENT_COLORS;
 			exports.STRUCTURE_EXTENSIONS = STRUCTURE_EXTENSIONS;
+			exports.STRUCTURE_REPRESENTATIONS = STRUCTURE_REPRESENTATIONS;
 			return exports;
 		};
 		__molbio_modules["build/client-entry.mjs"] = () => {
@@ -9534,7 +9687,7 @@ window.__ModuleLoader__.load({
 			 * inside the factory would also have to be torn down by hand on unload.
 			 */
 			const { createElement: h, useEffect, useMemo, useRef, useState } = __ext0;
-			const { LIBRARY_FILE, NCBI_KEY_REF, childPath, classifyEntry, credentialInfo, figureCardSummary, figureCardView, isMolbioDetailSubject, remoteFailure, decodeWorkspaceBytes, filterPapers, isOpenable, libraryTags, logoSvg, mapCardSummary, mapCardView, paperFields, paperLink, paperSummary, parseAlignmentFile, parseLibrary, parsePlasmidFile, parseStructureFile, plasmidSvg, readWorkspaceText, sortEntries, structureSvg } = __molbio_require("build/panel-core.mjs");
+			const { LIBRARY_FILE, NCBI_KEY_REF, childPath, classifyEntry, credentialInfo, figureCardSummary, figureCardView, isMolbioDetailSubject, remoteFailure, decodeWorkspaceBytes, filterPapers, isOpenable, libraryTags, logoSvg, mapCardSummary, mapCardView, paperFields, paperLink, paperSummary, parseAlignmentFile, parseLibrary, parsePlasmidFile, parseStructureFile, plasmidSvg, readWorkspaceText, sortEntries, structureImage, DEFAULT_STRUCTURE_VIEW, STRUCTURE_ELEMENT_COLORS, STRUCTURE_REPRESENTATIONS } = __molbio_require("build/panel-core.mjs");
 			/** This implementation's identity, and the key its body/title register under. */
 			const PANEL_ID = 'dsh-molbio-tools';
 			/** Type discriminator the tab is opened by. */
@@ -9612,6 +9765,20 @@ window.__ModuleLoader__.load({
 			  error: { color: 'var(--dsh-danger, #c0392b)', padding: '10px 12px', whiteSpace: 'pre-wrap' },
 			  muted: { opacity: 0.6, padding: '10px 12px' },
 			  svg: { maxWidth: '100%', height: 'auto' },
+			  canvas: { maxWidth: '100%', height: 'auto', display: 'block', border: '1px solid var(--dsh-border, #e3e6ea)', borderRadius: '6px', cursor: 'grab', touchAction: 'none', background: '#f7f9fb' },
+			  button: (active) => ({
+			    fontSize: '11px',
+			    padding: '2px 8px',
+			    cursor: 'pointer',
+			    border: '1px solid var(--dsh-border, #e3e6ea)',
+			    borderRadius: '4px',
+			    background: active ? 'var(--dsh-selected, #eaf2ff)' : 'transparent',
+			    fontWeight: active ? 600 : 400,
+			    color: 'inherit',
+			  }),
+			  legend: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px', fontSize: '11px', opacity: 0.75 },
+			  legendItem: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+			  legendDot: { width: '9px', height: '9px', borderRadius: '50%', display: 'inline-block' },
 			  table: { borderCollapse: 'collapse', marginTop: '12px', fontSize: '12px', width: '100%' },
 			  th: { textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--dsh-border, #e3e6ea)', opacity: 0.7, fontWeight: 600 },
 			  td: { padding: '3px 8px', borderBottom: '1px solid var(--dsh-border-soft, #f0f2f5)' },
@@ -9624,7 +9791,11 @@ window.__ModuleLoader__.load({
 			  const [selected, setSelected] = useState(null);
 			  const [record, setRecord] = useState(null);
 			  const [status, setStatus] = useState({ kind: cwd === undefined ? 'waiting' : 'loading' });
+			  const [view, setView] = useState({ ...DEFAULT_STRUCTURE_VIEW });
+			  const [dragging, setDragging] = useState(false);
 			  const svgHost = useRef(null);
+			  const canvasHost = useRef(null);
+			  const drag = useRef(null);
 
 			  // Directory listing, re-read when the session's workspace root changes.
 			  useEffect(() => {
@@ -9658,6 +9829,9 @@ window.__ModuleLoader__.load({
 			            ? { kind, ...parseAlignmentFile(bytes) }
 			            : { kind, ...parseStructureFile(selected.name, bytes) };
 			        setRecord(parsed);
+			        // A new structure starts from the same deterministic camera; the
+			        // previous file's yaw/pitch would be meaningless on a different molecule.
+			        if (parsed.kind === 'structure') setView({ ...DEFAULT_STRUCTURE_VIEW });
 			        setStatus({ kind: 'ready' });
 			      })
 			      .catch((error) => {
@@ -9677,17 +9851,13 @@ window.__ModuleLoader__.load({
 			    const host = svgHost.current;
 			    if (host === null) return;
 			    host.replaceChildren();
-			    if (record === null || status.kind !== 'ready') return;
+			    if (record === null || status.kind !== 'ready' || record.kind === 'structure') return;
 			    // The renderer refuses what it cannot draw (renderPlasmidMap caps a map at
 			    // 200 features). Letting that throw out of the effect leaves the pane empty
 			    // with no explanation, so it becomes the pane's error state instead.
 			    let markup;
 			    try {
-			      markup = record.kind === 'plasmid'
-			        ? plasmidSvg(record)
-			        : record.kind === 'alignment'
-			          ? logoSvg(record)
-			          : structureSvg(record);
+			      markup = record.kind === 'plasmid' ? plasmidSvg(record) : logoSvg(record);
 			    } catch (error) {
 			      setStatus({ kind: 'error', message: String(error?.message ?? error) });
 			      return;
@@ -9701,6 +9871,81 @@ window.__ModuleLoader__.load({
 			    svg.setAttribute('style', 'max-width:100%;height:auto');
 			    host.append(document.importNode(svg, true));
 			  }, [record, status.kind]);
+
+			  // Structures are rasterized into an RGB buffer and painted into a canvas.
+			  // The renderer is deterministic and shared with the Node tests; only the
+			  // canvas plumbing lives here. During a drag the frame drops to 1x
+			  // supersampling and returns to 2x when the pointer is released.
+			  useEffect(() => {
+			    if (record === null || record.kind !== 'structure' || status.kind !== 'ready') return;
+			    const canvas = canvasHost.current;
+			    if (canvas === null || typeof canvas.getContext !== 'function') return;
+			    const context = canvas.getContext('2d');
+			    if (context === null || typeof context.createImageData !== 'function') return;
+			    const width = Number.isInteger(canvas.width) ? canvas.width : 640;
+			    const height = Number.isInteger(canvas.height) ? canvas.height : 480;
+			    let image;
+			    try {
+			      image = structureImage(record, {
+			        width,
+			        height,
+			        yaw: view.yaw,
+			        pitch: view.pitch,
+			        zoom: view.zoom,
+			        representation: view.representation,
+			        // Large assemblies stay at interaction quality even when settled;
+			        // 2× sampling is reserved for the small structures it visibly helps.
+			        supersample: dragging || record.atoms.length > 4000 ? 1 : 2,
+			      });
+			    } catch (error) {
+			      setStatus({ kind: 'error', message: String(error?.message ?? error) });
+			      return;
+			    }
+			    const imageData = context.createImageData(width, height);
+			    for (let source = 0, target = 0; source < image.rgb.length; source += 3, target += 4) {
+			      imageData.data[target] = image.rgb[source];
+			      imageData.data[target + 1] = image.rgb[source + 1];
+			      imageData.data[target + 2] = image.rgb[source + 2];
+			      imageData.data[target + 3] = 255;
+			    }
+			    context.putImageData(imageData, 0, 0);
+			  }, [record, status.kind, view, dragging]);
+
+			  const startDrag = (event) => {
+			    if (typeof event?.currentTarget?.setPointerCapture === 'function' && event.pointerId !== undefined) {
+			      try {
+			        event.currentTarget.setPointerCapture(event.pointerId);
+			      } catch {
+			        // A synthetic pointer without capture support is still draggable.
+			      }
+			    }
+			    drag.current = { x: event.clientX, y: event.clientY, yaw: view.yaw, pitch: view.pitch };
+			    setDragging(true);
+			  };
+
+			  const moveDrag = (event) => {
+			    const start = drag.current;
+			    if (start === null) return;
+			    const yaw = start.yaw + (event.clientX - start.x) * 0.01;
+			    const pitch = Math.max(-1.4, Math.min(1.4, start.pitch - (event.clientY - start.y) * 0.01));
+			    setView((current) => ({ ...current, yaw, pitch }));
+			  };
+
+			  const endDrag = () => {
+			    drag.current = null;
+			    setDragging(false);
+			  };
+
+			  const zoomView = (event) => {
+			    // preventDefault keeps the sidebar from scrolling while the wheel zooms.
+			    if (typeof event.preventDefault === 'function') event.preventDefault();
+			    setView((current) => ({
+			      ...current,
+			      zoom: Math.max(0.35, Math.min(5, current.zoom * Math.exp(-Number(event.deltaY ?? 0) * 0.001))),
+			    }));
+			  };
+
+			  const resetView = () => setView({ ...DEFAULT_STRUCTURE_VIEW });
 
 			  const openable = useMemo(() => entries.filter(isOpenable), [entries]);
 
@@ -9772,8 +10017,32 @@ window.__ModuleLoader__.load({
 			      h('span', null, `${record.atoms.length} atoms`),
 			      h('span', null, `${record.chain_count} chain(s)`),
 			      h('span', null, `${record.residue_count} residue(s)`)));
-			    body.push(h('div', { key: 'svg', ref: svgHost, style: styles.svg }));
-			    body.push(h('div', { key: 'note', style: styles.note }, '2D PCA projection drawn in the browser — not a molecular viewer.'));
+			    body.push(h('div', { key: 'controls', style: styles.meta },
+			      ...STRUCTURE_REPRESENTATIONS.map((representation) => h('button', {
+			        key: representation,
+			        style: styles.button(view.representation === representation),
+			        onClick: () => setView((current) => ({ ...current, representation })),
+			      }, representation === 'ball-and-stick' ? 'Ball & stick' : 'Space filling')),
+			      h('button', { key: 'reset', style: styles.button(false), onClick: resetView }, 'Reset view')));
+			    body.push(h('canvas', {
+			      key: 'canvas',
+			      ref: canvasHost,
+			      width: 640,
+			      height: 480,
+			      style: styles.canvas,
+			      onPointerDown: startDrag,
+			      onPointerMove: moveDrag,
+			      onPointerUp: endDrag,
+			      onPointerCancel: endDrag,
+			      onWheel: zoomView,
+			      onDoubleClick: resetView,
+			      'aria-label': '3D structure preview; drag to rotate, wheel to zoom',
+			    }));
+			    body.push(h('div', { key: 'legend', style: styles.legend },
+			      ...['C', 'N', 'O', 'S', 'P'].map((element) => h('span', { key: element, style: styles.legendItem },
+			        h('span', { style: { ...styles.legendDot, background: STRUCTURE_ELEMENT_COLORS[element] } }),
+			        element))));
+			    body.push(h('div', { key: 'note', style: styles.note }, 'Software-rendered 3D model. Drag to rotate, wheel to zoom. Ball-and-stick / space-filling; not for measurements.'));
 			  }
 
 			  return h('div', { style: styles.root }, list, h('div', { style: styles.main }, ...body));

@@ -16,7 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
-| 0.25.0 | — | **浏览器内结构预览**：Molbio 面板读 PDB/mmCIF/SDF-MOL V2000，2D PCA 投影（CA 轨迹/重原子、多链着色、元素图例）；工具数不变 | 64 |
+| 0.25.0 | — | **浏览器内真实 3D 结构预览**：Molbio 面板读 PDB/mmCIF/SDF-MOL V2000，软件光栅化 ball-and-stick / space-filling，拖拽旋转、滚轮缩放；工具数不变 | 64 |
 | 0.24.1 | — | **输入边界与数据安全加固**：BibTeX 不再覆盖文献库、相对读取按会话工作区、批量/glob/并发声明修复、20 万行输入不再 `RangeError`；工具数不变 | 64 |
 | 0.24.0 | — | **数据卫生版**：新增 `molbio_contamination_screen`（内置载体/接头短签名，双链、0–2 错配）与 `molbio_fastq_trim`（质量/接头/引物/poly/N/长度，写 FASTQ/FASTA）；修 FASTQ QC 接头表 Small RNA 5' 的 RNA→DNA 静默错 | 62 → 64 |
 | 0.23.0 | — | **2.0 遗留修复 + 2.9a 调用卡 + 两个候选池工具**：跨内含子引物报告真实反向分子（F 在 R 上游）、logo/gRNA 调用卡、`molbio_protein_charge`、`molbio_dotplot`；同版完成 **DSH 0.2.2-rc.1 适配**（删掉上游已移除的 `list-agents` 子路径行、subagent 模型选择改用新键、守卫补上 specifier 解析） | 60 → 62 |
@@ -51,29 +51,34 @@
 
 ---
 
-## v0.25.0（2026-11-08，包 0.25.0）
+## v0.25.0（2026-11-10，包 0.25.0）
 
-**三条教训，关于“浏览器里看得见”和“同一份源码”的边界。**
+**三条教训，关于“看得见”“同一份源码”和“产物真的能跑”。**
 
-**(1) 预览不是查看器，先把“不做什么”写进画面。** 结构面板只做 2D PCA 投影：没有二级结构、
-表面、对称、V3000 或多 model 动画。页脚直接写 "not a molecular viewer"，因为一张看起来像
-3D 的二维投影最容易被误读成结构预测。确定性投影（同一文件同一张图）让测试能钉住坐标，
-而不是只断言“出现了 SVG”。
+**(1) 2D PCA 不是文献里的结构图。** 第一版把 3D 坐标投到两个主轴，画一张静态 SVG；
+它保留了相对位置，却丢掉深度、遮挡和空间关系，蛋白质像线稿、核酸像折线。学术界常见的
+配图是立体的 ball-and-stick、space-filling 或 surface，而不是单张投影。0.25.0 在发布前
+改为**真实原子模型**：透视、z-buffer、Phong 光照、深度雾化；球和键按元素着色，支持
+ball-and-stick 与 space-filling 两种表示。没有采用卡通 ribbon：它需要二级结构、朝向和
+带宽的额外几何，且不是这一版要解决的问题。
 
-**(2) 浏览器半不能有第二份解析器。** 新模块 `structure-preview.mjs` 通过
-`build/browser-api.mjs` 进入客户端产物，和 Node 侧共用同一份源码；面板只负责分类、读字节、
-把 SVG append 进宿主。若在 `panel-core.mjs` 里另写一份坐标解析，下一次修 PDB 列宽时
-工具与面板就会悄悄分叉。
+**(2) 软件光栅化让“浏览器里看到的”和“测试里验证的”是同一套像素。** 不引入 WebGL 或
+Three.js；`structure-render.mjs` 返回 RGB 缓冲，面板只把它 `putImageData` 到 canvas。
+Node 测试能直接检查中心原子、非背景像素、两种表示和 PNG 编码；否则 canvas 行为只能靠
+肉眼或第二个渲染器验证，二者必分叉。代价是 CPU 渲染：拖动时 1× 采样，松开后 2×，
+12,000 个重原子封顶。
 
-**(3) 只改浏览器半，也会改变根包产物。** `lib/client.js` 是根包的一部分；面板包
-`packages/molbio-panel/lib/client.js` 是另一个条目。两者都因这次改动重建，所以根包
-`0.24.1 → 0.25.0`、面板包 `0.1.10 → 0.1.11` 同时升版本——只升一个，发布时就会用
-同一版本号发不同字节。工具数保持 64，benchmark 保持 65 题。
+**(3) 产物能生成，不等于产物能运行。** 加结构预览时发现 bundler 在生成 re-export 时
+丢掉了 imported name，所有 `browser-api.mjs` 再导出在产物里都是
+`require(target).undefined`；格式/模块存在性检查全绿，但真实浏览器半拿到 undefined。
+现在保留 imported name，并在 `test/client.mjs` 加一条“产物不得含
+`require(...).undefined`”的结构断言。这也是为什么“同一份源码”必须配合**执行**产物的
+守卫，而不只是文本对比。
 
-**顺带记录**：没有采用 `ctx.documentPreviews.register`。它需要额外的 keyed 座位与预览容器，
-而现有 Molbio tab 已经有文件列表、错误态和 SVG 宿主；2.9c 的目标是“在浏览器里看见结构”，
-不是新增一条宿主 RPC。测试加在 `test/structure.mjs`（纯解析/投影）与
-`test/panel-render.mjs`（真实组件点选 PDB 后 SVG 落地）。
+**顺带记录**：只改浏览器半也会改变根包产物，所以根包 `0.24.1 → 0.25.0`、面板包
+`0.1.10 → 0.1.11` 同时升版本。工具数保持 64，benchmark 保持 65 题。结构解析与渲染在
+`structure-preview.mjs` / `structure-render.mjs`，面板用 canvas 承载，不再使用
+`ctx.documentPreviews`（现有 tab 已有文件列表、错误态与画布）。
 
 ## v0.24.1（2026-11-08，包 0.24.1）
 

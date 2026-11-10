@@ -57,7 +57,10 @@ import {
   plasmidSvg,
   readWorkspaceText,
   sortEntries,
-  structureSvg,
+  structureImage,
+  DEFAULT_STRUCTURE_VIEW,
+  STRUCTURE_ELEMENT_COLORS,
+  STRUCTURE_REPRESENTATIONS,
 } from './panel-core.mjs';
 
 /** This implementation's identity, and the key its body/title register under. */
@@ -137,6 +140,20 @@ const styles = {
   error: { color: 'var(--dsh-danger, #c0392b)', padding: '10px 12px', whiteSpace: 'pre-wrap' },
   muted: { opacity: 0.6, padding: '10px 12px' },
   svg: { maxWidth: '100%', height: 'auto' },
+  canvas: { maxWidth: '100%', height: 'auto', display: 'block', border: '1px solid var(--dsh-border, #e3e6ea)', borderRadius: '6px', cursor: 'grab', touchAction: 'none', background: '#f7f9fb' },
+  button: (active) => ({
+    fontSize: '11px',
+    padding: '2px 8px',
+    cursor: 'pointer',
+    border: '1px solid var(--dsh-border, #e3e6ea)',
+    borderRadius: '4px',
+    background: active ? 'var(--dsh-selected, #eaf2ff)' : 'transparent',
+    fontWeight: active ? 600 : 400,
+    color: 'inherit',
+  }),
+  legend: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px', fontSize: '11px', opacity: 0.75 },
+  legendItem: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+  legendDot: { width: '9px', height: '9px', borderRadius: '50%', display: 'inline-block' },
   table: { borderCollapse: 'collapse', marginTop: '12px', fontSize: '12px', width: '100%' },
   th: { textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--dsh-border, #e3e6ea)', opacity: 0.7, fontWeight: 600 },
   td: { padding: '3px 8px', borderBottom: '1px solid var(--dsh-border-soft, #f0f2f5)' },
@@ -149,7 +166,11 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
   const [selected, setSelected] = useState(null);
   const [record, setRecord] = useState(null);
   const [status, setStatus] = useState({ kind: cwd === undefined ? 'waiting' : 'loading' });
+  const [view, setView] = useState({ ...DEFAULT_STRUCTURE_VIEW });
+  const [dragging, setDragging] = useState(false);
   const svgHost = useRef(null);
+  const canvasHost = useRef(null);
+  const drag = useRef(null);
 
   // Directory listing, re-read when the session's workspace root changes.
   useEffect(() => {
@@ -183,6 +204,9 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
             ? { kind, ...parseAlignmentFile(bytes) }
             : { kind, ...parseStructureFile(selected.name, bytes) };
         setRecord(parsed);
+        // A new structure starts from the same deterministic camera; the
+        // previous file's yaw/pitch would be meaningless on a different molecule.
+        if (parsed.kind === 'structure') setView({ ...DEFAULT_STRUCTURE_VIEW });
         setStatus({ kind: 'ready' });
       })
       .catch((error) => {
@@ -202,17 +226,13 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     const host = svgHost.current;
     if (host === null) return;
     host.replaceChildren();
-    if (record === null || status.kind !== 'ready') return;
+    if (record === null || status.kind !== 'ready' || record.kind === 'structure') return;
     // The renderer refuses what it cannot draw (renderPlasmidMap caps a map at
     // 200 features). Letting that throw out of the effect leaves the pane empty
     // with no explanation, so it becomes the pane's error state instead.
     let markup;
     try {
-      markup = record.kind === 'plasmid'
-        ? plasmidSvg(record)
-        : record.kind === 'alignment'
-          ? logoSvg(record)
-          : structureSvg(record);
+      markup = record.kind === 'plasmid' ? plasmidSvg(record) : logoSvg(record);
     } catch (error) {
       setStatus({ kind: 'error', message: String(error?.message ?? error) });
       return;
@@ -226,6 +246,81 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     svg.setAttribute('style', 'max-width:100%;height:auto');
     host.append(document.importNode(svg, true));
   }, [record, status.kind]);
+
+  // Structures are rasterized into an RGB buffer and painted into a canvas.
+  // The renderer is deterministic and shared with the Node tests; only the
+  // canvas plumbing lives here. During a drag the frame drops to 1x
+  // supersampling and returns to 2x when the pointer is released.
+  useEffect(() => {
+    if (record === null || record.kind !== 'structure' || status.kind !== 'ready') return;
+    const canvas = canvasHost.current;
+    if (canvas === null || typeof canvas.getContext !== 'function') return;
+    const context = canvas.getContext('2d');
+    if (context === null || typeof context.createImageData !== 'function') return;
+    const width = Number.isInteger(canvas.width) ? canvas.width : 640;
+    const height = Number.isInteger(canvas.height) ? canvas.height : 480;
+    let image;
+    try {
+      image = structureImage(record, {
+        width,
+        height,
+        yaw: view.yaw,
+        pitch: view.pitch,
+        zoom: view.zoom,
+        representation: view.representation,
+        // Large assemblies stay at interaction quality even when settled;
+        // 2× sampling is reserved for the small structures it visibly helps.
+        supersample: dragging || record.atoms.length > 4000 ? 1 : 2,
+      });
+    } catch (error) {
+      setStatus({ kind: 'error', message: String(error?.message ?? error) });
+      return;
+    }
+    const imageData = context.createImageData(width, height);
+    for (let source = 0, target = 0; source < image.rgb.length; source += 3, target += 4) {
+      imageData.data[target] = image.rgb[source];
+      imageData.data[target + 1] = image.rgb[source + 1];
+      imageData.data[target + 2] = image.rgb[source + 2];
+      imageData.data[target + 3] = 255;
+    }
+    context.putImageData(imageData, 0, 0);
+  }, [record, status.kind, view, dragging]);
+
+  const startDrag = (event) => {
+    if (typeof event?.currentTarget?.setPointerCapture === 'function' && event.pointerId !== undefined) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // A synthetic pointer without capture support is still draggable.
+      }
+    }
+    drag.current = { x: event.clientX, y: event.clientY, yaw: view.yaw, pitch: view.pitch };
+    setDragging(true);
+  };
+
+  const moveDrag = (event) => {
+    const start = drag.current;
+    if (start === null) return;
+    const yaw = start.yaw + (event.clientX - start.x) * 0.01;
+    const pitch = Math.max(-1.4, Math.min(1.4, start.pitch - (event.clientY - start.y) * 0.01));
+    setView((current) => ({ ...current, yaw, pitch }));
+  };
+
+  const endDrag = () => {
+    drag.current = null;
+    setDragging(false);
+  };
+
+  const zoomView = (event) => {
+    // preventDefault keeps the sidebar from scrolling while the wheel zooms.
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    setView((current) => ({
+      ...current,
+      zoom: Math.max(0.35, Math.min(5, current.zoom * Math.exp(-Number(event.deltaY ?? 0) * 0.001))),
+    }));
+  };
+
+  const resetView = () => setView({ ...DEFAULT_STRUCTURE_VIEW });
 
   const openable = useMemo(() => entries.filter(isOpenable), [entries]);
 
@@ -297,8 +392,32 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
       h('span', null, `${record.atoms.length} atoms`),
       h('span', null, `${record.chain_count} chain(s)`),
       h('span', null, `${record.residue_count} residue(s)`)));
-    body.push(h('div', { key: 'svg', ref: svgHost, style: styles.svg }));
-    body.push(h('div', { key: 'note', style: styles.note }, '2D PCA projection drawn in the browser — not a molecular viewer.'));
+    body.push(h('div', { key: 'controls', style: styles.meta },
+      ...STRUCTURE_REPRESENTATIONS.map((representation) => h('button', {
+        key: representation,
+        style: styles.button(view.representation === representation),
+        onClick: () => setView((current) => ({ ...current, representation })),
+      }, representation === 'ball-and-stick' ? 'Ball & stick' : 'Space filling')),
+      h('button', { key: 'reset', style: styles.button(false), onClick: resetView }, 'Reset view')));
+    body.push(h('canvas', {
+      key: 'canvas',
+      ref: canvasHost,
+      width: 640,
+      height: 480,
+      style: styles.canvas,
+      onPointerDown: startDrag,
+      onPointerMove: moveDrag,
+      onPointerUp: endDrag,
+      onPointerCancel: endDrag,
+      onWheel: zoomView,
+      onDoubleClick: resetView,
+      'aria-label': '3D structure preview; drag to rotate, wheel to zoom',
+    }));
+    body.push(h('div', { key: 'legend', style: styles.legend },
+      ...['C', 'N', 'O', 'S', 'P'].map((element) => h('span', { key: element, style: styles.legendItem },
+        h('span', { style: { ...styles.legendDot, background: STRUCTURE_ELEMENT_COLORS[element] } }),
+        element))));
+    body.push(h('div', { key: 'note', style: styles.note }, 'Software-rendered 3D model. Drag to rotate, wheel to zoom. Ball-and-stick / space-filling; not for measurements.'));
   }
 
   return h('div', { style: styles.root }, list, h('div', { style: styles.main }, ...body));

@@ -383,7 +383,7 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
 
 | 落点 | 内容 |
 | --- | --- |
-| **Molbio**（右栏 tab） | 列出当前会话工作区的序列与结构文件，选中**当场在面板里画出来**：`.dna`/`.gb`/`.gbk` 出质粒图谱 + 特征表，`.fa`/`.fasta` 出序列标识图，`.pdb`/`.cif`/`.sdf` 等出 2D PCA 结构投影 |
+| **Molbio**（右栏 tab） | 列出当前会话工作区的序列与结构文件，选中**当场在面板里画出来**：`.dna`/`.gb`/`.gbk` 出质粒图谱 + 特征表，`.fa`/`.fasta` 出序列标识图，`.pdb`/`.cif`/`.sdf` 等出可旋转的 3D ball-and-stick / space-filling 模型 |
 | **Papers**（右栏 tab） | 把 `papers.json` 渲染成可搜索的阅读列表（标题直达 PubMed/原 URL） |
 | **图谱调用卡**（对话内） | 画图谱的工具**直接在对话里画出这次产出的图谱**，不必再去开文件 |
 
@@ -767,7 +767,8 @@ dsh-molbio-tools/
 ├── methylation.mjs  # 甲基化敏感位点检查 + 双酶切 buffer 兼容
 ├── protein.mjs      # 蛋白性质 / 肽段酶切 / 密码子优化
 ├── protein-structure.mjs # 螺旋轮与疏水性图
-├── structure-preview.mjs # PDB/mmCIF/SDF 解析与 2D PCA 投影（浏览器面板）
+├── structure-preview.mjs # PDB/mmCIF/SDF 解析器（浏览器面板）
+├── structure-render.mjs # 软件光栅化 3D ball-and-stick / space-filling 渲染器
 ├── protein-charge.mjs # 电荷-pH 滴定曲线 + pI（bjellqvist/emboss 两套 pK）
 ├── genbank.mjs      # GenBank flatfile 解析器
 ├── snapgene.mjs     # SnapGene .dna 二进制解析器

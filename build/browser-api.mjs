@@ -8,7 +8,8 @@
  * Only these modules are browser-safe (they import nothing but `./lib.mjs` and
  * `./svgio.mjs`, which are pure computation): lib, genbank, snapgene, plasmid,
  * msa, logo, crispr, align, seqio, plot, design, protein-structure,
- * structure-preview. The Node-only ones (view, papers, records, sanger, index)
+ * structure-preview, structure-render. The Node-only ones (view, papers, records,
+ * sanger, index)
  * are deliberately absent — importing them would drag `node:child_process` and
  * friends into the browser bundle, which the bundler rejects loudly.
  */
@@ -53,5 +54,13 @@ export {
 export { designTaqmanProbes, evaluateProbe, probeCandidates } from '../taqman.mjs';
 export { checkMultiplex } from '../multiplex.mjs';
 export { helicalWheel, hydropathyProfile, renderHelicalWheel, renderHydropathyPlot } from '../protein-structure.mjs';
-export { STRUCTURE_EXTENSIONS, parseStructureText, renderStructureProjection, structureFormatOf } from '../structure-preview.mjs';
+export { STRUCTURE_EXTENSIONS, parseStructureText, structureFormatOf } from '../structure-preview.mjs';
+export {
+  DEFAULT_STRUCTURE_VIEW,
+  MAX_RENDER_ATOMS,
+  STRUCTURE_ELEMENT_COLORS,
+  STRUCTURE_REPRESENTATIONS,
+  inferStructureBonds,
+  renderStructureImage,
+} from '../structure-render.mjs';
 export { analyzeMethylation, bufferReport, planDoubleDigest } from '../methylation.mjs';

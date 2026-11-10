@@ -2,10 +2,12 @@
 
 DSH Web GUI 的**浏览器内 Molbio 面板**：右侧栏的一个 tab，列出当前会话工作区的序列与结构文件，
 选中当场画出来——`.dna` / `.gb` / `.gbk` 出质粒图谱，`.fa` / `.fasta` 出序列标识图，
-`.pdb` / `.ent` / `.cif` / `.mmcif` / `.sdf` / `.mol` 出 2D PCA 结构投影。
+`.pdb` / `.ent` / `.cif` / `.mmcif` / `.sdf` / `.mol` 出可旋转的 3D
+ball-and-stick / space-filling 原子模型。
 
 解析与渲染在浏览器里跑的是 [`dsh-molbio-tools`](https://github.com/lovy2004/dsh-molbio-tools)
-的**同一份源码**（`lib/genbank/snapgene/plasmid/msa/logo` 与 `structure-preview`）——
+的**同一份源码**（`lib/genbank/snapgene/plasmid/msa/logo` 与 `structure-preview` /
+`structure-render`）——
 不落盘 SVG、不弹系统查看器、
 不经过工具调用。
 
@@ -40,8 +42,9 @@ dsh plugin --profile <profile> add D:\path\to\packages\molbio-panel   # 本地�
 2. 左栏列出工作区里可打开的文件（质粒文件排在前面）。
 3. 点一个 `.dna` / `.gb` → 右侧出图谱 + 特征表（Feature / Type / Start / End / Strand）；
    点一个 `.fasta`（≥2 条序列）→ 出序列标识图（信息量 bits，小样本校正默认开）；
-   点一个 `.pdb` / `.cif` / `.sdf` / `.mol` → 出 2D PCA 投影（Cα 轨迹或重原子，多链着色，
-   元素图例）。它是 2D 预览，不是 3D 查看器；V3000 不支持。
+   点一个 `.pdb` / `.cif` / `.sdf` / `.mol` → 出可旋转的 3D 模型（ball-and-stick 或
+   space-filling；拖拽旋转、滚轮缩放、双击复位）。它是真实原子模型的预览，
+   不含分子表面/静电势，也不做测量；V3000 不支持。
 
 ## 限制
 

@@ -19,7 +19,7 @@
  *     my renderer produced).
  *
  * It then asserts what a user would see: the file list, the plasmid metadata
- * and feature table, the logo, the PDB 2D projection, the paper list/detail,
+ * and feature table, the logo, the PDB 3D canvas, the paper list/detail,
  * the search + tag filter narrowing the list, the empty-library hint, and the
  * error state — plus that each panel's effects are disposed on unmount.
  */
@@ -135,7 +135,14 @@ function attachRefs(node) {
     return;
   }
   if (node === null || typeof node !== 'object' || node.props === undefined) return;
-  if (node.props.ref !== undefined && node.props.ref !== null) node.props.ref.current = fakeNode();
+  if (node.props.ref !== undefined && node.props.ref !== null) {
+    // React keeps the same host node across re-renders; preserving the stub
+    // lets a test count paints on one canvas rather than one per pass.
+    if (node.props.ref.current === undefined || node.props.ref.current === null
+      || (node.type === 'canvas' && typeof node.props.ref.current.getContext !== 'function')) {
+      node.props.ref.current = node.type === 'canvas' ? fakeCanvas(node.props) : fakeNode();
+    }
+  }
   attachRefs(node.props.children);
 }
 
@@ -151,6 +158,28 @@ function fakeNode() {
       this.children.push(child);
     },
   };
+}
+
+/** A canvas whose 2D context records the ImageData the panel paints. */
+function fakeCanvas(props) {
+  const node = fakeNode();
+  node.width = props?.width ?? 640;
+  node.height = props?.height ?? 480;
+  node.puts = 0;
+  node.image = null;
+  node.getContext = (kind) => {
+    assert.equal(kind, '2d', 'the structure preview uses a 2D canvas');
+    return {
+      createImageData(width, height) {
+        return { width, height, data: new Uint8ClampedArray(width * height * 4) };
+      },
+      putImageData(imageData) {
+        node.puts += 1;
+        node.image = imageData;
+      },
+    };
+  };
+  return node;
 }
 globalThis.document = {
   createElement: () => fakeNode(),
@@ -397,7 +426,8 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   assert.ok(rendered.includes('2 sequences'), 'the logo header reports the sequence count');
   assert.ok(rendered.includes('8 aligned columns'), 'the logo header reports the columns');
 
-  // Click the PDB entry: the panel draws the PCA projection, not a logo.
+  // Click the PDB entry: the panel paints a realistic 3D frame into a canvas,
+  // not a logo or a 2D projection.
   const pdbRow = elements(harness.tree, 'div').filter((node) => node.props?.title?.startsWith('tiny.pdb'));
   assert.equal(pdbRow.length, 1, 'the PDB row is clickable');
   pdbRow[0].props.onClick();
@@ -407,10 +437,22 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   assert.ok(rendered.includes('PDB'), 'the format is shown');
   assert.ok(rendered.includes('3 atoms'), 'the atom count is shown');
   assert.ok(rendered.includes('1 chain(s)'), 'the chain count is shown');
-  assert.ok(rendered.includes('not a molecular viewer'), 'the projection is labelled honestly');
-  const structureHost = elements(harness.tree, 'div').find((node) => node.props?.ref !== undefined);
-  assert.equal(structureHost.props.ref.current.children.length, 1, 'one structure SVG was appended');
-  assert.equal(structureHost.props.ref.current.children[0].tagName, 'svg', 'and it is an SVG element');
+  assert.ok(rendered.includes('Ball & stick'), 'the representation control is shown');
+  assert.ok(rendered.includes('Drag to rotate'), 'the interaction hint is shown');
+  const canvas = elements(harness.tree, 'canvas')[0];
+  assert.ok(canvas !== undefined, 'a canvas hosts the 3D frame');
+  assert.ok(canvas.props.ref.current.puts > 0, 'the renderer painted the canvas');
+  assert.ok(canvas.props.ref.current.image.data.some((value) => value !== 0), 'the frame has pixels');
+
+  // Dragging rotates: the renderer is asked for a new frame, and the pointer-up
+  // pass returns to full quality without leaving the drag latched.
+  const before = canvas.props.ref.current.puts;
+  canvas.props.onPointerDown({ clientX: 10, clientY: 10, pointerId: 1, currentTarget: { setPointerCapture() {} } });
+  canvas.props.onPointerMove({ clientX: 60, clientY: 30, pointerId: 1 });
+  await harness.render();
+  canvas.props.onPointerUp({ pointerId: 1 });
+  await harness.render();
+  assert.ok(canvas.props.ref.current.puts > before, 'dragging repaints the canvas');
 
   harness.unmount();
 }

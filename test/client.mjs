@@ -23,6 +23,15 @@ import { createContext, runInContext } from 'node:vm';
 import { createSlotsStub } from './slots-stub.mjs';
 
 const bundleText = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+// A re-export must name the binding it reads from the target namespace. A
+// bundler that drops the imported name emits `require(target).undefined` and
+// the browser half receives undefined for every function — which is exactly
+// what happened before this guard.
+assert.doesNotMatch(
+  bundleText,
+  /__molbio_require\([^)]*\)\.undefined;/,
+  're-exports must resolve a real imported name, not the literal "undefined"',
+);
 const panelCore = await import('../build/panel-core.mjs');
 const { parseGenBank } = await import('../genbank.mjs');
 

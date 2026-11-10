@@ -45,10 +45,11 @@ L = 需要新机制或外部资源）。
   的 key 解析顺序变为 **`api_key` 参数 → DSH 凭据库 → 环境变量**（环境变量会被 agent 自己的 shell
   子进程继承，凭据库不会）；同时插件详情页出现 **PubMed API key** 表单，用户不必改 YAML。
   没有凭据库的组合行为与 0.22.0 相同。
-- **0.25.0 交付 2.9c 结构预览（工具数不变）**：Molbio 面板新增 PDB/mmCIF/SDF-MOL V2000
-  的 2D PCA 投影（CA 轨迹/重原子、多链着色、元素图例、20,000 原子与 5 MB 上限），
-  明确拒绝 V3000 并标注"不是 molecular viewer"；根包 `0.24.1 → 0.25.0`、
-  面板包 `0.1.10 → 0.1.11`。
+- **0.25.0 交付 2.9c 真实 3D 结构预览（工具数不变）**：Molbio 面板新增 PDB/mmCIF/SDF-MOL
+  V2000 的 **ball-and-stick / space-filling** 软件光栅化（透视、z-buffer、Phong 光照、
+  深度雾化、CPK 配色），支持拖拽旋转、滚轮缩放与表示切换；12,000 重原子封顶，
+  明确拒绝 V3000，并标注"preview, not for measurements"。根包 `0.24.1 → 0.25.0`、
+  面板包 `0.1.10 → 0.1.11`。同版修掉客户端 bundler 丢掉 re-export imported name 的缺陷。
 - **0.24.1 是输入边界与数据安全加固版（工具数不变）**：修掉 BibTeX 导出覆盖文献库、
   相对路径按 provider cwd 解析、四个默认写 SVG 的工具被误标并发安全、批量 glob /
   `max_files` / 坏路径、文献与协议库坏条目，以及 20 万行表格 / 13 万条 reads 触发的
@@ -175,9 +176,9 @@ v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
   `test/map-card.mjs` 现在同时跑两种卡片，`contract` 从产物里的两张 key 表反推投影数。
 - 文献库**写回**需先定并发契约（当前只读）；
 - ✅ **已做（0.25.0）**：结构文件的浏览器内预览（`.pdb/.ent/.cif/.mmcif/.sdf/.mol`）
-  接在现有 Molbio tab 里，做 **2D PCA 投影**（Cα 轨迹或重原子、多链着色、元素图例），
-  不是 3D 查看器；没有走 `ctx.documentPreviews`（需要额外的 keyed 容器，而现有面板已有
-  文件列表与 SVG 宿主）。边界与测试见 [history.md](history.md) 的 v0.25.0 段。
+  接在现有 Molbio tab 里，做**真实 3D 原子模型**（ball-and-stick / space-filling，
+  透视 + z-buffer + Phong 光照）；拖拽旋转、滚轮缩放。没有走 `ctx.documentPreviews`，
+  也没有做卡通 ribbon、分子表面或静电势。边界与测试见 [history.md](history.md) 的 v0.25.0 段。
 
 ### 2.10 ✅ 图表八种全部落地（0.17.0 第一批 3 种，0.18.0 第二批 3 种 + 色带）
 
