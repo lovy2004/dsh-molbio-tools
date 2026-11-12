@@ -10,6 +10,58 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.25.1] — 2026-11-12（DSH 0.2.2-rc.2 适配：preset 吸收三处上游变更；契约守卫兼容压缩产物）
+
+**工具数不变（64），benchmark 不变（65 题）。** 0.25.0 的验收基线是 **0.2.2-rc.1**；这一版把
+基线推到 **0.2.2-rc.2**，并在实际安装的桌面运行时上重跑了整套守卫。
+
+### 1. 为什么"rc.2 在 `engines.dsh` 范围内"仍然不是适配
+
+`engines.dsh` 的 `>=0.2.1-rc.2 <0.3.0-0` 覆盖 rc.2，但 rc.2 的上游 `standard` 预设变了三处。
+本仓库的 preset 是上游行清单的逐字副本，所以三处都必须照抄（否则 `preset-health` 报 drift，
+molbio-lab 还会静默缺少这些能力）：
+
+- 新增 `tool-office` 行（`@deepseek-ai/dsh-tool-office`）——预设此前**没有 Office 工具**；
+- `skill-filesystem` 增加 `config.customSkillDirs`，指向 `@deepseek-ai/dsh-agent-preset/skills`；
+- `tool-subagent-control` 增加 `config.interrupt: false`。
+
+上游 `standard.patch.yml` 从 6858 B（sha256 `3006cc…`）变为 7286 B（sha256 `e40bb192…`）；
+桌面 `app.asar` 与 npm tarball 两份**逐字节一致**。preset 行数因此 29 → 30。
+
+### 2. `preset-health` 要学会校验未求值的 `!!js`
+
+`customSkillDirs` 的值是 `!!js` 表达式，按 Loader 的方言解析后是 `{ __jsExpr }`，而不是字符串；
+`skill-filesystem` 的 `Config` 会拒绝它。真实 Loader 在挂载前求值，守卫手里只有节点本身
+（`baseUrl` / `ctx` / `dshHomePath` 只在挂载时存在）。`test/preset-health.mjs` 现在分别用
+字符串 / 数字 / 布尔占位符各校验一次，只有**都**不通过才判 `config-invalid`——形状错误仍然会失败，
+而 `preset-health` 在 rc.2 上 30 行全绿。
+
+### 3. `contract`：桌面版压缩产物造成的假红
+
+桌面运行时把客户端 bundle 压成 `x=>y`、模板串、无空格的形式，npm 包不是。0.25.0 的 `contract`
+在桌面 0.2.2-rc.2 上有 5 条以字符串不匹配失败，逐条核对后**契约全部在位**——
+`useSessions(sessions=>sessions.byId[sessionId]?.cwd)`、`workspaceFiles.list(sessionId,path,signal)`、
+`installScope("session",…)`、`slots.inject("tool.call.toolview")`、`key: "present"`、
+`inject(key,callback)`、`this._core.specDynamic(key)`。断言改为匹配**调用**而不是某一种拼写；
+npm 与桌面两份现在都是 17/17。
+
+### 4. 在真实安装上跑过的证据
+
+桌面 0.2.2-rc.2（内嵌 Node 24.21.0）：临时 profile → HTTP 200（41 393 B，boot 图含
+`dsh-molbio-tools/client.js`）→ `agentPresets/list` 列出 molbio-lab、无 `broken` →
+`pluginInventory/list` 的 `tool-molbio` 为 `fiberPhase: "active"`。
+`contract` 17 / `preset-health` 30 行 / `drift-probe` 16 项（15 个突变）/ `smoke` 64 工具 /
+`bench:offline` 65 题全绿。
+
+### 5. 声明与版本
+
+- 两个包 `dshReleases` 增加 `0.2.2-rc.2: compatible`；`engines.dsh` 不变。
+- CI（`test.yml` / `release.yml`）钉 `@deepseek-ai/dsh@0.2.2-rc.2`。
+- 根包 `0.25.0 → 0.25.1`；面板包 `0.1.11 → 0.1.12`（只改清单声明，`lib/client.js` 未变）。
+- **兼容性后果**：`tool-office` 是 rc.2 才有的包，preset 写入该行后 molbio-lab 在 **0.2.2-rc.1 上不再可挂载**
+  （实测 `tool-office [unresolvable]: specifier does not resolve: MODULE_NOT_FOUND`）；rc.1 用户应留在 0.25.0。
+- 基线文档（store-evidence / maintainer / roadmap / history / workflow）同步到 rc.2。
+
 ## [0.25.0] — 2026-11-10（浏览器内 3D 结构预览：真实原子模型）
 
 **工具数不变（64），benchmark 不变（65 题 / 64 覆盖）。** 这一版把结构文件接进已有的

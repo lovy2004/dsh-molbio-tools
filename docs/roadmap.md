@@ -10,12 +10,12 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.25.0）
+## 1. 当前状态（0.25.1）
 
 - 64 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.2-rc.1**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
+- 基线：DSH **0.2.2-rc.2**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -50,6 +50,12 @@ L = 需要新机制或外部资源）。
   深度雾化、CPK 配色），支持拖拽旋转、滚轮缩放与表示切换；12,000 重原子封顶，
   明确拒绝 V3000，并标注"preview, not for measurements"。根包 `0.24.1 → 0.25.0`、
   面板包 `0.1.10 → 0.1.11`。同版修掉客户端 bundler 丢掉 re-export imported name 的缺陷。
+- **0.25.1 完成 0.2.2-rc.2 适配（工具行为零变化）**：上游 `standard` 改了 3 处——新增
+  `tool-office` 行、`skill-filesystem` 的 `customSkillDirs`、`tool-subagent-control` 的
+  `interrupt: false`——preset 逐字吸收（29 → 30 行）。`preset-health` 学会校验未求值的
+  `!!js` 配置；`contract` 的字符串断言改为匹配调用，桌面版压缩产物不再假红。两份
+  `dshReleases` 增加 `0.2.2-rc.2: compatible`，CI 随基线钉到该版本；面板包 `0.1.11 → 0.1.12`
+  （只改声明，产物未变）。
 - **0.24.1 是输入边界与数据安全加固版（工具数不变）**：修掉 BibTeX 导出覆盖文献库、
   相对路径按 provider cwd 解析、四个默认写 SVG 的工具被误标并发安全、批量 glob /
   `max_files` / 坏路径、文献与协议库坏条目，以及 20 万行表格 / 13 万条 reads 触发的

@@ -49,7 +49,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         # THE FLOOR `package.json`'s `engines.node` DECLARES, and the Node the
-        # DSH desktop runtime actually embeds (0.2.2-rc.1 ships 24.21.0). Keep
+        # DSH desktop runtime actually embeds (0.2.2-rc.2 ships 24.21.0). Keep
         # all three equal: while the matrix ran 26 and `engines` said `>=26`,
         # the suite never exercised the runtime users get. Raise both together,
         # in the same commit, whenever a version-specific change lands.
@@ -62,7 +62,7 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.1
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.2
 
       # Every guard resolves the harness through `benchmark/harness.mjs`. Say
       # exactly what was installed rather than leaving each probe to guess: on a

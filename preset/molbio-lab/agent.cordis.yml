@@ -48,13 +48,18 @@
 # list carries no comments of its own, so none appear below; provenance and the
 # upgrade rules live in this header.
 #
-# Baseline: the `standard` preset of dsh 0.2.2-rc.1 (harness root
-# `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`, file
-# `node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`, whose
-# rows live under the `preset-standard` row's `config.plugins:`).
+# Baseline: the `standard` preset of dsh 0.2.2-rc.2 (the installed desktop
+# runtime, `resources/app.asar` →
+# `dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`,
+# 7286 B, sha256 e40bb192…; rows live under the `preset-standard` row's
+# `config.plugins:`). 0.2.2-rc.2 changed the preset in exactly three places,
+# all absorbed verbatim below: a new `tool-office` row
+# (`@deepseek-ai/dsh-tool-office`), `customSkillDirs` on `skill-filesystem`
+# (the shipped `@deepseek-ai/dsh-agent-preset/skills` directory), and
+# `interrupt: false` on `tool-subagent-control`.
 #
-# 0.2.2-rc.1 is the FIRST row change since 0.2.1-rc.2 dropped the optional
-# subagent providers and `tool-ralph`. It folded `list_agents` into
+# History: 0.2.2-rc.1 was the first row change since 0.2.1-rc.2 dropped the
+# optional subagent providers and `tool-ralph`. It folded `list_agents` into
 # `@deepseek-ai/dsh-tool-subagent-control` (the `./list-agents` subpath export is
 # gone, so the `tool-subagent-list-agents` row was dropped here), renamed the
 # `tool-subagent` model-selection settings to `modelSelection` +
@@ -117,6 +122,9 @@
   name: '@deepseek-ai/dsh-tool-schedule'
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@deepseek-ai/dsh-agent-preset/package.json')), 'skills')
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
 - id: command-goal
@@ -169,6 +177,8 @@
   config:
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
+      config:
+        interrupt: false
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
@@ -200,6 +210,8 @@
     searchTimeoutMs: 60000
 - id: present
   name: '@deepseek-ai/dsh-tool-present'
+- id: tool-office
+  name: '@deepseek-ai/dsh-tool-office'
 - id: tool-plugin-manager
   name: '@deepseek-ai/dsh-plugin-manager/tools'
   disabled: true

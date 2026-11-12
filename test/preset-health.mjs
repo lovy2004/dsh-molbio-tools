@@ -185,12 +185,56 @@ async function checkRow(row, packages, harnessRoot, presetBase) {
   if (typeof Config !== 'function') {
     return { ...result, status: 'ok', detail: 'package exports no Config schema (config passed through unvalidated)' };
   }
-  try {
-    Config(row.config);
-    return { ...result, status: 'ok' };
-  } catch (error) {
-    return { ...result, status: 'config-invalid', detail: String(error.message ?? error).split('\n')[0] };
+  // A '!!js' scalar parses to { __jsExpr: <source> } (the Loader's own tag).
+  // The Loader EVALUATES those before a package's Config sees a value; this
+  // guard holds the unevaluated node, and the expression's runtime type is not
+  // knowable here (baseUrl, ctx and dshHomePath exist only at mount). So it
+  // validates with each scalar placeholder in turn and reports invalid only
+  // when NO placeholder satisfies the schema - a shape error, the thing this
+  // guard exists for, still fails all three. 0.2.2-rc.2's customSkillDirs is
+  // the first upstream row that needs this: its value is a '!!js' path string.
+  const configs = hasJsExpr(row.config) ? jsExprPlaceholderVariants(row.config) : [row.config];
+  let lastError;
+  for (const config of configs) {
+    try {
+      Config(config);
+      return { ...result, status: 'ok', ...(configs.length > 1 ? { detail: 'config validated with !!js placeholders' } : {}) };
+    } catch (error) {
+      lastError = error;
+    }
   }
+  return { ...result, status: 'config-invalid', detail: String(lastError?.message ?? lastError).split('\n')[0] };
+}
+
+/** Is this node a Loader '!!js' expression ({ __jsExpr: <source> })? */
+function isJsExpr(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && typeof value.__jsExpr === 'string' && Object.keys(value).length === 1;
+}
+
+/** Does any value in this config tree carry an unevaluated '!!js' node? */
+function hasJsExpr(value) {
+  if (isJsExpr(value)) return true;
+  if (Array.isArray(value)) return value.some(hasJsExpr);
+  if (value !== null && typeof value === 'object') return Object.values(value).some(hasJsExpr);
+  return false;
+}
+
+/** Replace every '!!js' node with one scalar placeholder, recursively. */
+function withJsExprPlaceholder(value, placeholder) {
+  if (isJsExpr(value)) return placeholder;
+  if (Array.isArray(value)) return value.map((entry) => withJsExprPlaceholder(entry, placeholder));
+  if (value !== null && typeof value === 'object') {
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) out[key] = withJsExprPlaceholder(entry, placeholder);
+    return out;
+  }
+  return value;
+}
+
+/** The three placeholder types a schema could require for an evaluated '!!js'. */
+function jsExprPlaceholderVariants(config) {
+  return ['', 0, false].map((placeholder) => withJsExprPlaceholder(config, placeholder));
 }
 
 /** Rows, in composition order, with nested group children flattened inline. */

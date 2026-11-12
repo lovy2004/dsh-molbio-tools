@@ -236,8 +236,16 @@ check('a session-scope tab body receives sessionId + useSessions (official prece
     /function [A-Za-z_$][\w$]*\(\{(?=[^}]*\buseTabInfo\b)(?=[^}]*\bsessionId\b)(?=[^}]*\buseSessions\b)/,
     'the official tab body receives useTabInfo + sessionId + useSessions from its props',
   );
-  assert.ok(files.text.includes('useSessions((sessions) => sessions.byId[sessionId]?.cwd)'), 'and reads the workspace root exactly as the panel does');
-  assert.ok(files.text.includes('"slots"') && files.text.includes('"sidebarRightTabs"'), 'and injects the same registries');
+  // The desktop distribution ships this bundle MINIFIED: `useSessions(sessions=>…)`
+  // (no parameter parentheses, no spaces) and template-literal registry names.
+  // Pin the CALL, not the npm build's spelling.
+  assert.match(
+    files.text,
+    /useSessions\(\s*\(?\s*sessions\s*\)?\s*=>\s*sessions\.byId\[sessionId\]\?\.cwd\s*\)/,
+    'and reads the workspace root exactly as the panel does',
+  );
+  assert.match(files.text, /["'\x60]slots["'\x60]/, 'and injects the slot registry');
+  assert.match(files.text, /["'\x60]sidebarRightTabs["'\x60]/, 'and the right-sidebar tab registry');
 });
 
 check('the sessions root hook is provided by the session client package', () => {
@@ -250,7 +258,7 @@ check('the sessions root hook is provided by the session client package', () => 
   assert.ok(PROVIDE_ROOT_HOOKS.test(session.text), 'it contributes root hooks');
   assert.ok(PROVIDE_ROOT_SESSIONS.test(session.text), 'the root hook source is named `sessions`');
   // `sessions` -> `useSessions` under the rule asserted above.
-  assert.ok(session.text.includes('installScope("session"'), 'and installs the session scope those props belong to');
+  assert.match(session.text, /installScope\(\s*["'\x60]session["'\x60]/, 'and installs the session scope those props belong to');
 });
 
 // The two assertions above read a MINIFIED bundle, so they must survive the
@@ -306,7 +314,7 @@ check('workspaceFiles exposes list / read / readBytes on the host Remote', () =>
 
 check('official client packages call the same workspaceFiles methods', () => {
   const files = clientBundle('@deepseek-ai/dsh-client-ui-sidebar-files');
-  assert.ok(files.text.includes('remote.workspaceFiles.list(sessionId, path, signal)'), 'ui-sidebar-files calls list(sessionId, path, signal)');
+  assert.match(files.text, /workspaceFiles\.list\(\s*sessionId\s*,\s*path\s*,\s*signal\s*\)/, 'ui-sidebar-files calls list(sessionId, path, signal)');
   const docPreview = clientBundle('@deepseek-ai/dsh-client-ui-sidebar-documentpreview');
   if (docPreview !== undefined) {
     const usesRead = /workspaceFiles\.read(All|Bytes)?\(/.exec(docPreview.text);
@@ -499,7 +507,7 @@ check('the toolview card contract still holds (meta path + keyed seat)', () => {
   assert.ok(toolUi.text.includes('tool.call.toolview'), 'the toolview seat is still declared');
   const card = clientBundle('@deepseek-ai/dsh-client-ui-deliverables');
   assert.ok(card !== undefined && card.text.includes('tool.call.toolview'), 'a shipped package still registers a toolview');
-  assert.ok(/key:\s*"present"/.test(card.text), 'keyed by the tool name');
+  assert.match(card.text, /key:\s*["'\x60]present["'\x60]/, 'keyed by the tool name');
 
   // This package's own side: the projection exists on exactly the tools the
   // bundle claims cards for (through the loop over MAP_TOOL_KEYS, so assert the
@@ -553,15 +561,15 @@ check('every seat claim waits for the declaration (slots.inject, not a bare regi
 
   const renderer = clientBundle('@deepseek-ai/dsh-client-ui-renderer');
   assert.ok(renderer !== undefined, 'ui-renderer is installed (it owns the client slots service)');
-  assert.ok(renderer.text.includes('inject(key, callback)'), 'the slots service still exposes inject(key, callback)');
-  assert.ok(renderer.text.includes('this._core.specDynamic(key)'), 'and runs the callback only once the seat is declared');
+  assert.match(renderer.text, /inject\(\s*key\s*,\s*callback\s*\)/, 'the slots service still exposes inject(key, callback)');
+  assert.match(renderer.text, /this\._core\.specDynamic\(\s*key\s*\)/, 'and runs the callback only once the seat is declared');
 
   // The shipped packages claim our very seats this way.
   const toolUi = clientBundle('@deepseek-ai/dsh-client-ui-tool');
-  assert.ok(/slots\.inject\(\s*"tool\.call\.toolview"/.test(toolUi.text), 'ui-tool waits for tool.call.toolview');
+  assert.match(toolUi.text, /slots\.inject\(\s*["'\x60]tool\.call\.toolview["'\x60]/, 'ui-tool waits for tool.call.toolview');
   const preview = clientBundle('@deepseek-ai/dsh-client-ui-sidebar-documentpreview');
   if (preview !== undefined) {
-    assert.ok(/slots\.inject\(\s*"sidebar\.right\.pane\.tab"/.test(preview.text), 'the document preview waits for the tab seat');
+    assert.match(preview.text, /slots\.inject\(\s*["'\x60]sidebar\.right\.pane\.tab["'\x60]/, 'the document preview waits for the tab seat');
   }
 
   // Our artifact: every `register` must sit inside a wait for that same seat.

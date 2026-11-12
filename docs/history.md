@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.25.1 | — | **DSH 0.2.2-rc.2 适配**：preset 逐字吸收上游 3 处变更（`tool-office` 行、`skill-filesystem` 的 `customSkillDirs`、`tool-subagent-control` 的 `interrupt: false`，29 → 30 行）；`preset-health` 支持未求值的 `!!js`；`contract` 兼容桌面版压缩产物；工具数不变 | 64 |
 | 0.25.0 | — | **浏览器内真实 3D 结构预览**：Molbio 面板读 PDB/mmCIF/SDF-MOL V2000，软件光栅化 ball-and-stick / space-filling，拖拽旋转、滚轮缩放；工具数不变 | 64 |
 | 0.24.1 | — | **输入边界与数据安全加固**：BibTeX 不再覆盖文献库、相对读取按会话工作区、批量/glob/并发声明修复、20 万行输入不再 `RangeError`；工具数不变 | 64 |
 | 0.24.0 | — | **数据卫生版**：新增 `molbio_contamination_screen`（内置载体/接头短签名，双链、0–2 错配）与 `molbio_fastq_trim`（质量/接头/引物/poly/N/长度，写 FASTQ/FASTA）；修 FASTQ QC 接头表 Small RNA 5' 的 RNA→DNA 静默错 | 62 → 64 |
