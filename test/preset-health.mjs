@@ -400,6 +400,17 @@ async function main() {
   const packages = packagesDir(harnessRoot);
   const version = JSON.parse(await readFile(join(harnessRoot, 'package.json'), 'utf8')).version;
   console.log(`harness : ${harnessRoot} (dsh ${version})`);
+  // The DECLARATION must follow the harness this run actually used. Nothing
+  // else in the suite reads `dshReleases`, so a harness bump the manifests
+  // never record is silent: every guard is green while the store still calls
+  // the build `unknown` (0.25.2).
+  const declaredProblems = compatibilityProblems(
+    [
+      JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')),
+      JSON.parse(await readFile(join(repoRoot, 'packages', 'molbio-panel', 'package.json'), 'utf8')),
+    ],
+    version,
+  );
   console.log(`composition: ${composition}`);
 
   const rows = flattenRows(presetPlugins(await readComposition(composition, harnessRoot)));
@@ -527,7 +538,7 @@ async function main() {
     }
   }
 
-  if (failures.length > 0 || drift.length > 0 || relativeRows.length > 0 || countDrift.length > 0 || orderDrift.length > 0) {
+  if (failures.length > 0 || drift.length > 0 || relativeRows.length > 0 || countDrift.length > 0 || orderDrift.length > 0 || declaredProblems.length > 0) {
     if (failures.length > 0) {
       console.error(`preset-health FAILED: ${failures.length} row(s) cannot mount on dsh ${version}`);
       for (const failure of failures) console.error(`  - ${failure.id} [${failure.status}]: ${failure.detail}`);
@@ -545,11 +556,44 @@ async function main() {
       console.error(`preset-health FAILED: ${orderDrift.length} preset order collision(s) with a shipped preset`);
       for (const line of orderDrift) console.error(`  - ${line}`);
     }
+    if (declaredProblems.length > 0) {
+      console.error(`preset-health FAILED: ${declaredProblems.length} package manifest(s) do not declare dsh ${version} compatible`);
+      for (const problem of declaredProblems) console.error(`  - ${problem}`);
+    }
     process.exit(1);
   }
-  console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, and the preset is the shipped standard plus the molbio rows`);
+  console.log(`preset-health OK: all ${rows.length} rows load on dsh ${version}, the preset is the shipped standard plus the molbio rows, and both manifests declare that version compatible`);
   console.log(`specifier OK: the preset names the package (${selfName}), so Node resolves it from the profile — no copied directory to keep in sync`);
   console.log(`order OK: ${ownOrder} collides with no shipped preset`);
+}
+
+/**
+ * The declared compatibility of EVERY package manifest for the harness a run
+ * actually used.
+ *
+ * `engines.dsh` says "this range may work"; `dsh.compatibility.dshReleases`
+ * says "this exact build was run". The store reads the second one, and nothing
+ * else in this suite reads it — so a harness bump that the manifests never
+ * record is silent: the guards are green while the store still calls the
+ * build `unknown`, or omits it. 0.25.2 makes the declaration part of
+ * `preset-health`, which already knows which harness it validated.
+ *
+ * Exported so `test/drift-probe.mjs` can drive it with a mutated manifest —
+ * rules.md rule 9: a guard nobody has seen fail is not a guard.
+ *
+ * @param {object[]} manifests parsed `package.json` documents.
+ * @param {string} version the installed harness version.
+ * @returns {string[]} one line per manifest that does not say `compatible`.
+ */
+export function compatibilityProblems(manifests, version) {
+  const problems = [];
+  for (const manifest of manifests) {
+    const state = manifest?.dsh?.compatibility?.dshReleases?.[version];
+    if (state !== 'compatible') {
+      problems.push(`${manifest?.name ?? '(unnamed manifest)'} declares dsh ${version} as ${state === undefined ? 'absent' : JSON.stringify(state)}`);
+    }
+  }
+  return problems;
 }
 
 /**

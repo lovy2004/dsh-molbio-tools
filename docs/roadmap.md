@@ -10,12 +10,14 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.25.1）
+## 1. 当前状态（0.27.0）
 
-- 64 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- 65 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- **0.27.0 交付 survey #9 双链热力学**：新增 `molbio_duplex_thermo` —— ΔH/ΔS（原始与盐校正）/ΔG°37/Tm，外加 3' 端稳定性、发夹与同源/异源二聚体；`partner` 不是精确反向互补时**拒绝估算**（Allawi 错配参数集未实现）。工具 64 → 65。
+- PubMed API key 在 **Papers** tab 顶部有常驻状态徽标（已配置/未配置/不可读），检索结果也标注凭据通道。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.2-rc.2**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
+- 基线：DSH **0.2.2-rc.5**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。
@@ -180,7 +182,9 @@ v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
 - ✅ **已做（0.23.0）**：`molbio_sequence_logo` 与 `molbio_grna_design` 有调用卡
   （`molbio-figure` 投影 + `FIGURE_TOOL_KEYS`；logo 画图，gRNA 画图谱并列出前 5 条 guide）。
   `test/map-card.mjs` 现在同时跑两种卡片，`contract` 从产物里的两张 key 表反推投影数。
-- 文献库**写回**需先定并发契约（当前只读）；
+- 文献库**写回**当前被宿主能力挡住：rc.5 的 `workspaceFiles` Remote 只暴露
+  `list / read / readBytes / stat`，没有写入方法（与 3.1 的 `png_path` 同一类阻塞）。
+  上游加上写入 seam 之后再定并发契约；在那之前面板保持只读；
 - ✅ **已做（0.25.0）**：结构文件的浏览器内预览（`.pdb/.ent/.cif/.mmcif/.sdf/.mol`）
   接在现有 Molbio tab 里，做**真实 3D 原子模型**（ball-and-stick / space-filling，
   透视 + z-buffer + Phong 光照）；拖拽旋转、滚轮缩放。没有走 `ctx.documentPreviews`，
@@ -206,6 +210,14 @@ v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
   每张图各配一条 benchmark 任务，并进了 `test/charts.mjs` 的 `sampleDocuments()`，
   让"没有 unsupported / 没有缺字"那条断言覆盖到它们。
 
+### 2.11 ✅ 已做（0.27.0）双链热力学（survey #9）
+
+新增 `molbio_duplex_thermo` + `thermo.mjs`：ΔH/ΔS/ΔG°37/Tm 与引物工具同一套 NN/盐模型，
+结构侧复用了已有的发夹与二聚体枚举。**两条边界是刻意的**：错配 partner 与 IUPAC 简并码
+都抛错而不是估算——错配双链要用 Allawi/SantaLucia 的参数集，拿 Watson–Crick 参数算出的数
+会"看起来合理但差几 kcal/mol"。DMSO/甲酰胺同样没有建模，文档里写明。工具 64 → 65，
+benchmark 65 → 66 题（65/65 覆盖）。
+
 ---
 
 ## 3. 技术债（明确的"欠着"）
@@ -224,7 +236,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 65 条任务覆盖 **64/64 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 66 条任务覆盖 **65/65 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。
@@ -324,7 +336,7 @@ Node 做路径运算（Windows 是 `<prefix>/node_modules`，POSIX 是 `<prefix>
 - **agent 驱动浏览器终端**：无 `dsh-tool-terminal`，且面板明确不把输出转给模型。
   `ctx.computerUse`/`ctx.browserUse` 这类 seam 只允许**一个** provider 注册，
   第三方插件即便在未来版本也不能自带一个并行实现去抢。
-- **把 64 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
+- **把 65 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
   提示预算）。真要全局可见需要自己加一层宿主行，而那会让专属模式里的同一行变成死行。
 - **持久 shell 进 preset**：收益有限、风险明确（工具名冲突要 disable 一次性那行，
   且需要未经验证的 `isolate: { terminals: true }` 分组），详见

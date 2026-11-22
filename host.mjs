@@ -27,7 +27,7 @@
  *
  * ── WHY NOT JUST ANCHOR ON index.mjs ───────────────────────────────────────
  *
- * `index.mjs` is the TOOL plugin: importing it must register all 64 tools and
+ * `index.mjs` is the TOOL plugin: importing it must register all 65 tools and
  * a prompt section. A host row naming it would put every tool back into every
  * session, which is the thing the preset split exists to avoid. This anchor is
  * deliberately inert.

@@ -14,6 +14,7 @@
 | **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
 | **图谱调用卡**（`tool.call.toolview`） | `molbio_plasmid_map` / `molbio_plasmid_map_file` 的调用卡：在对话里直接画出这次调用产出的图谱（摘要行 + 写入路径），失败时显示错误文本与 Inspect 入口 | 工具自己声明的 `output.presentationMeta`（见下） |
 | **图形调用卡**（`tool.call.toolview`） | `molbio_sequence_logo` / `molbio_grna_design` 的调用卡：logo 直接画图；gRNA 画 `map_path` 并列出前 5 条 guide（无 map 时仍有摘要与表格） | 同上，kind = `molbio-figure` |
+| **PubMed key 徽标**（Papers tab 顶部） | 常驻状态徽标：绿点「已配置（来源）」/ 灰点「未配置」/ 红点「状态不可读」，跟随 `credentials/reference-updated` 刷新；永不回显值 | `ctx.remote.credentials.describe`（经 `apply` 的 credentials 注入写进模块级快照） |
 | **PubMed API key**（`plugins.detail.section`） | 插件 → 已安装插件 → `dsh-molbio-tools` 详情页里的一段表单：password 输入 + Save/Remove，状态只报「已配置 / 来源 / 未配置」，永不回显值 | `ctx.remote.credentials.describe` / `set` / `unset`（host 的凭据 seam） |
 
 **解析与渲染全部在浏览器里跑本仓库自己的模块**（`lib/genbank/snapgene/plasmid/msa/logo`
@@ -50,7 +51,7 @@ SVG 随 meta 传输有上限（256 KB）：真实载体的图谱 20-60 KB，但�
 | `build/panel-core.mjs` | 面板的数据通路（分类/解码/解析/渲染/文献库投影），不含 React，可在 Node 里单测 |
 | `build/client-entry.mjs` | 浏览器半本体：两个 tab 类型的注册、正文、标题 chip，两个 map 工具与两个 figure 工具的调用卡，以及插件详情页的 key 配置段 |
 | `lib/client.js` | **构建产物**（`exports["./client"]` 指向它；由 `npm run build:client` 生成） |
-| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 64 个工具解耦的交付通道 |
+| `packages/molbio-panel/` | 面板专用包（宿主半边空实现），面板与 65 个工具解耦的交付通道 |
 | `test/client.mjs` | 按加载器的方式执行产物 + 驱动两条数据通路（含真实 pUC118 夹具） |
 | `test/map-card.mjs` | 调用卡的**跨界**检查：地图卡与图形卡（logo/gRNA）的真实投影 → 卡片读取 → 渲染出 SVG（含降级、超限、坏 meta 路径） |
 | `test/client-mount.mjs` | 复刻宿主侧图扫描，证明两个包都能挂上、依赖可解析 |
@@ -173,7 +174,7 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    这一层抓到过三个真 bug：列表把不可打开的文件也列出来、`sortEntries` 的 `other` 档从不
    生效、以及坏库时列表仍宣称"还没有文献"。插件详情页的 key 段也被真实驱动：
    `describe` → 输入 → Save（trim 后写入 `NCBI_API_KEY`）→ 状态刷新 + 清空输入 → Remove →
-   provider 拒绝时消息原样显示。
+   provider 拒绝时消息原样显示；Papers tab 的 key 徽标也在真实渲染中验证（配置态绿点 + 来源，且不出现 key 值）。
 4. **数据通路（质粒 / 比对 / 结构）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，
    AmpR 2102-2962 反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；
    FASTA → 比对 → logo；PDB → 3D 模型（点选后 canvas 被绘制，拖拽触发重绘）；
@@ -244,7 +245,7 @@ dsh plugin --profile <profile> add dsh-molbio-tools              # 或 npm 包
 `/plugins/dsh-molbio-tools/client.js?rev=<hash>` → 页面刷新时按需拉取、物化、执行
 `apply`。**不需要重建 Web 应用**（这正是客户端模块体系的设计目的）。
 
-与 preset 渠道共存时：preset 提供 64 个工具，bundle 提供面板；同名工具由 preset 层
+与 preset 渠道共存时：preset 提供 65 个工具，bundle 提供面板；同名工具由 preset 层
 shadow（无冲突），面板的 `remote`/`slot` 服务不受影响。
 
 ## 7. 下一步

@@ -739,6 +739,42 @@ const library = {
   harness.unmount();
 }
 
+// ── the persistent PubMed-key badge in the papers tab ──────────────────────
+
+{
+  // A key present in the store: read it once through the detail section (that
+  // read publishes the shared snapshot), then open the papers tab. The badge
+  // must be there without reopening Plugins, and must never show the value.
+  const claim = slots.registrations.find((entry) => entry.registration.name === 'plugins.detail.section');
+  const subject = { kind: 'bundle', pkg: { name: 'dsh-molbio-tools' } };
+  const configured = {
+    async describe() {
+      return { ok: true, value: { NCBI_API_KEY: { configured: true, writable: true, source: 'file' } } };
+    },
+  };
+  // The tab's own mount re-reads through the gate's reload, so the injected
+  // Remote has to answer the same way as the snapshot published below.
+  ctx.remote.credentials = configured;
+  const wrapper = claim.component({ subject, remote: configured });
+  const sectionHarness = mount(wrapper.type);
+  globalThis.__molbioTestHooks = sectionHarness;
+  sectionHarness.setProps({ subject, remote: configured });
+  await sectionHarness.render();
+  await flush();
+  sectionHarness.unmount();
+
+  const files = remote({ [`${CWD}/${DEFAULT_LIBRARY_FILE}`]: JSON.stringify(library) });
+  globalThis.__molbioTestHooks = mount(PapersPanel);
+  const harness = globalThis.__molbioTestHooks;
+  harness.setProps({ sessionId: SESSION, remote: files, useSessions });
+  await harness.render();
+  const badge = elements(harness.tree, 'div').find((node) => node.props?.['data-molbio-key-badge'] !== undefined);
+  assert.ok(badge !== undefined, 'the papers tab carries a persistent PubMed key badge');
+  assert.equal(badge.props['data-molbio-key-badge'], 'on', 'a configured key turns the badge on');
+  assert.match(texts(badge).join(''), /PubMed API key configured \(source: file\)/, 'the badge names the state and its source, never the value');
+  harness.unmount();
+}
+
 // ── effects are disposed on unmount ─────────────────────────────────────────
 
 {

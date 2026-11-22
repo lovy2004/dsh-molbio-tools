@@ -588,6 +588,8 @@ function PapersPanel({ sessionId, remote, useSessions }) {
   const [query, setQuery] = useState('');
   const [tag, setTag] = useState('');
   const [selectedId, setSelectedId] = useState(null);
+  const keyState = useNcbiKeyState();
+  const keyView = ncbiKeyView(keyState);
 
   useEffect(() => {
     if (cwd === undefined) {
@@ -694,6 +696,14 @@ function PapersPanel({ sessionId, remote, useSessions }) {
 
   return h('div', { style: styles.root },
     h('div', { style: styles.side },
+      h('div', {
+        key: 'ncbi-key',
+        'data-molbio-key-badge': keyView.tone,
+        title: keyState.message === '' ? keyView.label : keyState.message,
+        style: keyStyles.badge(keyView.tone),
+      },
+      h('span', { style: keyStyles.badgeDot(keyView.tone) }),
+      h('span', null, keyView.label)),
       search,
       tagRow,
       list),
@@ -716,6 +726,76 @@ async function readNcbiKey(remote) {
   return { phase: 'ready', ...credentialInfo(response, NCBI_KEY_REF), message: '' };
 }
 
+/**
+ * The last known state of the PubMed key, shared by every surface that shows it.
+ *
+ * The detail section reads the credential store directly because `apply` gates
+ * it behind `ctx.inject(['remote.credentials'])`. The papers tab body is
+ * registered unconditionally — a deployment without the credentials namespace
+ * still gets the tab — so it cannot read that namespace itself. This
+ * module-level snapshot is written by the gated reader and by the detail
+ * section's own reads, and the host's `credentials/reference-updated` event
+ * refreshes it, so the badge appears (and disappears) the moment a key is saved
+ * or removed anywhere, without reopening the tab.
+ */
+const ncbiKeyStore = {
+  // 'unavailable' until the gated reader publishes a real answer: a deployment
+  // with no credentials namespace never gets one, and the badge must not sit on
+  // "checking" forever there.
+  state: { phase: 'unavailable', configured: false, writable: false, message: '' },
+  listeners: new Set(),
+  reload: undefined,
+};
+
+/** Publish a key snapshot to every mounted surface. */
+function publishNcbiKey(next) {
+  ncbiKeyStore.state = next;
+  for (const listener of [...ncbiKeyStore.listeners]) listener(next);
+}
+
+/** Subscribe a surface to snapshot changes; returns the unsubscribe function. */
+function subscribeNcbiKey(listener) {
+  ncbiKeyStore.listeners.add(listener);
+  return () => { ncbiKeyStore.listeners.delete(listener); };
+}
+
+/** Tone and label for a PubMed-key snapshot (the badge is a plain div). */
+function ncbiKeyView(state) {
+  const tone = state.phase === 'ready'
+    ? (state.configured ? 'on' : 'off')
+    : state.phase === 'pending' ? 'pending' : 'error';
+  const label = state.phase === 'ready'
+    ? (state.configured
+      ? `PubMed API key configured${state.source === undefined ? '' : ` (source: ${state.source})`}`
+      : 'PubMed API key not configured in the credential store — environment keys still apply')
+    : state.phase === 'pending'
+      ? 'Checking the PubMed API key…'
+      : 'PubMed API key status unavailable';
+  return { tone, label };
+}
+
+/**
+ * The live PubMed-key snapshot for a panel surface.
+ *
+ * The detail section's status line only exists while the Plugins page is open;
+ * the papers tab shows this instead, so a configured key is visible where the
+ * literature work actually happens. It never shows the value — only whether the
+ * store reports one configured, and where it came from.
+ */
+function useNcbiKeyState() {
+  const [state, setState] = useState(ncbiKeyStore.state);
+  useEffect(() => {
+    const unsubscribe = subscribeNcbiKey(setState);
+    // Catch a publish that landed between render and subscribe, and re-read on
+    // mount: the tab can be opened long after the gate's first read, and a key
+    // may have been added through Settings in the meantime.
+    setState(ncbiKeyStore.state);
+    if (typeof ncbiKeyStore.reload === 'function') ncbiKeyStore.reload();
+    return unsubscribe;
+  }, []);
+  return state;
+}
+
 const keyStyles = {
   section: { borderTop: '1px solid rgba(127, 127, 127, 0.28)', marginTop: 16, paddingTop: 12, display: 'grid', gap: 8 },
   title: { margin: 0, fontSize: 14 },
@@ -724,6 +804,26 @@ const keyStyles = {
   row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   input: { flex: '1 1 240px', minWidth: 200, padding: '4px 8px' },
   message: { margin: 0, fontSize: 12 },
+  badge: (tone) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    margin: '8px 10px 0',
+    padding: '3px 8px',
+    borderRadius: '10px',
+    fontSize: '11px',
+    lineHeight: 1.4,
+    border: `1px solid ${tone === 'on' ? 'rgba(46, 125, 50, 0.45)' : tone === 'error' ? 'rgba(192, 57, 43, 0.45)' : 'var(--dsh-border, #e3e6ea)'}`,
+    background: tone === 'on' ? 'rgba(46, 125, 50, 0.10)' : 'transparent',
+    color: 'inherit',
+  }),
+  badgeDot: (tone) => ({
+    width: '7px',
+    height: '7px',
+    flex: '0 0 7px',
+    borderRadius: '50%',
+    background: tone === 'on' ? '#2e7d32' : tone === 'error' ? '#c0392b' : tone === 'pending' ? '#b58900' : '#9aa4ad',
+  }),
 };
 
 /**
@@ -744,7 +844,14 @@ function NcbiKeySection({ subject, remote }) {
   useEffect(() => {
     if (subjectToken === '') return undefined;
     let live = true;
-    const load = () => readNcbiKey(remote).then((next) => { if (live) setState(next); });
+    // Publishing the read into the shared snapshot is what keeps the papers
+    // tab's badge honest: this section can be unmounted and remounted, and the
+    // badge must not go stale in between.
+    const load = () => readNcbiKey(remote).then((next) => {
+      if (!live) return;
+      setState(next);
+      publishNcbiKey(next);
+    });
     load();
     // Another surface may rotate or clear the same reference (Settings, the
     // file watcher); follow the host event instead of showing a stale badge.
@@ -775,13 +882,15 @@ function NcbiKeySection({ subject, remote }) {
     const failure = remoteFailure(response);
     setDraft('');
     const next = await readNcbiKey(remote);
-    setState(failure !== ''
+    const nextState = failure !== ''
       ? { ...next, phase: 'error', message: failure }
       : next.phase === 'error'
         ? next
         : next.configured === true
           ? { ...next, message: 'Saved. The next PubMed call uses this key.' }
-          : { ...next, phase: 'error', message: 'The host accepted the write but still reports no key configured. Restart the profile and try again.' });
+          : { ...next, phase: 'error', message: 'The host accepted the write but still reports no key configured. Restart the profile and try again.' };
+    setState(nextState);
+    publishNcbiKey(nextState);
   };
   const remove = async () => {
     if (remote?.credentials === undefined || typeof remote.credentials.unset !== 'function') {
@@ -797,13 +906,15 @@ function NcbiKeySection({ subject, remote }) {
     }
     const failure = remoteFailure(response);
     const next = await readNcbiKey(remote);
-    setState(failure !== ''
+    const nextState = failure !== ''
       ? { ...next, phase: 'error', message: failure }
       : next.phase === 'error'
         ? next
         : next.configured === false
           ? { ...next, message: 'Removed. PubMed search falls back to web search.' }
-          : { ...next, phase: 'error', message: 'The host still reports a key configured after Remove.' });
+          : { ...next, phase: 'error', message: 'The host still reports a key configured after Remove.' };
+    setState(nextState);
+    publishNcbiKey(nextState);
   };
   const status = state.phase === 'loading'
     ? 'Checking the credential store…'
@@ -816,7 +927,9 @@ function NcbiKeySection({ subject, remote }) {
     h('h4', { style: keyStyles.title }, 'PubMed API key'),
     h('p', { style: keyStyles.note }, 
       'Stored in the harness credential store. molbio_pubmed_search and molbio_pubmed_abstract use it for the official PubMed E-utilities API; without it they fall back to web search.'),
-    h('p', { 'data-molbio-key-status': state.phase, style: keyStyles.status }, status),
+    h('div', { 'data-molbio-key-status': state.phase, style: { ...keyStyles.badge(ncbiKeyView(state).tone), margin: 0 } },
+      h('span', { style: keyStyles.badgeDot(ncbiKeyView(state).tone) }),
+      h('span', null, status)),
     h('div', { style: keyStyles.row },
       h('input', {
         type: 'password',
@@ -939,6 +1052,20 @@ function apply(ctx) {
   // namespace: the section simply never registers there.
   ctx.effect(() => {
     const gate = ctx.inject(['remote.credentials'], (keyCtx) => {
+      // Keep the shared badge snapshot current: read once, then follow the host
+      // event a Save/Remove (here or in Settings) emits for this reference.
+      const load = () => readNcbiKey(keyCtx.remote).then(publishNcbiKey);
+      keyCtx.effect(() => {
+        ncbiKeyStore.reload = load;
+        load();
+        const off = typeof keyCtx.remote.$on === 'function'
+          ? keyCtx.remote.$on('credentials/reference-updated', (ref) => { if (ref === NCBI_KEY_REF) load(); })
+          : undefined;
+        return () => {
+          ncbiKeyStore.reload = undefined;
+          if (typeof off === 'function') off();
+        };
+      }, 'molbio panel: NCBI key status');
       keyCtx.effect(() => keyCtx.slots.inject('plugins.detail.section', () => keyCtx.slots.register({
         name: 'plugins.detail.section',
         id: 'molbio-ncbi-key',

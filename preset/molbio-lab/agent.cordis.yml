@@ -48,12 +48,13 @@
 # list carries no comments of its own, so none appear below; provenance and the
 # upgrade rules live in this header.
 #
-# Baseline: the `standard` preset of dsh 0.2.2-rc.2 (the installed desktop
+# Baseline: the `standard` preset of dsh 0.2.2-rc.5 (the installed desktop
 # runtime, `resources/app.asar` →
 # `dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`,
 # 7286 B, sha256 e40bb192…; rows live under the `preset-standard` row's
-# `config.plugins:`). 0.2.2-rc.2 changed the preset in exactly three places,
-# all absorbed verbatim below: a new `tool-office` row
+# `config.plugins:`). rc.4 and rc.5 ship it byte-identical to rc.3 / rc.2, and
+# rc.2 changed the preset in exactly three places, all absorbed verbatim below: a new
+# `tool-office` row
 # (`@deepseek-ai/dsh-tool-office`), `customSkillDirs` on `skill-filesystem`
 # (the shipped `@deepseek-ai/dsh-agent-preset/skills` directory), and
 # `interrupt: false` on `tool-subagent-control`.

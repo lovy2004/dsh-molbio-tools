@@ -182,6 +182,7 @@ export function invocationsFor(task) {
     'enzyme-catalog': () => [{ tool: 'molbio_enzyme_lookup', args: { enzymes: ['BsaI', 'EcoRI'] } }],
 
     // primers
+    'duplex-thermo': () => [{ tool: 'molbio_duplex_thermo', args: { sequence: 'GTAAAACGACGGCCAGTGCC' } }],
     'primer-qc': () => [
       { tool: 'molbio_primer_check', args: { primer1: 'ATTACTCCTGCTCTTCCCATAC', primer2: 'CACTACTCCTCTGTACGCAC' } },
       { tool: 'molbio_primer_tm', args: { sequence: 'ATTACTCCTGCTCTTCCCATAC' } },

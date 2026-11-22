@@ -4554,6 +4554,53 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   await assert.rejects(() => run('molbio_fastq_trim', { path: at('trim-in.fq'), output_path: at('x.fq'), adapter: 'ACGTX' }), /invalid/);
 }
 
+// ── duplex thermodynamics (survey #9) ──────────────────────────────────────
+
+{
+  const seq = 'GTAAAACGACGGCCAGTGCC';
+  const thermo = await run('molbio_duplex_thermo', { sequence: seq });
+  assert.equal(thermo.length, 20);
+  assert.equal(thermo.gc_percent, 60);
+  assert.equal(
+    thermo.duplex.tm_celsius,
+    lib.primerTm(seq, { naMm: 50, mgMm: 1.5, dntpMm: 0.8, primerNm: 250 }).tm_celsius,
+    'molbio_duplex_thermo and molbio_primer_tm agree on the same sequence and conditions',
+  );
+  assert.ok(thermo.duplex.delta_g37_kcal < 0, 'a stable duplex has a negative ΔG°37');
+  assert.ok(thermo.duplex.delta_h_kcal < 0);
+  assert.ok(thermo.duplex.delta_s_salt_cal < thermo.duplex.delta_s_cal, 'the salt correction lowers the entropy');
+  assert.equal(thermo.model, 'santalucia-1998-nn');
+  assert.deepEqual(
+    Object.keys(thermo.conditions).sort(),
+    ['dntp_mm', 'mg_mm', 'na_equivalent_mm', 'na_mm', 'oligo_nm'],
+  );
+  assert.ok(Array.isArray(thermo.hairpins));
+  assert.equal(thermo.dimers.homodimer_any_tm, 0);
+  assert.equal(thermo.dimers.heterodimer_any_tm, undefined, 'no heterodimer fields without a partner');
+
+  // An exact reverse complement enables the heterodimer check.
+  const partner = reverseComplementOf(seq);
+  const paired = await run('molbio_duplex_thermo', { sequence: seq, partner });
+  assert.equal(paired.partner, partner);
+  assert.ok(paired.dimers.heterodimer_any_tm > 0);
+
+  // A mismatched partner is REFUSED (no Watson–Crick estimate for it).
+  await assert.rejects(
+    () => run('molbio_duplex_thermo', { sequence: seq, partner: 'A'.repeat(20) }),
+    /not the reverse complement/,
+  );
+  await assert.rejects(() => run('molbio_duplex_thermo', { sequence: 'ACGTNACGT' }), /A\/C\/G\/T/);
+  await assert.rejects(() => run('molbio_duplex_thermo', { sequence: seq, hairpins: 11 }), /hairpins/);
+  await assert.rejects(() => run('molbio_duplex_thermo', { sequence: seq, na_mm: -1 }), /na_mm/);
+
+  // The rendered projection carries the values a user asked for.
+  const tool = registered.find((entry) => entry.name === 'molbio_duplex_thermo');
+  const text = tool.output.render({}, thermo)[0].text;
+  assert.match(text, /Tm 63\.92 °C/);
+  assert.match(text, /ΔG°37 -23\.17 kcal\/mol/);
+  assert.match(text, /dimers: homodimer Tm any/);
+}
+
 // ── plugin surface ──────────────────────────────────────────────────────────
 
 assert.equal(plugin.name, 'dsh-molbio-tools');

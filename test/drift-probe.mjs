@@ -25,11 +25,11 @@
  * Usage: node test/drift-probe.mjs [--dsh <harness root>]
  */
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch, relativeSpecifiers, presetOrderDeclared, orderCollisions, specifierProblem } from './preset-health.mjs';
+import { compositionDrift, toolCountDrift, presetPlugins, asPresetPatch, relativeSpecifiers, presetOrderDeclared, orderCollisions, specifierProblem, compatibilityProblems } from './preset-health.mjs';
 // The three helpers this probe used to carry its own copies of. Duplicating
 // `findHarnessRoot` was the worst of them: the probe could resolve a DIFFERENT
 // harness than `preset-health` validated against, so a mutation experiment could
@@ -251,6 +251,28 @@ check('an order collision with a shipped preset is caught, a free number is not'
   const collision = orderCollisions(2, shipped);
   assert.equal(collision.length, 1, 'the collision is reported');
   assert.match(collision[0], /order 2 is already taken by the shipped preset "ptc" \(ptc\.patch\.yml\)/, collision[0]);
+});
+
+check('a manifest that does not declare the installed harness is caught', () => {
+  const version = JSON.parse(readFileSync(join(harnessRoot, 'package.json'), 'utf8')).version;
+  const real = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  const panel = JSON.parse(readFileSync(join(repoRoot, 'packages', 'molbio-panel', 'package.json'), 'utf8'));
+  assert.deepEqual(compatibilityProblems([real, panel], version), [], 'the shipped manifests declare the harness under test');
+  const absent = JSON.parse(JSON.stringify(real));
+  delete absent.dsh.compatibility.dshReleases[version];
+  assert.match(compatibilityProblems([absent], version).join('\n'), /declares dsh \S+ as absent/);
+});
+
+check('a manifest that downgrades the installed harness to unknown is caught', () => {
+  const version = JSON.parse(readFileSync(join(harnessRoot, 'package.json'), 'utf8')).version;
+  const real = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  const downgraded = JSON.parse(JSON.stringify(real));
+  downgraded.dsh.compatibility.dshReleases[version] = 'unknown';
+  assert.match(compatibilityProblems([downgraded], version).join('\n'), /as "unknown"/);
+  // A manifest from another package (the panel) is checked independently.
+  const panel = JSON.parse(readFileSync(join(repoRoot, 'packages', 'molbio-panel', 'package.json'), 'utf8'));
+  panel.dsh.compatibility.dshReleases[version] = 'compatible';
+  assert.deepEqual(compatibilityProblems([panel], version), []);
 });
 
 console.log('');

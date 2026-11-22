@@ -16,6 +16,10 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.27.0 | — | **双链热力学（survey #9）**：新增 `molbio_duplex_thermo`（ΔH/ΔS/ΔG°37/Tm + 3' 端稳定性、发夹、二聚体；错配双链拒绝估算）；NN 计算提成可复用函数；工具 64 → 65，benchmark 66 题（65/65 覆盖） | 65 |
+| 0.26.0 | — | **PubMed key 常驻标志**：Papers tab 顶部 key 状态徽标（绿/灰/红点，跟随凭据事件刷新）、检索结果标注凭据通道、详情页状态改徽标；工具数不变 | 64 |
+| 0.25.3 | — | **DSH 0.2.2-rc.5 适配**：上游 `standard` 与 rc.3 / rc.2 逐字节一致，preset 零改动；两份清单补上 rc.5 `compatible`、rc.4 `unknown`；工具数不变 | 64 |
+| 0.25.2 | — | **DSH 0.2.2-rc.3 适配**：上游 `standard` 与 rc.2 逐字节一致，preset 零改动；新增"已安装 harness 必须在两份清单里声明为 compatible"的守卫；工具数不变 | 64 |
 | 0.25.1 | — | **DSH 0.2.2-rc.2 适配**：preset 逐字吸收上游 3 处变更（`tool-office` 行、`skill-filesystem` 的 `customSkillDirs`、`tool-subagent-control` 的 `interrupt: false`，29 → 30 行）；`preset-health` 支持未求值的 `!!js`；`contract` 兼容桌面版压缩产物；工具数不变 | 64 |
 | 0.25.0 | — | **浏览器内真实 3D 结构预览**：Molbio 面板读 PDB/mmCIF/SDF-MOL V2000，软件光栅化 ball-and-stick / space-filling，拖拽旋转、滚轮缩放；工具数不变 | 64 |
 | 0.24.1 | — | **输入边界与数据安全加固**：BibTeX 不再覆盖文献库、相对读取按会话工作区、批量/glob/并发声明修复、20 万行输入不再 `RangeError`；工具数不变 | 64 |

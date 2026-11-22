@@ -10,6 +10,134 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.27.0] — 2026-11-22（molbio_duplex_thermo：双链热力学，survey #9）
+
+**工具数 64 → 65，benchmark 65 → 66 题（65/65 覆盖）。** 候选池里排序第 9 的"双链热力学扩展"：
+引物/探针工具一直只报 Tm，用户问"这条探针的 ΔG 是多少、有没有发夹/二聚体"时没有工具可答。
+
+### 1. 新工具 `molbio_duplex_thermo`
+
+- 对一条 DNA 寡核苷酸给出 **ΔH（kcal/mol）、ΔS（cal/mol·K，原始与盐校正）、ΔG°37、Tm**，
+  参数与 `molbio_primer_tm` / `molbio_primer_check` **同一套**（SantaLucia 1998 NN、
+  von Ahsen 2001 Mg 当量 + 盐校正）——`test/smoke.mjs` 断言同一序列在同一条件下两个工具的
+  Tm **逐位相等**。
+- 附带 Primer3 同款结构检查：3' 端稳定性 ΔG、发夹（3–8 bp stem / 3–10 nt loop，按 Tm 排序）、
+  自二聚体，以及给出 `partner` 时的异源二聚体 Tm（any / 3'-end）。
+- **错配双链被拒绝，而不是估算**：`partner` 不是精确反向互补时报出错配位置并抛
+  `MolbioInputError`。Allawi/SantaLucia 的错配参数集不在这套实现里，用 Watson–Crick 参数硬算
+  会得到一个"看起来合理、实际差几 kcal/mol"的数——这比不给答案更糟。IUPAC 简并码同理拒绝。
+- 条件旋钮：`na_mm` / `mg_mm` / `dntp_mm` / `oligo_nm` / `hairpins`（0 关闭结构扫描），全部范围校验。
+
+### 2. 实现
+
+- `lib.mjs`：把原来只服务于 `primerTm` 的 NN 计算提成导出的 `duplexThermodynamics()`；
+  `primerTm` 变成它的四舍五入包装，**已发布数值零变化**（既有 Tm 断言未改）。
+- 新模块 `thermo.mjs`：输入校验、partner 精确性检查、发夹/二聚体汇总。
+- `index.mjs`：注册 `molbio_duplex_thermo`（第 65 个工具），并在 system prompt 的引物段点名。
+
+### 3. 测试、benchmark 与文档
+
+- `test/smoke.mjs`：Tm 一致性、ΔG/ΔH/ΔS 符号、盐校正、partner 通路、错配/简并码/参数越界拒绝、
+  渲染文本。
+- benchmark 新任务 `duplex-thermo`（full 档，6 条 tool 断言）：66 题、覆盖 65/65。
+- preset 与 README 的工具数同步 65；`benchmark-profile` 的 preset 工具数守卫随之为
+  13 rows / 65 tools。
+- 根包 `0.26.0 → 0.27.0`；面板包 `0.1.15 → 0.1.16`——`lib.mjs` 在浏览器半里，提取
+  `duplexThermodynamics()` 改变了打包产物，两份 `lib/client.js` 已重建。
+
+## [0.26.0] — 2026-11-22（PubMed key 常驻标志：Papers 徽标 + 检索结果标注）
+
+**工具数不变（64），行为只在"告知"层面变化。** 配了 NCBI API key 却看不出它是否生效，是这一版要修的
+可用性问题：凭据只写在插件详情页的一行状态里，离开插件页就没有任何提示。
+
+### 1. Papers 标签页的常驻徽标
+
+Papers tab 顶部新增常驻状态徽标，直接读宿主凭据库（永不回显值）：
+
+- 已配置 → 绿点 + `PubMed API key configured (source: …)`；
+- 未配置 → 灰点 + `PubMed API key not configured in the credential store — environment keys still apply`；
+- 读不到 → 红点 + `PubMed API key status unavailable`。
+
+徽标订阅宿主的 `credentials/reference-updated`：在插件页、Settings 或 `.credentials.yaml` 里改动，
+不需要重开标签页就刷新。实现上把状态放在模块级快照里（徽标是普通 DOM，因此不额外要求
+`remote.credentials` 注入），由 `apply` 里唯一的 `ctx.inject(['remote.credentials'])` 喂养；
+详情页的 Save / Remove 也会同步发布。
+
+### 2. 检索结果写明凭据通道
+
+`molbio_pubmed_search` 的渲染行把通道写出来：`via PubMed E-utilities (NCBI API key)` 或
+`via web search (no NCBI API key)`。对话记录里也能看出这次调用是否用了 key，而不只是 "E-utilities"。
+
+### 3. 详情页状态改成同款徽标
+
+插件详情页的 `PubMed API key` 一节，状态行由纯文本改为带色点的徽标（文字不变），与 Papers tab 一致。
+
+### 4. 测试与产物
+
+- `test/panel-render.mjs`：新增徽标用例（配置态 → 绿点 + 来源；永不出现 key 值）。
+- `test/client.mjs`：新增 `molbio panel: NCBI key status` 效果的断言。
+- `lib/client.js` 与 `packages/molbio-panel/lib/client.js` 重新构建（485.1 KB）。
+- 根包 `0.25.3 → 0.26.0`；面板包 `0.1.14 → 0.1.15`。
+
+## [0.25.3] — 2026-11-22（DSH 0.2.2-rc.5 适配：上游 preset 未变，声明与版本跟进）
+
+**工具数不变（64），benchmark 不变（65 题）。** 0.25.2 的验收基线是 **0.2.2-rc.3**；这一版把
+基线推到 **0.2.2-rc.5**，并在本机桌面版 `app.asar` 上重跑了整套守卫。
+
+### 1. rc.5 的上游 `standard` 与 rc.3 / rc.2 逐字节一致
+
+桌面端 `@deepseek-ai/dsh-desktop-runtime` 为 0.2.2-rc.5（Electron 44.7.0 / Node 24.21.0），
+内嵌 338 个 `@deepseek-ai/*` 包全部为 rc.5；`dsh-web-app/presets/standard.patch.yml` 仍是
+**7286 B，sha256 `e40bb192…`**，因此 preset 行清单零改动：`preset-health` 30 行全绿，
+`drift-probe` 的 17 个突变全部被抓到。`rc.4` 未在任何真实安装上运行过，故仍为 `unknown`。
+
+### 2. 守卫直接跑在 rc.5 的 `resources/app.asar` 上
+
+`contract` 17 / `preset-health` 30 行 / `drift-probe` 18 项 / `client-mount` / `smoke` 64 工具 /
+`bench:offline` 65 题全部通过：
+`ELECTRON_RUN_AS_NODE=1 "<安装目录>/DeepSeek Harness.exe" test/<guard>.mjs --dsh "<安装目录>/resources/app.asar/dsh"`。
+宿主自身的 `evaluatePluginCompatibility()`（`includePrerelease: true`）对两份清单在 rc.5 上均返回接受，
+`engines.dsh` 无需改动。
+
+### 3. 声明与版本
+
+- 两个包 `dshReleases` 增加 `0.2.2-rc.4: unknown` 与 `0.2.2-rc.5: compatible`；`engines.dsh` 不变。
+- 根包 `0.25.2 → 0.25.3`；面板包 `0.1.13 → 0.1.14`（只改清单声明，`lib/client.js` 未变）。
+- CI（`test.yml` / `release.yml`）钉的 `@deepseek-ai/dsh` 由 `0.2.2-rc.3` 提到 `0.2.2-rc.5`
+  （registry 的 `latest` 与 `next` 均为 rc.5）。
+
+## [0.25.2] — 2026-11-13（DSH 0.2.2-rc.3 适配：上游未变，声明与守卫跟进）
+
+**工具数不变（64），benchmark 不变（65 题）。** 0.25.1 的验收基线是 **0.2.2-rc.2**；这一版把
+基线推到 **0.2.2-rc.3**，并在本机桌面版 `app.asar` 上重跑了整套守卫。
+
+### 1. rc.3 的上游 `standard` 与 rc.2 逐字节一致
+
+桌面端 `@deepseek-ai/dsh-desktop` 与内嵌的 `dsh-desktop-runtime` 均为 0.2.2-rc.3（Electron
+44.7.0 / Node 24.21.0）。上游 `dsh-web-app/presets/standard.patch.yml` 仍是 **7286 B，
+sha256 `e40bb192…`**，与 rc.2 完全相同，因此 preset 行清单零改动：`preset-health` 30 行全绿，
+`drift-probe` 的 17 个突变全部被抓到。
+
+### 2. 守卫直接跑在 `resources/app.asar` 上
+
+桌面运行时把包封在 asar 里，普通 Node 读不到。用
+`ELECTRON_RUN_AS_NODE=1 "<安装目录>/DeepSeek Harness.exe" test/<guard> --dsh
+"<安装目录>/resources/app.asar/dsh"` 即可让守卫读到真实的运行时：`contract` 17 /
+`preset-health` 30 行 / `drift-probe` 18 项 / `client-mount` 全部通过。
+
+### 3. 新增守卫：声明必须跟随实际安装的 harness
+
+0.25.1 之前，`dshReleases` 少一个版本是**静默**的——没有测试读它，于是"装到了新版本却仍标
+unknown"只能靠人发现（0.2.2-rc.3 就是这样发现的）。`test/preset-health.mjs` 现在把两份清单
+（根包与面板包）的 `dshReleases[<已安装版本>]` 一起校验，必须为 `compatible`；
+`drift-probe` 用"删掉条目"与"改成 unknown"两个突变证明它会失败。
+
+### 4. 声明与版本
+
+- 两个包 `dshReleases` 增加 `0.2.2-rc.3: compatible`；`engines.dsh` 不变。
+- CI（`test.yml` / `release.yml`）钉 `@deepseek-ai/dsh@0.2.2-rc.3`。
+- 根包 `0.25.1 → 0.25.2`；面板包 `0.1.12 → 0.1.13`（只改清单声明，`lib/client.js` 未变）。
+
 ## [0.25.1] — 2026-11-12（DSH 0.2.2-rc.2 适配：preset 吸收三处上游变更；契约守卫兼容压缩产物）
 
 **工具数不变（64），benchmark 不变（65 题）。** 0.25.0 的验收基线是 **0.2.2-rc.1**；这一版把

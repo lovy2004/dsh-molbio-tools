@@ -156,6 +156,7 @@ assert.deepEqual(effects, [
   'molbio panel: molbio_sequence_logo card',
   'molbio panel: molbio_grna_design card',
   'molbio panel: NCBI key section gate',
+  'molbio panel: NCBI key status',
   'molbio panel: NCBI key section',
 ]);
 assert.deepEqual(injectedDeps, [['remote.credentials']], 'the key section waits for the credentials Remote namespace');

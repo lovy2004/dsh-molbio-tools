@@ -22,7 +22,10 @@
       "0.2.1-rc.4": "unknown",
       "0.2.1-rc.5": "compatible",
       "0.2.2-rc.1": "compatible",
-      "0.2.2-rc.2": "compatible"
+      "0.2.2-rc.2": "compatible",
+      "0.2.2-rc.3": "compatible",
+      "0.2.2-rc.4": "unknown",
+      "0.2.2-rc.5": "compatible"
     }
   }
 }
@@ -33,7 +36,7 @@
 `@deepseek-ai/dsh-app-boot` 的 `unmetRequirements`）：带 prerelease 选项时 `<0.3.0`
 会放行 `0.3.0-alpha.1`，而 `-0` 不会。
 
-### 为什么 0.2.1-rc.2 / rc.3 / rc.5 与 0.2.2-rc.1 / rc.2 是 compatible、0.2.1-rc.1 / rc.4 是 unknown
+### 为什么 0.2.1-rc.2 / rc.3 / rc.5 与 0.2.2-rc.1 / rc.2 / rc.3 / rc.5 是 compatible、0.2.1-rc.1 / rc.4 与 0.2.2-rc.4 是 unknown
 
 | 版本 | 记录 | 依据 |
 | --- | --- | --- |
@@ -44,12 +47,15 @@
 | 0.2.1-rc.5 | compatible | 0.22.2 的发布基线（CI 曾钉该版本）。在本机 DSH 桌面版 0.2.1-rc.5 上重跑：安装 → 启动 HTTP 200 → `agentPresets/list` 的 `broken` 为空且 molbio-lab 的 `tool-molbio` 为 `fiberPhase: "active"` → 卸载无残留；`contract` 17 / `preset-health` 30 行 / `drift-probe` 16 / `smoke` 60 工具 / `bench:offline` 61 题全绿。上游 `standard` 与 rc.3 **逐字节一致**（6799 B，同一 sha256） |
 | 0.2.2-rc.1 | compatible | 0.23.0 的发布基线（CI 钉该版本）。这一版上游删除了 `@deepseek-ai/dsh-tool-subagent-control/list-agents` 导出（`list_agents` 并入主入口），preset 因此删掉该行（30 → 29），`tool-subagent` 改用 `modelSelection`/`modelDiscovery`、`tool-fs` 补 `applyPatch: false`。在**桌面版 `app.asar` 与 npm 全局安装**两份 0.2.2-rc.1 上核对（两者 `standard.patch.yml` **逐字节一致**，6858 B，sha256 `3006CC3780CDDAA7FB0089E5854E6BBEF4409CF1D425930FD835226B95660AFD`）；一次性 tarball Profile：安装 → 启动 HTTP 200（40 311 B，boot 图含 `dsh-molbio-tools/client.js`）→ `agentPresets/list` 的 `broken` 为空、`tool-molbio` 为 `fiberPhase: "active"` → 卸载无残留；`contract` 17 / `preset-health` 29 行 / `drift-probe` 16 项（15 个突变）/ `smoke` 62 工具 / `bench:offline` 63 题全绿；定向真实模型跑分 `intron-qpcr` / `protein-charge` / `dotplot` 3 题 3/3（2026-11-05，541,946 tokens）。**0.25.1 起**：preset 采用 rc.2 新增的 `tool-office` 行，该包在 rc.1 不存在，molbio-lab 会以 `MODULE_NOT_FOUND` 无法挂载（0.25.1 的 `preset-health --dsh <rc.1>` 实测）；rc.1 上的用户应留在 0.25.0 |
 | 0.2.2-rc.2 | compatible | 0.25.1 的验收基线（CI 钉该版本）。上游 `standard` 相对 rc.1 只变 3 处：新增 `tool-office` 行、`skill-filesystem` 的 `customSkillDirs`（一个 `!!js` 路径）、`tool-subagent-control` 的 `interrupt: false`；preset 逐字吸收（29 → 30 行），`preset-health` 同时学会校验**未求值**的 `!!js` 配置。桌面版 `app.asar` 与 npm tarball 的 `standard.patch.yml` **逐字节一致**（7286 B，sha256 `E40BB192ED3B835312C2ACD2CCD64D3BC4B85F80A7BC95B132CB18FBEE190B5D`）。运行时流程在 **桌面版 0.2.2-rc.2** 上跑：临时 profile → 启动 HTTP 200（41 393 B，boot 图含 `dsh-molbio-tools/client.js`）→ `agentPresets/list` 列出 molbio-lab、无 `broken` → `pluginInventory/list` 的 `tool-molbio` 为 `fiberPhase: "active"`；`contract` 17（在桌面 rc.2 的压缩产物上通过，同一套断言在 npm rc.1 未压缩产物上同样通过）/ `preset-health` 30 行 / `drift-probe` 16 项（15 个突变）/ `smoke` 64 工具 / `bench:offline` 65 题全绿 |
+| 0.2.2-rc.3 | compatible | 0.25.2 的验收基线。桌面版 `app.asar`（`@deepseek-ai/dsh-desktop` / `dsh-desktop-runtime` 均为 0.2.2-rc.3，Electron 44.7.0 / Node 24.21.0）实测：上游 `standard.patch.yml` **与 rc.2 逐字节一致**（7286 B，sha256 `E40BB192…`），因此 preset 零改动；守卫直接对 `resources/app.asar` 运行（`ELECTRON_RUN_AS_NODE=1` + `--dsh app.asar/dsh`）：`contract` 17 / `preset-health` 30 行 / `drift-probe` 18 项（17 个突变）/ `client-mount` / `smoke` 64 工具 / `bench:offline` 65 题全绿。本版新增守卫：`preset-health` 要求已安装 harness 版本在两份清单里声明为 `compatible`。 |
+| 0.2.2-rc.4 | unknown | 没有在真实安装上跑过（registry 上有该版本，本机未安装）；不能因为"补丁号在 `engines.dsh` 范围内"就写成 compatible |
+| 0.2.2-rc.5 | compatible | 0.25.3 的验收基线。桌面版 `app.asar`（`@deepseek-ai/dsh-desktop-runtime` 为 0.2.2-rc.5，Electron 44.7.0 / Node 24.21.0，338 个 `@deepseek-ai/*` 包全部 rc.5）实测：上游 `standard.patch.yml` **与 rc.3 / rc.2 逐字节一致**（7286 B，sha256 `E40BB192…`），因此 preset 零改动；守卫直接对 `resources/app.asar` 运行：`contract` 17 / `preset-health` 30 行 / `drift-probe` 18 项（17 个突变）/ `client-mount` / `smoke` 64 工具 / `bench:offline` 65 题全绿。宿主的 `evaluatePluginCompatibility()` 对两份清单返回接受。**未重跑**一次性 Profile 的安装 / 启动流程，证据截止到"守卫跑在真实 rc.5 asar 上" |
 
 ## 2. 环境
 
 | 项 | 值 |
 | --- | --- |
-| DSH | `0.2.2-rc.2`（桌面版 `app.asar` 上跑运行时流程；npm tarball 的 `standard.patch.yml` 与桌面版逐字节一致） |
+| DSH | `0.2.2-rc.5`（桌面版 `app.asar`：`@deepseek-ai/dsh-desktop-runtime` 为 0.2.2-rc.5，Electron 44.7.0；上游 `standard.patch.yml` 与 rc.3 / rc.2 逐字节一致，7286 B / sha256 `e40bb192…`） |
 | Node.js | `v26.12.1`（命令行验证；桌面运行时内嵌 `24.21.0`，Electron 44.7.0） |
 | pnpm | `12.15.0`（`dsh plugin` 安装用） |
 | 平台 | Windows（win32 x64） |
@@ -150,10 +156,10 @@ pnpm 的 hoisted linker 会在 `node_modules/` 留下一个指向仓库目录的
 ## 5. 仓库内验证（同一基线）
 
 ```
-node test/contract.mjs       → 17 checks passed（host 契约、client 产物、tarball 覆盖、声明回退的突变自检；npm rc.1 与桌面 rc.2 压缩产物各一份）
-node test/preset-health.mjs  → all 30 rows load on dsh 0.2.2-rc.2
+node test/contract.mjs       → 17 checks passed（host 契约、client 产物、tarball 覆盖、声明回退的突变自检；对桌面 rc.5 的 asar 压缩产物运行）
+node test/preset-health.mjs  → all 30 rows load on dsh 0.2.2-rc.5, both manifests declare it compatible
 node test/smoke.mjs          → registered 64 tools, all smoke tests passed
-node test/drift-probe.mjs    → 16/16（15 个突变全部被抓到）
+node test/drift-probe.mjs    → 18/18（17 个突变全部被抓到，含"清单未声明该版本"与"降级为 unknown"）
 node benchmark/run.mjs --offline → 65 tasks checked against the shipped tools
 ```
 

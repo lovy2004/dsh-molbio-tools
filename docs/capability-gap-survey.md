@@ -7,7 +7,8 @@ deterministic algorithms in a few hundred lines of dependency-free JS with **no 
 binaries, network, or reference databases**?
 
 > **Status note (0.24.0).** The baseline below is the 52-tool package this survey was written
-> against. Since then rows 1–7, 11, 12, 23, 30, 34, 40 and the Cas-family half of row 20 have shipped
+> against. Since then rows 1–9, 11, 12, 23, 30, 34, 40 and the Cas-family half of row 20 have shipped
+> (row 9, duplex thermodynamics, shipped as `molbio_duplex_thermo` in 0.27.0).
 > (see [history.md](history.md) and the roadmap); the remaining rows are still candidates unless
 > §3 names a blocker. The rankings are left as written so the original judgement can be audited.
 

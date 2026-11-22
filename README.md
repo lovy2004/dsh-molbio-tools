@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **64 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **65 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 64 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 65 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：在 DSH 插件页安装（3 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**64 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**65 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。**右栏的 Molbio / Papers 两个面板也随这个包
 一起装好**，不需要再装 `dsh-molbio-panel`。
 
@@ -57,7 +57,9 @@
 
 **（可选）PubMed API key**：重启后打开 **插件 → 已安装插件 → `dsh-molbio-tools` 详情页**，
 在 **PubMed API key** 一节粘贴 NCBI key 并点 **Save**。它写进 DSH 凭据库（`~/.dsh/.credentials.yaml`），
-不需要编辑文件、也不进环境变量，下一次检索即生效。没有 key 时检索仍走原来的 web 检索。
+不需要编辑文件、也不进环境变量，下一次检索即生效。保存后 **Papers** 标签页顶部会常驻一枚状态徽标
+（`PubMed API key configured (source: …)`），不用回插件页确认是否成功；没有 key 时徽标显示 `not configured`。
+没有 key 时检索仍走原来的 web 检索。
 
 ### 次选：命令行安装
 
@@ -104,9 +106,9 @@ dsh plugin --profile web update dsh-molbio-tools
 | 层（同一个 `cordis.patch.yml` 里的两段） | 作用 |
 | --- | --- |
 | `molbio-client` → `./host.mjs` | 只插一行**惰性宿主锚点**，不注册任何工具 |
-| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，64 个工具在这一层里 |
+| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，65 个工具在这一层里 |
 
-所以 64 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+所以 65 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
 > **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
@@ -122,7 +124,7 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 只要浏览器面板
 
-如果只想要图形面板、不想让该 profile 装 64 个工具（连模式都不装），装面板专用包即可
+如果只想要图形面板、不想让该 profile 装 65 个工具（连模式都不装），装面板专用包即可
 （见[浏览器面板](#浏览器面板可选)）。**它和 `dsh-molbio-tools` 二选一**：两者注册同一组右栏 tab
 （`dsh-molbio-tools` / `dsh-molbio-tools/papers`），同时装会重复注册并报
 `tab type id ... is already registered`。同样在 **插件 → 添加插件** 里输入 `dsh-molbio-panel`，
@@ -138,7 +140,7 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 
 ## 它会做什么
 
-64 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+65 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
 ### 1. 序列分析与酶切（9）
@@ -163,6 +165,7 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_design_intron_primers` | **跨内含子 qPCR 引物**：给定基因组序列 + 外显子坐标，**反向引物**跨外显子-外显子连接点（正向引物在其上游、位于单个外显子内），基因组 DNA 不会扩增；F 在上游、R 是按 5'→3' 可直接订购的分子（可设最小基因组间距） |
 | `molbio_design_taqman` | **TaqMan（水解探针）测定设计**：引物对 + 探针一次给出（探针 5' 端非 G、Tm 比引物高 5 °C 起、无 run/重复、不与引物二聚化），每条候选附逐项罚分；支持 **MGB 化学**（更短、按未修饰 NN Tm 报告并明确标注修饰未建模）和**订购 CSV**（引物/探针、5'/3' 修饰、规模、纯化） |
 | `molbio_primer_tm` | 单条引物 Tm 估算（Na⁺/Mg²⁺/dNTP 盐校正） |
+| `molbio_duplex_thermo` | **双链热力学**：ΔH、ΔS（原始/盐校正）、ΔG°37、Tm，外加 3' 端稳定性 ΔG、发夹、同源/异源二聚体；`partner` 不是精确反向互补时明确拒绝，而不是用 Watson–Crick 参数估算错配双链 |
 | `molbio_primer_check` | 引物结构筛查：重复序列、3' 端加权的自互补、发夹、引物对二聚体，以及 Primer3 同款热力学指标 |
 | `molbio_multiplex_check` | **多重 PCR 互扰检查**：面板内所有引物对的二聚体、3' 尾的脱靶与跨模板退火、扩增子是否能在胶上分辨，并给出重设计建议；另给出**退火温度建议**（最低引物 Tm − offset，含范围与 Tm 离散警告）和**引物浓度起始计划**（按扩增子大小比例配平） |
 
@@ -594,7 +597,8 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   （esearch + esummary）。没有 key 时检索仍走原来的 web 检索通路，行为不变。
 - **优先把 key 放凭据库，而不是环境变量。** 凭据库是 `~/.dsh/.credentials.yaml`（`refs:` 下写
   `NCBI_API_KEY: …`；图形入口是**插件 → 已安装插件 → dsh-molbio-tools → PubMed API key**）：
-  不进环境、仅属主可读、改完热重载、下一次调用即生效。环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具，`echo $env:NCBI_API_KEY`
+  不进环境、仅属主可读、改完热重载、下一次调用即生效。配置状态在 **Papers** tab 顶部有常驻徽标，
+  检索结果行也会标 `via PubMed E-utilities (NCBI API key)`。环境变量会被**每个子进程继承**——包括 agent 自己的 shell 工具，`echo $env:NCBI_API_KEY`
   就能读出来，而且明文存在用户环境里；内联 `api_key` 还会进入对话记录与工具卡片。
   > 凭据库不是对 agent 的硬隔离（agent 与你是同一个 OS 用户，刻意去读文件仍可能），但它消除了
   > 「所有 shell 子进程自动继承」这条泄漏路径——这正是环境变量的主要问题。
@@ -693,7 +697,9 @@ node <包目录>\preset\install.mjs --profile web --check  # 只报告，不组�
 
 **PubMed 的 API key 怎么配？**
 推荐用**插件详情页**：插件 → 已安装插件 → `dsh-molbio-tools` → **PubMed API key**，粘贴后点 Save
-（写入 DSH 凭据库的 `NCBI_API_KEY`，不进环境变量，下一次检索生效）。也可以手动在
+（写入 DSH 凭据库的 `NCBI_API_KEY`，不进环境变量，下一次检索生效）。保存后 **Papers** tab 顶部会常驻
+显示 `PubMed API key configured (source: …)`；检索结果行会标 `via PubMed E-utilities (NCBI API key)`，
+两者都能确认 key 已生效。也可以手动在
 `~/.dsh/.credentials.yaml` 的 `refs:` 下加一行 `NCBI_API_KEY: 你的key`。
 也可以用环境变量 `NCBI_API_KEY`，或在单次调用里传 `api_key`，但两者都更容易泄漏：**环境变量会被
 agent 的 shell 子进程继承**，内联参数会出现在对话记录与工具卡片里。有 key 时走官方 E-utilities
@@ -726,13 +732,13 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 65 题（覆盖 64/64 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 66 题（覆盖 65/65 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
 > `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
 > （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
-> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 64/64 覆盖），
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 65/65 覆盖），
 > `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
@@ -759,7 +765,7 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 64 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 65 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）

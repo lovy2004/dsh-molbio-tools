@@ -71,6 +71,7 @@ import { entryStats, parseFasta, parseFastq, toFasta, toFastq } from './seqio.mj
 import { addExperiment, addProtocol, loadRecords, recordPath, saveRecords, updateProtocol } from './records.mjs';
 import { toBibtex } from './papers.mjs';
 import { parseXml } from './snapgene.mjs';
+import { analyzeDuplex } from './thermo.mjs';
 import { smithWaterman } from './align.mjs';
 import { conservationAnalysis, normalizeAlignedRow, normalizeMsaSequence, pairwiseIdentities, progressiveAlign } from './msa.mjs';
 import { ALIGN_POST_LIMITS, CONSENSUS_MODES, alignmentPostprocess } from './align-post.mjs';
@@ -874,6 +875,116 @@ function primerReport(seq) {
     end_gc_count: endGcCount5(seq),
   };
 }
+
+const duplexThermoTool = define({
+  name: 'molbio_duplex_thermo',
+  description: 'Full nearest-neighbour thermodynamics of ONE DNA duplex: enthalpy (ΔH), entropy (ΔS, raw and salt-corrected), ΔG at 37 °C, and Tm, using the SAME SantaLucia (1998) parameters and von Ahsen (2001) salt/magnesium model as molbio_primer_tm and molbio_primer_check. Also reports the 3\'-end stability and the structure checks the primer tools score: hairpin stems (3-8 bp stems, 3-10 nt loops) and self-dimer / hetero-dimer melting temperatures. A partner may be supplied only when it is the exact reverse complement of sequence; mismatched duplexes have separate published parameter sets this tool does not carry, so they are REFUSED (with the mismatching positions named) rather than estimated. All values are design estimates, not measurements.',
+  parameters: {
+    type: 'object',
+    required: ['sequence'],
+    properties: {
+      sequence: requiredString('One strand, 5\'→3\', A/C/G/T only, 4-200 bases.'),
+      partner: { type: 'string', description: 'Optional opposite strand (5\'→3\'). Must be the exact reverse complement of sequence; a mismatched partner is refused rather than estimated.' },
+      na_mm: optionalNumber('Monovalent cation concentration in mM (default 50).'),
+      mg_mm: optionalNumber('Magnesium concentration in mM (default 1.5).'),
+      dntp_mm: optionalNumber('Total dNTP concentration in mM (default 0.8; only affects the Mg equivalence term when Mg > dNTP).'),
+      oligo_nm: optionalNumber('Strand concentration in nM used for Tm and the structure checks (default 250).'),
+      hairpins: { type: 'integer', description: 'How many hairpin stems to report, highest Tm first (0-10, default 3; 0 disables the scan).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['sequence', 'length', 'gc_percent', 'conditions', 'duplex', 'end_stability_3p_kcal', 'hairpins', 'dimers', 'model'],
+    properties: {
+      sequence: { type: 'string' },
+      partner: { type: 'string' },
+      length: { type: 'integer' },
+      gc_percent: { type: 'number' },
+      conditions: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['na_mm', 'mg_mm', 'dntp_mm', 'oligo_nm', 'na_equivalent_mm'],
+        properties: {
+          na_mm: { type: 'number' },
+          mg_mm: { type: 'number' },
+          dntp_mm: { type: 'number' },
+          oligo_nm: { type: 'number' },
+          na_equivalent_mm: { type: 'number' },
+        },
+      },
+      duplex: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['delta_h_kcal', 'delta_s_cal', 'delta_s_salt_cal', 'delta_g37_kcal', 'tm_celsius'],
+        properties: {
+          delta_h_kcal: { type: 'number' },
+          delta_s_cal: { type: 'number' },
+          delta_s_salt_cal: { type: 'number' },
+          delta_g37_kcal: { type: 'number' },
+          tm_celsius: { type: 'number' },
+        },
+      },
+      end_stability_3p_kcal: { type: 'number' },
+      hairpins: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['start', 'stem', 'loop', 'tm_celsius', 'delta_g37_kcal'],
+          properties: {
+            start: { type: 'integer' },
+            stem: { type: 'integer' },
+            loop: { type: 'integer' },
+            tm_celsius: { type: 'number' },
+            delta_g37_kcal: { type: 'number' },
+          },
+        },
+      },
+      dimers: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['homodimer_any_tm', 'homodimer_end_tm'],
+        properties: {
+          homodimer_any_tm: { type: 'number' },
+          homodimer_end_tm: { type: 'number' },
+          heterodimer_any_tm: { type: 'number' },
+          heterodimer_end_tm: { type: 'number' },
+        },
+      },
+      model: { type: 'string' },
+    },
+  },
+  render(value) {
+    const { duplex, conditions } = value;
+    const lines = [
+      `${value.length} bp, GC ${value.gc_percent}% — Tm ${duplex.tm_celsius} °C, ΔG°37 ${duplex.delta_g37_kcal} kcal/mol (ΔH ${duplex.delta_h_kcal} kcal/mol, ΔS ${duplex.delta_s_cal} cal/mol·K; salt-corrected ΔS ${duplex.delta_s_salt_cal})`,
+      `conditions: ${conditions.na_mm} mM Na+, ${conditions.mg_mm} mM Mg2+, ${conditions.dntp_mm} mM dNTP, ${conditions.oligo_nm} nM strand (Na+ equivalent ${conditions.na_equivalent_mm} mM); 3'-end stability ΔG ${value.end_stability_3p_kcal} kcal/mol`,
+    ];
+    if (value.partner !== undefined) lines.push('partner: exact reverse complement (Watson–Crick duplex)');
+    if (value.hairpins.length === 0) {
+      lines.push('hairpins: none in the 3-8 bp stem / 3-10 nt loop window');
+    } else {
+      for (const hit of value.hairpins) {
+        lines.push(`hairpin: stem ${hit.stem} bp + loop ${hit.loop} nt from position ${hit.start} — Tm ${hit.tm_celsius} °C, ΔG°37 ${hit.delta_g37_kcal} kcal/mol`);
+      }
+    }
+    const d = value.dimers;
+    lines.push(`dimers: homodimer Tm any ${d.homodimer_any_tm} °C / 3'-end ${d.homodimer_end_tm} °C${d.heterodimer_any_tm === undefined ? '' : `; heterodimer any ${d.heterodimer_any_tm} °C / 3'-end ${d.heterodimer_end_tm} °C`}`);
+    lines.push('SantaLucia 1998 nearest-neighbour estimate, salt-corrected (von Ahsen 2001); Watson–Crick duplexes only, not a measurement.');
+    return lines.join('\n');
+  },
+  execute(args) {
+    return analyzeDuplex(args.sequence, {
+      partner: args.partner,
+      na_mm: args.na_mm,
+      mg_mm: args.mg_mm,
+      dntp_mm: args.dntp_mm,
+      oligo_nm: args.oligo_nm,
+      hairpins: args.hairpins,
+    });
+  },
+});
 
 const primerCheckTool = define({
   name: 'molbio_primer_check',
@@ -7872,7 +7983,13 @@ const pubmedSearchTool = (ctx) => define({
     },
   },
   render(value) {
-    const via = value.backend === 'pubmed-eutils' ? ' via PubMed E-utilities' : '';
+    // State the credential channel in the transcript: a user who just stored a
+    // key has to be able to tell that this call actually used it, and a caller
+    // without one has to see why the fallback ran. Only the CHANNEL is named —
+    // never a key, which never appears in a result.
+    const via = value.backend === 'pubmed-eutils'
+      ? ' via PubMed E-utilities (NCBI API key)'
+      : ' via web search (no NCBI API key)';
     if (value.sources.length === 0) return `no results for "${value.query}"${via}`;
     const matches = value.total_matches === undefined
       ? ''
@@ -8077,7 +8194,7 @@ const paperRemoveTool = (ctx) => define({
 
 const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available with the molbio_* prefix:
 - Sequence math: molbio_reverse_complement, molbio_gc_content, molbio_translate, molbio_restriction_sites, molbio_methylation_check (which enzymes a Dam/Dcm-methylated template blocks, plus the enzymes that survive), molbio_double_digest (two enzymes: per-enzyme and combined fragments + whether they share a buffer).
-- Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check, molbio_design_taqman (hydrolysis-probe assay: primer pair + probe with the no-5'-G / probe-Tm-margin rules; probe_chemistry='mgb' for shorter MGB probes with an explicitly unmodified NN Tm, and save_path for an ordering CSV of F/R/P with modifications/scale/purification), molbio_multiplex_check (whether several primer pairs can share one tube: cross-dimers, cross-template annealing, gel-resolvable amplicon sizes, plus an annealing-temperature recommendation and a size-balanced starting primer-concentration plan).
+- Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check, molbio_duplex_thermo (ΔH/ΔS/ΔG°37/Tm for one exact duplex plus hairpin and dimer checks; a mismatched partner is refused, not estimated), molbio_design_taqman (hydrolysis-probe assay: primer pair + probe with the no-5'-G / probe-Tm-margin rules; probe_chemistry='mgb' for shorter MGB probes with an explicitly unmodified NN Tm, and save_path for an ordering CSV of F/R/P with modifications/scale/purification), molbio_multiplex_check (whether several primer pairs can share one tube: cross-dimers, cross-template annealing, gel-resolvable amplicon sizes, plus an annealing-temperature recommendation and a size-balanced starting primer-concentration plan).
 - qPCR and bench math: molbio_qpcr_analysis, molbio_lab_math.
 - Plasmids: molbio_parse_genbank (GenBank text), molbio_parse_snapgene (SnapGene .dna files — researchers usually have .dna files, so when the user names a .dna path use this), molbio_plasmid_map_file (reads a .dna/.gb file and writes the map SVG directly into the workspace in one call), molbio_plasmid_map (same, from a sequence + features). Both map tools WRITE the .svg file themselves and return svg_path — never try to reproduce SVG text in the conversation. Every image-writing tool (maps, plots, virtual gels, qPCR standard curves, clone/Golden Gate maps) opens the generated SVG automatically with the OS default application (auto_view defaults to true; the result's auto_viewed field says whether the hand-off worked), so there is normally nothing for the user to open manually; pass auto_view: false only when the caller explicitly wants no viewer window.
 - Cloning: molbio_unique_cutters (pick enzymes that cut the vector once and never the insert), molbio_clone_simulate (restriction-ligation or Gibson assembly → final plasmid sequence + verification digests; pass save_path to write a FASTA), molbio_golden_gate (type IIS multi-fragment assembly: the tool designs the 4 bp junctions and the fragments-to-order, and simulates the final plasmid — use it for BsaI-style Golden Gate instead of reasoning about overhangs by hand), molbio_enzyme_lookup (enzyme catalog: recognition/cut geometry/overhang, plus every cut of a sequence in both strand orientations), molbio_clone_primers (enzyme tails or Gibson arms on amplification primers, with re-checks), molbio_mutagenesis_primers (QuickChange-style mutation primers), molbio_silent_site_mutagenesis (add or remove a restriction site with synonymous codons only, keeping the protein unchanged; the returned mutation_texts feed molbio_mutagenesis_primers).
@@ -8113,6 +8230,7 @@ export function apply(ctx) {
     enzymeLookupTool,
     primerTmTool,
     primerCheckTool,
+    duplexThermoTool,
     qpcrTool,
     labMathTool,
     designPrimersTool,

@@ -209,6 +209,56 @@
           "note": "the model explains the MGB Tm caveat or the modifications"
         }
       ]
+    },
+    {
+      "id": "duplex-thermo",
+      "category": "primers",
+      "tier": "full",
+      "covers": [
+        "molbio_duplex_thermo"
+      ],
+      "instruction": "Before I order this oligo I want its full duplex thermodynamics, not just a Tm: the enthalpy and entropy behind the Tm, the ΔG at 37 °C, and whether it folds into a hairpin or dimerises with itself. Use the default qPCR-relevant conditions.\n\nOligo: GTAAAACGACGGCCAGTGCC",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_duplex_thermo"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "20 bp, GC 60%",
+          "note": "the oligo's own metrics"
+        },
+        {
+          "where": "tool",
+          "pattern": "Tm 63\\.92 °C",
+          "note": "the nearest-neighbour Tm at the default conditions (50 mM Na+, 1.5 mM Mg2+, 0.8 mM dNTP, 250 nM strand)"
+        },
+        {
+          "where": "tool",
+          "pattern": "ΔG°37 -23\\.17 kcal/mol",
+          "note": "ΔG at 37 °C — the value a bare Tm does not show"
+        },
+        {
+          "where": "tool",
+          "pattern": "ΔH -162\\.1 kcal/mol",
+          "note": "the enthalpy term behind the Tm"
+        },
+        {
+          "where": "tool",
+          "pattern": "hairpin: stem 3 bp \\+ loop 4 nt from position 11",
+          "note": "the structure check found the stem rather than only reporting a Tm"
+        },
+        {
+          "where": "tool",
+          "pattern": "dimers: homodimer Tm any 0 °C / 3'-end 0 °C",
+          "note": "the dimer scan reports its own result"
+        },
+        {
+          "where": "answer",
+          "pattern": "ΔG|-23|63\\.9|hairpin|dimer",
+          "note": "the model reports the thermodynamics, not only a Tm"
+        }
+      ]
     }
   ]
 }

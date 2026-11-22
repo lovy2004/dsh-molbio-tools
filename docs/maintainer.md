@@ -30,13 +30,13 @@
 
 ## 60 秒速览
 
-- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**64 个 `molbio_*` 工具**（其中
+- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**65 个 `molbio_*` 工具**（其中
   `molbio_plot` 一个工具承载 8 种图表）。
-- **基线**：DSH **0.2.2-rc.2**；`package.json` 版本 0.25.1（DSH 桌面版内嵌 Node 24.21.0）。
+- **基线**：DSH **0.2.2-rc.5**；`package.json` 版本 0.26.0（DSH 桌面版内嵌 Node 24.21.0）。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
   **两个独立的 npm 条目、两条独立的版本线**，必须分别发布。
 - **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 只插一行**惰性宿主锚点**
-  （`molbio-client` → `./host.mjs`），64 个工具由同文件里的 preset insert 承载，
+  （`molbio-client` → `./host.mjs`），65 个工具由同文件里的 preset insert 承载，
   只会挂进 "Molecular Biology Lab" 模式。
 - **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`/`charts`）+ 客户端四套件 +
   DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
@@ -45,14 +45,14 @@
   `build/release-preflight.mjs`，然后用 **OIDC 可信发布**（仓库里没有任何长期 token）分两步发
   两个 npm 条目，最后用 CHANGELOG 该版本段落建 GitHub Release。**首次发布必须手动做一次**
   （可信发布要求包已存在），完整步骤见 [workflow.md](workflow.md) 第 4 节的 CD 段。
-- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 65 题），分
+- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 66 题），分
   `tools_ok` / `args_ok` / `answer_ok` 三项判分；`npm run bench:offline` 零成本校验期望值。
 
 包内目录结构：
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 64 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 65 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）

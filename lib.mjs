@@ -601,7 +601,21 @@ for (const pair of Object.keys(NN_DH)) {
  * correction on the duplex entropy. An ESTIMATE for primer design: it assumes
  * a non-self-complementary duplex and standard conditions.
  */
-export function primerTm(seq, { naMm = 50, mgMm = 0, dntpMm = 0.8, primerNm = 500 } = {}) {
+/**
+ * Full nearest-neighbour thermodynamics of one DNA duplex: enthalpy, entropy,
+ * the salt-corrected entropy, ΔG at 37 °C and the melting temperature.
+ *
+ * The salt/concentration model is the SAME one the primer tools use (von Ahsen
+ * et al. (2001) magnesium equivalence, SantaLucia (1998) entropy correction), so
+ * a Tm reported here is identical to molbio_primer_tm / molbio_primer_check for
+ * the same sequence and conditions. Returned values are unrounded except where
+ * noted; callers round for display.
+ *
+ * @param {string} seq canonical DNA (A/C/G/T), at least 4 bases.
+ * @param {{naMm?: number, mgMm?: number, dntpMm?: number, primerNm?: number}} [conditions]
+ * @returns {{dh_kcal: number, ds_cal: number, ds_salt_cal: number, delta_g37_kcal: number, tm_celsius: number, na_equivalent_mm: number}}
+ */
+export function duplexThermodynamics(seq, { naMm = 50, mgMm = 0, dntpMm = 0.8, primerNm = 500 } = {}) {
   const length = seq.length;
   if (length < 4) throw new MolbioInputError(`primer must be at least 4 bases for a NN Tm estimate (got ${length})`);
   const na = Math.max(0, naMm);
@@ -631,8 +645,26 @@ export function primerTm(seq, { naMm = 50, mgMm = 0, dntpMm = 0.8, primerNm = 50
   const tm = (dh * 1000) / denominator - 273.15;
   if (!Number.isFinite(tm) || tm <= 0 || tm > 200) throw new MolbioInputError('Tm computation did not converge for this input');
   return {
-    tm_celsius: Math.round(tm * 100) / 100,
-    na_equivalent_mm: Math.round(naEquivalent * 100) / 100,
+    dh_kcal: dh,
+    ds_cal: ds,
+    ds_salt_cal: saltCorrectedDs,
+    delta_g37_kcal: deltaG37(dh, saltCorrectedDs),
+    tm_celsius: tm,
+    na_equivalent_mm: naEquivalent,
+  };
+}
+
+/**
+ * Salt-adjusted nearest-neighbour melting temperature of one primer.
+ * Thin rounding wrapper over duplexThermodynamics — the primer tools keep their
+ * published output shape, and every value they report comes from the same model
+ * molbio_duplex_thermo exposes.
+ */
+export function primerTm(seq, opts = {}) {
+  const { tm_celsius, na_equivalent_mm } = duplexThermodynamics(seq, opts);
+  return {
+    tm_celsius: Math.round(tm_celsius * 100) / 100,
+    na_equivalent_mm: Math.round(na_equivalent_mm * 100) / 100,
   };
 }
 
