@@ -98,7 +98,11 @@ export function columnComposition(rows, options = {}) {
       }
     }
     const correction = smallSample && residues > 0 ? (1 / (2 * LN2)) * (4 - 1) / residues : 0;
-    const information = Math.max(0, 2 - entropy - correction);
+    // An all-gap column has no base to draw: it reports R_i = 0 (this is what
+    // the module header promises). It used to fall through to 2 - 0 - 0 = 2
+    // bits, so a caller that trusted `bits` saw a full-height column whose
+    // letters were all zero-width.
+    const information = residues === 0 ? 0 : Math.max(0, 2 - entropy - correction);
     const round3 = (x) => Math.round(x * 1000) / 1000;
     out.push({
       column: c + 1,

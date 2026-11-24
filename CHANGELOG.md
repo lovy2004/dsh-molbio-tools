@@ -10,6 +10,136 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.27.1] — 2026-11-24（DSH 0.2.3-alpha.2 适配：面板改读 workingDirectory projection 并修正 workspaceFiles 首参、守卫换用 Include 解析器、preset 跟上游两行）
+
+**工具数不变（65），benchmark 不变（66 题）。** 0.25.3 的验收基线是 **0.2.2-rc.5**；这一版把基线推到
+**0.2.3-alpha.2**，并在本机桌面版 `app.asar` 上重跑了整套守卫。上游在 rc.5 之后改了三处本包依赖的东西。
+
+### 1. 上游变化（0.2.3-alpha.2）
+
+- 桌面端 `@deepseek-ai/dsh-desktop-runtime` 为 0.2.3-alpha.2（Electron 44.11.5 / Node 24.22.3；Node
+  下限随 0.2.3-alpha.1 提到 24.22.3，本机恰好等于该值）。
+- `standard.patch.yml` 变为 7363 B、sha256 `57c14c30…`，与本包基线相比只有两处：新增 `tool-cordis`
+  行，`tool-plugin-manager` 改为 `disabled: !!js "!ctx.get('profileContext')"`（profile 里实际启用）。
+- `@deepseek-ai/cordis-plugin-include` 改用 `yaml` 包并导出 `parseEntryYaml`/`stringifyEntryYaml`；
+  `js-yaml` 与 `entryListSchema` 不再随宿主提供。
+- 会话目录移入 Session projection：官方 `ui-sidebar-files` / `ui-workspace` 统一用
+  `selectSessionDirectory()`，读 `projectionsBySession…workingDirectory` →
+  `byId…projectionValues.workingDirectory` → `byId…cwd`。
+
+### 2. 面板：工作区根目录按官方顺序读取
+
+- `build/panel-core.mjs` 新增 `selectSessionDirectory(state, sessionId)`，Molbio 与 Papers 两个正文都改用它。
+  旧版 DSH 上没有 projection 时仍回退到 `cwd`，因此 `engines` 覆盖的旧版本不受影响；空字符串按“无根目录”处理，
+  与面板的 `cwd === undefined` 加载态一致。
+- `test/client.mjs` 增加四条优先级/回退断言；`test/contract.mjs` 的官方先例断言改为检查
+  `selectSessionDirectory` + `projectionsBySession` + `projectionValues`（旧的 `byId…cwd` 断言已删除）。
+
+### 3. 面板：workspaceFiles 首参 + 命名空间注入修正（.fasta/.pdb/.cif 一个都列不出来的根因）
+
+- 宿主的 `workspaceFiles.list/read/readBytes` 首个参数是 **SessionId `lookup`**
+  （`workspaceFileScopeId`，strict `{type:'string'}` codec），由网关在服务端解析成会话的 workspace
+  scope；官方 `ui-sidebar-files` / `ui-sidebar-documentpreview` 都直接传 `sessionId` 字符串。
+- 面板此前传的是 `{ sessionId }` 对象（自首个客户端提交 a478dbf 起），网关在参数解码阶段就拒绝，
+  于是**目录列举与文件读取全部失败**：列表只剩 “No .dna / .gb / … files”，与文件扩展名无关
+  （`.fasta`→alignment、`.pdb/.cif`→structure 的映射本身是对的）。
+- `build/client-entry.mjs`（`listDirectory`、`readBytes`）与 `build/panel-core.mjs`
+  （`readWorkspaceText`）改为传裸 `sessionId`；同时删掉早已不可达的 `readAll` 兼容分支
+  （0.1.7-alpha.1 起宿主只提供 `readBytes`）。
+- 守卫：`test/panel-render.mjs` 的 Remote 桩现在**断言首参是字符串**（传对象即抛）；
+  `test/contract.mjs` 按 `list(sessionId, path, signal)` 等实参形态断言，并新增
+  “任何 workspaceFiles 调用都不得传 `{ sessionId }`”的反向断言。
+- 同一处的第二个问题：`remote.workspaceFiles` 是**命名空间子服务**，官方每个消费者都在 `inject` 里
+  显式声明它（`ui-sidebar-files` / `ui-sidebar-documentpreview` / `ui-reference` / `ui-open-in-app`，
+  rc.3 起即如此），本包此前只声明了 `remote`。客户端的 `inject` 现为
+  `['slots','sidebarRightTabs','remote','remote.workspaceFiles']`。
+- 列表不再阻塞在 store 的 `cwd` 上：取不到 `cwd` 时用工作区相对路径 `'.'`（宿主按会话 workspace root
+  解析），读取用同一前缀的相对路径；列表头显示实际目录与可打开文件数。这样“等待工作区”与“没有文件”
+  不再长得一样，也修掉了快照晚到/缺 `cwd` 时空列表的问题。`test/panel-render.mjs` 新增
+  “无 cwd 仍列出根目录”用例。
+
+### 4. preset：跟上游两行
+
+- 补 `tool-cordis`（`@deepseek-ai/dsh-tool-cordis`，位于 `tool-web` 与 `present` 之间）。
+- `tool-plugin-manager` 由硬 `disabled: true` 改为上游同款条件禁用。
+- 生成物 `cordis.patch.yml` 由 `build/preset-patch.mjs` 重新生成；`preset-health` 的漂移输出回到零。
+
+### 5. 守卫：按宿主自己的方言解析补丁
+
+- `benchmark/harness.mjs` 的 `loaderYaml()` 现在优先用宿主 Include 的 `parseEntryYaml`，仅在旧宿主上
+  回退到 `js-yaml` + `entryListSchema`；`readComposition()` 与 `benchmark/profile.mjs` 的两处调用点随之改。
+  `test/client-mount.mjs` 里重复的那份旧读取器也删掉，改为调用 `readComposition()`。
+- 在此之前，`preset-health` 与 `client-mount` 在 0.2.3-alpha.2 上会直接抛
+  `YAMLException: unknown tag !!js`——不是组合有问题，而是读取器还停在旧引擎上。
+- `benchmark/profile.mjs` 的 `resolveDisabled()` 认识 `!ctx.get('profileContext')`（benchmark 生成的是真 profile，
+  按启用处理），并把 `tool-plugin-manager` 加进 `SKIPPED_ROWS`（管理型工具，一次性任务用不到）。
+
+### 6. 声明与版本
+
+- 两个包的 `dsh.compatibility.dshReleases` 增加 `"0.2.3-alpha.2": "compatible"`；`engines.dsh` 不变
+  （`>=0.2.1-rc.2 <0.3.0-0`，宿主按 `includePrerelease` 匹配，实测两份清单均被接受）。
+- 根包 `0.27.0 → 0.27.1`；面板包 `0.1.16 → 0.1.17`——`lib/client.js` 的字节变了，发布守卫要求面板
+  独立 bump。两份 `lib/client.js` 已重建（499.8 KB）。
+
+### 7. 验收（本机 0.2.3-alpha.2 桌面版 `app.asar`）
+
+- `contract` 17/17、`preset-health`（31 行展开）、`drift-probe`（17 个突变全抓到）、`client-mount`
+  （214 行、83 个 client 行）、`smoke`（65 工具）、`client`、`panel-render`、`map-card`、`benchmark-profile`、
+  `benchmark-score`、`benchmark-coverage`（65/65）、`bench:offline`（66 题）全部通过。
+  面板 Remote 桩的字符串断言与 contract 的实参断言覆盖了两个方向：传错类型即失败。
+- 额外静态核对：宿主 `evaluatePluginCompatibility()` 对两份清单都返回接受；65 个工具的
+  parameters / output schema 全部通过 `dsh-tools` 的 `assertObjectJsonSchema` /
+  `assertSupportedJsonSchema`。
+
+### 8. 面板：单序列 FASTA 直接显示 + 比对结果可缩放
+
+- **单条序列不比对**：`parseAlignmentFile()` 过去对任何 FASTA 都跑 `progressiveAlign`，且不足 2 条直接抛错。
+  现在 1 条时返回 `{ rows, single: true }`（不再比对），面板用 `sequenceText()` 按 60 字符换行、
+  保留 `>id` 头，以等宽文本显示；空文件仍明确报错。
+- **比对按自然宽度绘制并可缩放**：logo SVG 不再被 `max-width:100%` 压进面板，而是放进可横向滚动的
+  容器、以渲染器自己的像素宽度显示；新增 − / + / 100% 三个控件（10%–800%，每步 ×1.25），缩放只改
+  已追加 SVG 的 `width`/`height`，不重新计算比对。换文件时缩放复位。
+- 测试：`test/client.mjs` 覆盖单序列记录、`sequenceText()` 换行与空文件报错；`test/panel-render.mjs`
+  覆盖“单序列打印为文本、无缩放控件”与“点 + 后 SVG 宽度变大、显示 125%”，DOM 桩会记录
+  `setAttribute`，不再吞掉缩放。
+
+### 9. 面板：非核苷酸 FASTA 不再被当成 DNA 比对
+
+- **根因**：`parseAlignmentFile()` 把 FASTA 行直接交给 DNA 比对器，绕过了 `normalizeMsaSequence()` 的字母校验。
+  蛋白序列里不在 IUPAC 表中的字母（E/F/I/L/P/Q…）在比对器的符号表里没有下标、却在 `residues` 里被计数；
+  logo 再把它们当“未知字符”跳过并计成 gap —— 于是一张大部分列空白、少量列报 2 bits 的“怪图”就出来了。
+- 现在先判定字母表：任一行出现非 IUPAC 核苷酸字母即按**蛋白/非核苷酸**处理，返回 `protein: true`；
+  面板显示 `not nucleotide` + 说明 + 换行后的原始序列文本，**不比对、不画 logo、不给缩放控件**。
+- 顺带修掉两个会改变结果的相关缺陷：
+  - **小写 FASTA** 先 `normalizeMsaSequence()` 再比对（旧路径把 `acgt` 当未知字母，比出一个任意结果）；
+  - **预比对 FASTA**（行内含 `-`/`.`）用 `normalizeAlignedRow()` 按原样接受、要求等长，不再二次比对。
+- `columnComposition()` 的**全 gap 列**改为 `information = 0`（模块文档一直这么承诺；旧代码返回 2 bits 却不画字母）。
+  正常的 DNA 多序列比对输出不受影响。
+- 测试：`test/client.mjs` 覆盖蛋白、小写、预比对、全 gap 列；`test/panel-render.mjs` 覆盖蛋白文件显示文本与
+  “NOT aligned”提示、无缩放控件。
+
+### 10. Papers 面板：`range` 参数与库路径修正
+
+- **range 参数**：`readWorkspaceText()` 原先把 `workspaceFiles.read(sessionId, path, undefined, signal)` 的第三个参数传成
+  `undefined`，而宿主的 `read()` 直接解构 `range.offset` —— 这一调用必然抛
+  “Cannot read properties of undefined (reading 'offset')”，Papers tab 从来读不到库。现在传 `{}`（宿主取默认页），
+  并在响应的 `eof === false` 时明确报“超过一页”，不再把截断的 JSON 报成“不是合法 JSON”。
+- **库路径**：工具写库用 `papers.mjs` 的 `workspaceFilePath()`，基准是 **workspace root**（沙箱根）；面板却拼
+  `cwd/papers.json`。在 worktree/附加工作区这类 `cwd ≠ workspaceRoot` 的会话里，两者指向不同文件。现在面板直接用
+  工作区相对路径 `papers.json`，与工具同源；`useSessions` 仍留在正文签名里（slot 契约会检查）。
+- **其余参数审计**：`credentials.describe([ref])` 与宿主 descriptor 的 `refs: string[]` 一致；`remote.$on` 是客户端
+  Remote 的正式事件 API（多个官方包在用）；`remote.workspaceFiles` 子服务注入已在第 3 节补上。Papers 不列目录，
+  所以没有 Molbio 那种“列目录首参”问题。
+- 测试：`test/client.mjs` 断言 `read` 的 range 是对象、截断页报错；`test/panel-render.mjs` 的 Remote 桩对 range 做
+  断言，Papers 用例改用工作区相对库路径。
+
+### 11. CI 与发布
+
+- `.github/workflows/test.yml` 与 `release.yml` 的 harness pin 由 `0.2.2-rc.5` 提到 **`0.2.3-alpha.2`**
+  （已确认该版本在 npm 上存在；Node 注释同步为桌面版内嵌的 24.22.3）。不换 pin 的话，CI 会拿 rc.5 的
+  `standard` 与新版 preset 对比，把 `tool-cordis` 判成多出来的行。
+- 发布前本地已跑：`test/release.mjs`（13 项）、`release-preflight.mjs --tag v0.27.1`、以及针对
+  0.2.3-alpha.2 桌面版 `app.asar` 的全部守卫；两份 `lib/client.js` 与 `cordis.patch.yml` 均通过 `--check`。
 ## [0.27.0] — 2026-11-22（molbio_duplex_thermo：双链热力学，survey #9）
 
 **工具数 64 → 65，benchmark 65 → 66 题（65/65 覆盖）。** 候选池里排序第 9 的"双链热力学扩展"：

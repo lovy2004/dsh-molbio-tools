@@ -18,6 +18,8 @@ import {
   columnComposition,
   renderSequenceLogo,
   progressiveAlign,
+  normalizeAlignedRow,
+  normalizeMsaSequence,
   parseStructureText,
   renderStructureImage,
   DEFAULT_STRUCTURE_VIEW,
@@ -49,6 +51,41 @@ export { DEFAULT_STRUCTURE_VIEW, STRUCTURE_ELEMENT_COLORS, STRUCTURE_EXTENSIONS,
 export function extensionOf(name) {
   const match = /\.([A-Za-z0-9]+)$/.exec(String(name));
   return match === null ? '' : match[1].toLowerCase();
+}
+
+/**
+ * The session's workspace root, read the way DSH 0.2.3+ exposes it.
+ *
+ * 0.2.3 moved the directory into a Session projection: the shipped tab bodies
+ * (`dsh-client-ui-sidebar-files` and `dsh-client-ui-workspace`) now call a
+ * shared `selectSessionDirectory(state, sessionId)` that reads
+ * `projectionsBySession[sessionId].values.workingDirectory` first, then the
+ * summary's `projectionValues.workingDirectory`, and only then the summary's
+ * `cwd`. Reading `byId[sessionId].cwd` alone — this package's previous
+ * behaviour — worked only while the store happened to materialise `cwd`; a
+ * session whose directory exists only as a projection produced an empty panel.
+ *
+ * The order is mirrored exactly, because it is the host's contract, not this
+ * package's preference. Every step is optional and every value is type-checked
+ * so the same bundle still runs on the older DSH releases this package
+ * supports (where `projectionsBySession` does not exist and `cwd` is the only
+ * source). An empty string counts as "no root" because the panels key their
+ * loading state on `cwd === undefined`.
+ *
+ * @param {object} state the `useSessions` store snapshot.
+ * @param {string} sessionId the slot's session id.
+ * @returns {string|undefined} the workspace root, when the store has one.
+ */
+export function selectSessionDirectory(state, sessionId) {
+  const projected = (values, key) => {
+    if (values === null || typeof values !== 'object') return undefined;
+    const value = Reflect.get(values, key);
+    return typeof value === 'string' && value !== '' ? value : undefined;
+  };
+  const summary = state?.byId?.[sessionId];
+  return projected(state?.projectionsBySession?.[sessionId]?.values, 'workingDirectory')
+    ?? projected(summary?.projectionValues, 'workingDirectory')
+    ?? (typeof summary?.cwd === 'string' && summary.cwd !== '' ? summary.cwd : undefined);
 }
 
 /**
@@ -99,10 +136,11 @@ export function childPath(parent, name) {
  *     gateway lifts native bytes into a base64 attachment and reassembles them
  *     client-side before the call resolves.
  *
- * Accepting both here is what keeps the panel working across the change: the
- * caller feature-detects the METHOD, and this function normalises the VALUE.
- * A `Uint8Array` is passed through by reference (no copy), so a large plasmid
- * costs nothing extra.
+ * Accepting both here is cheap insurance at one boundary: every supported
+ * harness sends a `Uint8Array` (the panel calls `readBytes` directly), and a
+ * base64 string from an older transport still decodes instead of producing a
+ * wrong picture. A `Uint8Array` is passed through by reference (no copy), so a
+ * large plasmid costs nothing extra.
  *
  * @param {string|Uint8Array} data the `data` field of a successful read.
  * @returns {Uint8Array} the file's raw bytes.
@@ -213,9 +251,16 @@ export function structureImage(record, options = {}) {
 }
 
 /**
- * Parse an alignment file (FASTA) into the rows the logo needs.
+ * Parse a FASTA file into the rows the panel draws.
+ *
+ * ONE sequence is not an alignment: aligning it would be an identity operation,
+ * and its logo draws one glyph per column — on a long sequence that shrinks to
+ * unreadable noise. Such a record returns `single: true` and the panel prints
+ * the residues instead. Two or more go through the plugin's own aligner, so the
+ * panel shows exactly what `molbio_msa_align` would produce for the same input.
+ *
  * @param {Uint8Array} bytes raw FASTA content.
- * @returns {{ids: string[], rows: string[]}}
+ * @returns {{ids: string[], rows: string[], single: boolean}}
  */
 export function parseAlignmentFile(bytes) {
   const text = new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
@@ -235,11 +280,70 @@ export function parseAlignmentFile(bytes) {
     current.push(line);
   }
   if (current !== null) rows.push(current.join(''));
-  if (rows.length < 2) throw new MolbioInputError(`a sequence logo needs at least 2 sequences (found ${rows.length})`);
+  if (rows.length === 0) throw new MolbioInputError('the FASTA file contains no sequences');
+  // A FASTA can carry PROTEIN. The aligner and the logo are nucleotide-only
+  // (IUPAC DNA/RNA): handing protein rows over used to produce a meaningless
+  // alignment whose logo silently dropped every non-IUPAC letter and then
+  // counted those columns as gaps. Such a file is shown as plain text instead.
+  const nucleotide = rows.every(isNucleotideRow);
+  if (!nucleotide) return { ids, rows, single: rows.length === 1, protein: true };
+  // A pre-aligned FASTA (dashes in the rows) is already an alignment: normalize
+  // the gap spelling and never run the aligner on it again.
+  if (rows.some((sequence) => /[-.]/.test(sequence))) {
+    const normalized = rows.map((sequence, index) => normalizeAlignedRow(sequence, `sequence ${ids[index] ?? index + 1}`));
+    const width = normalized[0].length;
+    if (!normalized.every((sequence) => sequence.length === width)) {
+      throw new MolbioInputError('a pre-aligned FASTA needs equal-length rows');
+    }
+    return { ids, rows: normalized, single: normalized.length === 1, protein: false };
+  }
+  // Normalize (uppercase, U→T) before aligning: this module used to pass raw
+  // rows to the aligner, whose symbol table only knows uppercase IUPAC — a
+  // lowercase FASTA was silently treated like an unknown alphabet.
+  const sequences = rows.map((sequence, index) => normalizeMsaSequence(sequence, `sequence ${ids[index] ?? index + 1}`));
+  if (sequences.length === 1) return { ids, rows: sequences, single: true, protein: false };
   // Reuse the plugin's own aligner so the panel shows exactly what
   // molbio_msa_align would produce for the same input.
-  const aligned = progressiveAlign(rows.map((sequence, index) => ({ id: ids[index], sequence })));
-  return { ids, rows: aligned.alignment.map((row) => row.sequence) };
+  const aligned = progressiveAlign(sequences.map((sequence, index) => ({ id: ids[index], sequence })));
+  return { ids, rows: aligned.alignment.map((row) => row.sequence), single: false, protein: false };
+}
+
+/** The IUPAC nucleotide letters the aligner and the logo understand. */
+const NUCLEOTIDE_LETTERS = new Set('ACGTURYSWKMBDHVN');
+
+/**
+ * Whether one FASTA row is nucleotide text (gaps allowed).
+ * @param {string} sequence one row as read from the file.
+ * @returns {boolean} false when it carries an amino-acid letter such as E/F/L/P/Q.
+ */
+export function isNucleotideRow(sequence) {
+  for (const char of sequence.toUpperCase()) {
+    if (char === '-' || char === '.') continue;
+    if (!NUCLEOTIDE_LETTERS.has(char)) return false;
+  }
+  return true;
+}
+
+/**
+ * One parsed record as FASTA text, wrapped for a `<pre>`.
+ *
+ * A single-sequence file is read as sequence data, and a raw line of 20 000
+ * residues is not readable either: the residues are wrapped at `width` with
+ * the header line kept so the id travels with them.
+ *
+ * @param {{ids?: string[], rows: string[]}} record the parsed record.
+ * @param {number} [width] residues per line.
+ * @returns {string} FASTA text without a trailing newline.
+ */
+export function sequenceText(record, width = 60) {
+  const step = Math.max(10, Math.floor(Number(width) || 60));
+  const blocks = record.rows.map((sequence, index) => {
+    const id = record.ids?.[index] ?? `seq${index + 1}`;
+    const lines = [`>${id}`];
+    for (let at = 0; at < sequence.length; at += step) lines.push(sequence.slice(at, at + step));
+    return lines.join('\n');
+  });
+  return blocks.join('\n\n');
 }
 
 /**
@@ -425,12 +529,29 @@ const PAPER_FIELDS = [
 export async function readWorkspaceText(remote, sessionId, path, signal) {
   let result;
   try {
-    result = await remote.workspaceFiles.read({ sessionId }, path, undefined, signal);
+    // First argument: the SessionId lookup (a string), not `{ sessionId }`.
+    // The gateway decodes it with a strict string codec before resolving the
+    // Session's workspace root, so an object fails the call outright.
+    // Third argument: the line window. It is REQUIRED to be an object — the
+    // host's `read()` destructures `range.offset`, so `undefined` threw
+    // "Cannot read properties of undefined (reading 'offset')" and the Papers
+    // tab could never load a library. `{}` takes the page defaults.
+    result = await remote.workspaceFiles.read(sessionId, path, {}, signal);
   } catch (error) {
     return { kind: 'error', message: String(error?.message ?? error) };
   }
   if (result === null || typeof result !== 'object') return { kind: 'error', message: 'the workspace read returned nothing' };
-  if (result.ok) return { kind: 'text', text: result.value?.text ?? '' };
+  if (result.ok) {
+    // A page stops at the deployment's line cap; a truncated JSON document
+    // would otherwise surface as "not valid JSON" and hide the real cause.
+    if (result.value?.eof === false) {
+      return {
+        kind: 'error',
+        message: `${path} is longer than one preview page (${result.value?.lines ?? 0} lines); open it directly to read the whole library`,
+      };
+    }
+    return { kind: 'text', text: result.value?.text ?? '' };
+  }
   const failure = result.error;
   // The wire carries typed codes; not-found is the one that means "empty".
   if (failure?.code === 'workspace-file/not-found' || /not-found|does not exist/i.test(String(failure?.message ?? ''))) {

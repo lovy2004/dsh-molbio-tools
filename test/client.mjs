@@ -93,7 +93,11 @@ assert.deepEqual(reactCalls, ['react'], 'the bundle requires react and nothing e
 assert.equal(typeof module.apply, 'function', 'the materialized module exports apply');
 // The bundle ran inside a `vm` realm, so its arrays carry that realm's
 // prototype: compare contents, not identities.
-assert.deepEqual([...module.inject], ['slots', 'sidebarRightTabs', 'remote'], 'the declared browser services');
+assert.deepEqual(
+  [...module.inject],
+  ['slots', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles'],
+  'the declared browser services (the workspaceFiles namespace is a sub-service)',
+);
 
 // ── 2. apply() against stub services ────────────────────────────────────────
 //
@@ -388,10 +392,54 @@ const alignment = panelCore.parseAlignmentFile(fasta);
 assert.deepEqual(alignment.ids, ['a', 'b']);
 assert.equal(alignment.rows.length, 2);
 assert.equal(alignment.rows[0], 'ACGTACGT');
+assert.equal(alignment.single, false, 'two sequences are an alignment');
 const logoSvg = panelCore.logoSvg(alignment);
 assert.ok(logoSvg.startsWith('<svg'));
 assert.ok(logoSvg.includes('information content (bits)'));
-assert.throws(() => panelCore.parseAlignmentFile(new TextEncoder().encode('>a\nACGT\n')), /at least 2 sequences/);
+
+// A single sequence is DATA, not an alignment: no aligner, and the panel
+// prints it. Aligning it would be an identity operation whose one-glyph-per-
+// column logo shrinks to noise on a long sequence.
+const single = panelCore.parseAlignmentFile(new TextEncoder().encode('>solo\nACGTACGTACGT\n'));
+assert.equal(single.single, true, 'one sequence is not aligned');
+assert.deepEqual(single.ids, ['solo']);
+assert.deepEqual(single.rows, ['ACGTACGTACGT'], 'the residues are kept verbatim');
+assert.match(
+  panelCore.sequenceText(single, 10),
+  /^>solo\nACGTACGTAC\nGT$/,
+  'the printed sequence is wrapped at the requested width',
+);
+assert.equal(panelCore.sequenceText(single), '>solo\nACGTACGTACGT', 'the default width keeps a short sequence on one line');
+assert.throws(() => panelCore.parseAlignmentFile(new TextEncoder().encode('')), /contains no sequences/);
+
+// Lowercase DNA is normalized before aligning: the aligner's symbol table only
+// knows uppercase IUPAC, so passing raw case would treat it as an unknown
+// alphabet and produce an arbitrary alignment.
+const lower = panelCore.parseAlignmentFile(new TextEncoder().encode('>a\nacgtacgt\n>b\nacgttcgt\n'));
+assert.equal(lower.protein, false);
+assert.deepEqual(lower.rows, ['ACGTACGT', 'ACGTTCGT'], 'lowercase DNA is uppercased');
+
+// A protein FASTA is NOT aligned: the aligner and the logo are nucleotide-only.
+// The old path aligned amino acids as if they were DNA ambiguity codes, and the
+// logo dropped every non-IUPAC letter (counting those columns as gaps).
+const protein = panelCore.parseAlignmentFile(new TextEncoder().encode('>p1\nMKTAYIAK\n>p2\nMKTGYIAK\n'));
+assert.equal(protein.protein, true, 'a non-nucleotide alphabet is reported as protein');
+assert.equal(protein.single, false);
+assert.deepEqual(protein.rows, ['MKTAYIAK', 'MKTGYIAK'], 'the residues are kept verbatim, unaligned');
+assert.equal(panelCore.isNucleotideRow('ACGTURYSWKMBDHVN-.'), true, 'every IUPAC letter and a gap is nucleotide');
+assert.equal(panelCore.isNucleotideRow('MKTAYIAK'), false, 'an amino-acid-only string is not nucleotide');
+
+// A pre-aligned FASTA (dashes) is normalized, never re-aligned.
+const prealigned = panelCore.parseAlignmentFile(new TextEncoder().encode('>a\nACGT-ACGT\n>b\nACGT-ACGT\n'));
+assert.deepEqual(prealigned.rows, ['ACGT-ACGT', 'ACGT-ACGT']);
+assert.equal(prealigned.protein, false);
+
+// An all-gap column has no base to draw: it reports R_i = 0 (the old code
+// reported 2 bits while drawing nothing).
+const logoModule = await import('../logo.mjs');
+const gapColumn = logoModule.columnComposition(['A-', '--', 'A-'])[1];
+assert.equal(gapColumn.residues, 0);
+assert.equal(gapColumn.bits, 0, 'an all-gap column carries no information');
 assert.throws(() => panelCore.parseAlignmentFile(new TextEncoder().encode('ACGT\n')), /must start with a ">" header/);
 
 // ── 4. the literature panel's data path ─────────────────────────────────────
@@ -429,8 +477,24 @@ const remoteStub = (answer) => ({
     async read() { return answer; },
   },
 });
-const okRead = await panelCore.readWorkspaceText(remoteStub({ ok: true, value: { text: JSON.stringify(library) } }), 's1', 'papers.json');
+const readCalls = [];
+const rangeAwareStub = {
+  workspaceFiles: {
+    async read(sessionId, path, range) {
+      readCalls.push({ sessionId, path, range });
+      return { ok: true, value: { text: JSON.stringify(library) } };
+    },
+  },
+};
+const okRead = await panelCore.readWorkspaceText(rangeAwareStub, 's1', 'papers.json');
 assert.equal(okRead.kind, 'text');
+assert.equal(typeof readCalls[0].sessionId, 'string', 'the SessionId lookup is a string');
+assert.ok(readCalls[0].range !== null && typeof readCalls[0].range === 'object', 'the range argument is an object (the host destructures it)');
+assert.equal(
+  (await panelCore.readWorkspaceText(remoteStub({ ok: true, value: { text: '{"papers":[]}', eof: false, lines: 5000 } }), 's1', 'papers.json')).kind,
+  'error',
+  'a page that stops before EOF is an error, not a truncated library',
+);
 const missingRead = await panelCore.readWorkspaceText(
   remoteStub({ ok: false, error: { code: 'workspace-file/not-found', message: '"papers.json" does not exist' } }),
   's1',
@@ -498,6 +562,45 @@ assert.equal(panelCore.LIBRARY_FILE, 'papers.json');
 // The panel's file path matches the tool's default (papers.mjs DEFAULT_LIBRARY_FILE).
 const { DEFAULT_LIBRARY_FILE } = await import('../papers.mjs');
 assert.equal(panelCore.LIBRARY_FILE, DEFAULT_LIBRARY_FILE);
+
+// ── 4. the workspace-root selector (DSH 0.2.3 session projections) ──────────
+//
+// 0.2.3 moved the session directory into a Session projection; the shipped tab
+// bodies read it `projectionsBySession → projectionValues → cwd`. The panel
+// follows that order so it cannot disagree with the workspace sidebar, and the
+// `cwd` fallback keeps the same bundle working on the older releases this
+// package's engines range still covers.
+
+const SESSION = 'session-1';
+const withProjection = (value) => ({ values: { workingDirectory: value } });
+assert.equal(
+  panelCore.selectSessionDirectory(
+    { projectionsBySession: { [SESSION]: withProjection('/from-projection') }, byId: { [SESSION]: { cwd: '/from-cwd' } } },
+    SESSION,
+  ),
+  '/from-projection',
+  'the workingDirectory projection wins over the summary cwd',
+);
+assert.equal(
+  panelCore.selectSessionDirectory(
+    { byId: { [SESSION]: { projectionValues: { workingDirectory: '/from-projection-values' }, cwd: '/from-cwd' } } },
+    SESSION,
+  ),
+  '/from-projection-values',
+  'the summary projection values are the second source, ahead of cwd',
+);
+assert.equal(
+  panelCore.selectSessionDirectory({ byId: { [SESSION]: { cwd: '/from-cwd' } } }, SESSION),
+  '/from-cwd',
+  'a store without projections (older DSH) still resolves through cwd',
+);
+assert.equal(panelCore.selectSessionDirectory({ byId: {} }, SESSION), undefined, 'an unknown session has no root');
+assert.equal(
+  panelCore.selectSessionDirectory({ projectionsBySession: { [SESSION]: withProjection('') }, byId: {} }, SESSION),
+  undefined,
+  'an empty projection is not a root',
+);
+assert.equal(panelCore.selectSessionDirectory(undefined, SESSION), undefined, 'a missing store is tolerated');
 
 console.log('client bundle format checks passed');
 console.log('panel data path checks passed');

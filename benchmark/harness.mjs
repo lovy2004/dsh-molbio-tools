@@ -107,13 +107,32 @@ export async function importPackage(name, harnessRoot) {
 /**
  * The Loader's YAML dialect, loaded once per process.
  *
+ * DSH 0.2.3-alpha.1 moved Include from `js-yaml` + an exported
+ * `entryListSchema` to the `yaml` package + `parseEntryYaml` (YAML 1.2 core
+ * schema plus the `!!js` tag). The exported parser is the only correct entry
+ * point: `js-yaml` is no longer installed beside the harness, and a stock
+ * `yaml.load` rejects the bundle patches with
+ * `unknown tag !<tag:yaml.org,2002:js>`.
+ *
+ * Both shapes are supported so this suite can still validate an OLDER installed
+ * harness — the same reason the composition reader stays harness-driven instead
+ * of hard-coding one parser version. `parse` is synchronous in both branches.
+ *
  * @param {string} harnessRoot the installed harness.
- * @returns {Promise<{yaml: object, schema: object}>} the `js-yaml` module and `entryListSchema`.
+ * @returns {Promise<{parse: (text: string) => unknown, describe: string}>} the
+ *   dialect's parser, plus a label for report headers.
  */
 export async function loaderYaml(harnessRoot) {
-  const { entryListSchema } = await importPackage('@deepseek-ai/cordis-plugin-include', harnessRoot);
+  const include = await importPackage('@deepseek-ai/cordis-plugin-include', harnessRoot);
+  if (typeof include.parseEntryYaml === 'function') {
+    return { parse: include.parseEntryYaml, describe: 'yaml@2 (Include.parseEntryYaml)' };
+  }
+  const { entryListSchema } = include;
   const yaml = (await importPackage('js-yaml', harnessRoot)).default;
-  return { yaml, schema: entryListSchema };
+  return {
+    parse: (text) => yaml.load(text, { schema: entryListSchema }),
+    describe: 'js-yaml (Include.entryListSchema)',
+  };
 }
 
 /**
@@ -124,8 +143,8 @@ export async function loaderYaml(harnessRoot) {
  * @returns {Promise<unknown>} the parsed document.
  */
 export async function readComposition(path, harnessRoot) {
-  const { yaml, schema } = await loaderYaml(harnessRoot);
-  return yaml.load(await readFile(path, 'utf8'), { schema });
+  const { parse } = await loaderYaml(harnessRoot);
+  return parse(await readFile(path, 'utf8'));
 }
 
 /** The harness version, for report headers. */

@@ -10,8 +10,8 @@
 
 | 落点 | 内容 | 数据来源 |
 | --- | --- | --- |
-| **Molbio**（右栏 tab） | 列出会话工作区里的序列与结构文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta`（≥2 条）→ 序列标识图；`.pdb`/`.ent`/`.cif`/`.mmcif`/`.sdf`/`.mol` → 可旋转的 3D ball-and-stick / space-filling 模型 | `workspaceFiles.readAll` / `readBytes`（二进制，含 SnapGene 与结构文件） |
-| **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read`（文本） |
+| **Molbio**（右栏 tab） | 列出会话工作区里的序列与结构文件，选中即画：`.dna`/`.gb`/`.gbk` → 质粒图谱 + 特征表；`.fa`/`.fasta` → 单条序列直接按 FASTA 文本换行显示；2 条以上先比对再画序列标识图（图按**自然像素宽度**绘制，面板可横向滚动，并提供 −/+ 缩放）；**蛋白/非核苷酸 FASTA**（含 IUPAC 表之外的字母）不比对，按文本显示并注明；行内含 `-` 的预比对 FASTA 按原样接受；`.pdb`/`.ent`/`.cif`/`.mmcif`/`.sdf`/`.mol` → 可旋转的 3D ball-and-stick / space-filling 模型 | `workspaceFiles.readBytes(sessionId, …)`（二进制，含 SnapGene 与结构文件） |
+| **Papers**（右栏 tab） | 把 `molbio_paper_*` 工具维护的 `papers.json` 渲染成可搜索的阅读列表 + 详情面板（标题/作者/期刊/年份/PMID/URL/标签/笔记，标题链接到 PubMed 或原 URL） | `workspaceFiles.read(sessionId, 'papers.json', {}, signal)`：库路径是**工作区相对路径**（与工具写入口径一致），`range` 必须传对象（宿主会解构它） |
 | **图谱调用卡**（`tool.call.toolview`） | `molbio_plasmid_map` / `molbio_plasmid_map_file` 的调用卡：在对话里直接画出这次调用产出的图谱（摘要行 + 写入路径），失败时显示错误文本与 Inspect 入口 | 工具自己声明的 `output.presentationMeta`（见下） |
 | **图形调用卡**（`tool.call.toolview`） | `molbio_sequence_logo` / `molbio_grna_design` 的调用卡：logo 直接画图；gRNA 画 `map_path` 并列出前 5 条 guide（无 map 时仍有摘要与表格） | 同上，kind = `molbio-figure` |
 | **PubMed key 徽标**（Papers tab 顶部） | 常驻状态徽标：绿点「已配置（来源）」/ 灰点「未配置」/ 红点「状态不可读」，跟随 `credentials/reference-updated` 刷新；永不回显值 | `ctx.remote.credentials.describe`（经 `apply` 的 credentials 注入写进模块级快照） |
@@ -98,10 +98,10 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
 
 | 需要 | 从哪来 | 为什么不选替代 |
 | --- | --- | --- |
-| 文件字节 | `ctx.remote.workspaceFiles.readAll(path)`（base64 → `Uint8Array`） | 面板只读；`readAll` 给完整字节，SnapGene 的 `.dna` 是二进制，`read()` 的行窗口拿不到 |
-| 文件文本 | `ctx.remote.workspaceFiles.read(path)`（行窗口） | `papers.json` 是文本；行窗口足够且省带宽。**"文件不存在"被单独识别**（wire 码 `workspace-file/not-found`）——不存在的库是"空库"，坏掉的库是"错误"，面板不让这两者看起来一样 |
-| 目录列表 | `ctx.remote.workspaceFiles.list(path)` | 返回 `{name, type, size?}`，路径用 `/` 拼接 |
-| 工作区根目录 | `useSessions((s) => s.byId[sessionId]?.cwd)` | **框架自动注入**：`slots.provideRoot({hooks:{sessions}})` 把每个 root hook 合成为 `use<Name>` prop，所以正文**不需要**自己声明它 |
+| 文件字节 | `ctx.remote.workspaceFiles.readBytes(sessionId, path, {offset:0,length:8MiB})`（`Uint8Array` → base64 附件） | 面板只读；SnapGene 的 `.dna` 是二进制，`read()` 的行窗口拿不到。第一个参数是 **SessionId 字符串**（宿主按 `workspaceFileScopeId` lookup 解析成 workspace scope），**不是** `{sessionId}` 对象——传对象会被网关的参数 codec 拒绝 |
+| 文件文本 | `ctx.remote.workspaceFiles.read(sessionId, path, undefined, signal)`（行窗口） | `papers.json` 是文本；行窗口足够且省带宽。**"文件不存在"被单独识别**（wire 码 `workspace-file/not-found`）——不存在的库是"空库"，坏掉的库是"错误"，面板不让这两者看起来一样 |
+| 目录列表 | `ctx.remote.workspaceFiles.list(sessionId, path, signal)` | 返回 `{name, type, size?}`，路径用 `/` 拼接。取不到会话 `cwd` 时用 `'.'`（宿主按该会话的 workspace root 解析），面板头会显示实际列出的目录 |
+| 工作区根目录 | `useSessions((s) => selectSessionDirectory(s, sessionId))`（取不到时列表回退 `'.'`） | 框架**自动注入** `useSessions`：`slots.provideRoot({hooks:{sessions}})` 把每个 root hook 合成为 `use<Name>` prop，所以正文**不需要**自己声明它。取值顺序照抄 0.2.3 官方正文：`projectionsBySession[…].values.workingDirectory` → `byId[…].projectionValues.workingDirectory` → `byId[…].cwd`（后两步让同一 bundle 在旧版 DSH 上仍能取到根目录） |
 | 会话 id / actions | 插槽框架注入的 `sessionId` | 面板自己的 `inject` 工厂只需交出 `remote` |
 | tab 类型注册 | `ctx.sidebarRightTabs.register({id, kind, title, guide})` | `patterns` 省略即"页类型"（按 kind 打开），第三方默认优先级带 `extension`；同一包注册两个页类型即两个 tab（各自一个 guide 胶囊，`order` 决定排布） |
 | 正文 / 标题 | keyed 座位 `sidebar.right.pane.tab` / `…tab.title`，key = 类型的 `id` | 座位**先 inject 再 register**，见下 |
@@ -125,13 +125,13 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
   `slot "tool.call.toolview" is not declared (a parent entry's children table must declare it)`
   直接让本包的加载器 entry 失败——症状是 HARNESS 顶栏 **Failed to load plugins**、整个 Web GUI
   起不来，而不是"少一个 tab"。`test/slots-stub.mjs` 与 `test/contract.mjs` 各钉一遍这条规则。
-- **文件大小**：`readAll` 的上限是部署配置 `maxFileBytes`（默认 **32 MiB**），
+- **文件大小**：面板按 `maxBytes` 的上限申请 **8 MiB** 的字节窗口（窗口大于上限会被**拒绝**而不是截短），
   `list` 的条目上限 `maxEntries`（默认 **2000**）；`read` 一次最多 `maxLines`（默认 5000）行。
   超限是明确的 wire 错误，面板原样显示。
 - **面板只读**：都只列目录第一层、不递归、不写文件（文献库面板写回的理由见上一节）。
 - **表格截断**：质粒特征表最多渲染 200 行（图谱本身画全部特征，`renderPlasmidMap` 自身上限 200）。
 - **文献库无分页**：整库渲染成一个列表；上千条时靠搜索/标签过滤，没有虚拟滚动。
-- **图片式交互**：SVG 里注入的是真实 DOM（可缩放、可选中文本），但没有点特征跳转之类的联动。
+- **图片式交互**：SVG 里注入的是真实 DOM（可选中文本）；质粒图谱适配面板宽度，**多序列 logo 按自然宽度绘制并可缩放**（− / + / 100%，范围 10%–800%），长比对靠横向滚动查看而不是被压扁。没有点特征跳转之类的联动。
 - **CSS 内联**：产物刻意不注入样式表——`factory` 里的样式副作用要自己管拆除；
   内联样式让产物保持单文件、零生命周期负担。
 - **key 配置段只在「本包」的详情页出现**：`plugins.detail.section` 是 list 座位，条目自己判断
@@ -177,7 +177,7 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
    provider 拒绝时消息原样显示；Papers tab 的 key 徽标也在真实渲染中验证（配置态绿点 + 来源，且不出现 key 值）。
 4. **数据通路（质粒 / 比对 / 结构）**：真实 pUC118 `.dna` → 记录（名称/长度/拓扑/特征，
    AmpR 2102-2962 反链）→ SVG；GenBank 文本路径与 Node 工具解析结果**逐字段一致**；
-   FASTA → 比对 → logo；PDB → 3D 模型（点选后 canvas 被绘制，拖拽触发重绘）；
+   FASTA（≥2 条）→ 比对 → logo（缩放后 SVG 的 `width` 变大）；单条 FASTA → 序列文本；PDB → 3D 模型（点选后 canvas 被绘制，拖拽触发重绘）；
    扩展名分类、排序、base64 解码、非法输入的错误路径。
 5. **数据通路（文献库）**：`readWorkspaceText` 的三种结果（有文本 / 文件不存在 / 读取失败）
    分别对应"有库 / 空库 / 报错"；`parseLibrary` 与工具侧契约一致（`{papers: [...]}`）且
@@ -192,8 +192,8 @@ seed）、禁止动态 `import()`、禁止跨插件值导入。它自己只降�
      `ctx.remote.workspaceFiles` 就是我用的那套；
    - `sessions` 这个 root hook **由谁提供**（`ui-session` 的 `slots.provideRoot`）以及它安装的
      session scope；
-   - `workspaceFiles` 的 `list`/`readAll`/`read` 在**宿主 Remote** 上的实现、`not-found` wire 码
-     与 base64 载荷，以及官方客户端包对同一命名空间的调用方式；
+   - `workspaceFiles` 的 `list`/`read`/`readBytes` 在**宿主 Remote** 上的实现、`not-found` wire 码
+     与 base64 载荷，以及官方客户端包对同一命名空间的调用方式（首参是 SessionId 字符串）；
    - 本包产物**自己那一侧**：inject 列表、两个 keyed 座位的注册、三个 Remote 调用的实参顺序、
      正文解构的 props 名，以及"inject 工厂只交出 `remote`"（保证不会遮蔽框架注入的
      `sessionId`/钩子）。

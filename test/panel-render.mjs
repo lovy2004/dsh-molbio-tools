@@ -200,8 +200,17 @@ globalThis.DOMParser = class {
       querySelector: (selector) => (selector === 'parsererror' && broken ? { tagName: 'parsererror' } : null),
       documentElement: {
         tagName: markup.startsWith('<svg') ? 'svg' : 'unknown',
-        attributes: { viewBox: /viewBox="([^"]+)"/.exec(markup)?.[1] ?? null },
-        setAttribute() {},
+        attributes: {
+          viewBox: /viewBox="([^"]+)"/.exec(markup)?.[1] ?? null,
+          width: /<svg[^>]*?\bwidth="([^"]+)"/.exec(markup)?.[1] ?? null,
+          height: /<svg[^>]*?\bheight="([^"]+)"/.exec(markup)?.[1] ?? null,
+        },
+        // Recorded, not ignored: the panel scales the appended SVG by setting
+        // its width/height, and a stub that swallows setAttribute() would hide
+        // a broken zoom the way a no-op logger hides a bug.
+        setAttribute(name, value) {
+          this.attributes[name] = String(value);
+        },
         getAttribute(name) {
           return this.attributes[name] ?? null;
         },
@@ -264,43 +273,43 @@ const pdbText = [
 const puc118Bytes = new Uint8Array(await readFile(new URL('./fixtures/pUC118.dna', import.meta.url)));
 
 /**
- * A workspace Remote stub over a virtual file tree.
+ * The Remote's first argument is the SessionId `lookup`, a STRING.
  *
- * The default shape is DSH 0.1.7-alpha.1's: `readBytes`, whose `data` is a
- * `Uint8Array` the gateway lifts into a base64 attachment, and NO `readAll` at
- * all — so every block below drives the panel's FALLBACK branch, which is the
- * only branch a current harness can reach. `options.legacyReadAll` restores the
- * pre-0.1.7 `readAll` method so the branch the panel used in older installs
- * stays covered too.
+ * The host declares it as `workspaceFileScopeId` with a strict string codec and
+ * resolves it to the Session's workspace root server-side. Passing a scope
+ * object there (this bundle's shape until 0.27.1) is rejected by the gateway,
+ * so the panel lists nothing and reports nothing — the exact defect a real
+ * browser session surfaced on every extension, .fasta/.pdb/.cif included.
+ * The stub enforces the wire shape so the tests cannot drift back to it.
  */
-function remote(tree, options = {}) {
+function assertSessionId(value) {
+  assert.equal(typeof value, 'string', 'the workspaceFiles first argument is the SessionId lookup (a string), not a scope object');
+}
+
+/**
+ * A workspace Remote stub over a virtual file tree, in the shape every
+ * supported release (0.2.1-rc.2 and later) exposes: `readBytes` with native
+ * bytes, `read` for text, `list` for directories, and no `readAll`.
+ */
+function remote(tree) {
   return {
     workspaceFiles: {
-      async list(_scope, path) {
+      async list(sessionId, path) {
+        assertSessionId(sessionId);
         const entries = tree[path];
         if (entries === undefined) return { ok: true, value: { path, entries: [], truncated: false } };
         return { ok: true, value: { path, entries, truncated: false } };
       },
-      // Pre-0.1.7 transport: bytes base64-encoded as TEXT on the wire. Kept so
-      // a regression in the `readAll` branch is still caught.
-      ...(options.legacyReadAll === true
-        ? {
-          async readAll(_scope, path) {
-            const value = tree[path];
-            if (value === undefined) return { ok: false, error: { code: 'workspace-file/not-found', message: `${path} does not exist` } };
-            const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value);
-            return { ok: true, value: { data: bytes.toString('base64') } };
-          },
-        }
-        : {}),
-      // Current transport: native bytes, and no `readAll` on the namespace —
-      // which is what forces the panel down its `readBytes` path.
-      async readBytes(_scope, path) {
+      // Native bytes: the gateway lifts the Uint8Array into a base64 attachment.
+      async readBytes(sessionId, path) {
+        assertSessionId(sessionId);
         const value = tree[path];
         if (value === undefined) return { ok: false, error: { code: 'workspace-file/not-found', message: `${path} does not exist` } };
         return { ok: true, value: { data: new Uint8Array(typeof value === 'string' ? Buffer.from(value, 'utf8') : value) } };
       },
-      async read(_scope, path) {
+      async read(sessionId, path, range) {
+        assertSessionId(sessionId);
+        assert.ok(range !== null && typeof range === 'object', 'read receives a range object; the host destructures it, so undefined throws');
         const value = tree[path];
         if (value === undefined) return { ok: false, error: { code: 'workspace-file/not-found', message: `"${path}" does not exist` } };
         if (typeof value !== 'string') return { ok: false, error: { code: 'workspace-file/not-text', message: `${path} is not text` } };
@@ -376,11 +385,15 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
       { name: 'notes.md', type: 'file' },
       { name: 'pUC118.dna', type: 'file' },
       { name: 'reads.fasta', type: 'file' },
+      { name: 'single.fasta', type: 'file' },
+      { name: 'prot.fasta', type: 'file' },
       { name: 'tiny.pdb', type: 'file' },
       { name: 'subdir', type: 'directory' },
     ],
     [`${CWD}/pUC118.dna`]: puc118Bytes,
     [`${CWD}/reads.fasta`]: '>a\nACGTACGT\n>b\nACGTTCGT\n',
+    [`${CWD}/single.fasta`]: '>solo\nACGTACGTACGTACGT\n',
+    [`${CWD}/prot.fasta`]: '>p1\nMKTAYIAK\n>p2\nMKTGYIAK\n',
     [`${CWD}/tiny.pdb`]: pdbText,
   });
   globalThis.__molbioTestHooks = mount(MolbioPanel);
@@ -426,6 +439,48 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   assert.ok(rendered.includes('2 sequences'), 'the logo header reports the sequence count');
   assert.ok(rendered.includes('8 aligned columns'), 'the logo header reports the columns');
 
+  // The logo is appended at its NATURAL width in a scrolling pane, and the
+  // zoom controls scale it. Fitting it to the pane is what made a long
+  // alignment unreadable; a stub that swallows setAttribute would hide it.
+  const logoHost = elements(harness.tree, 'div')
+    .find((node) => node.props?.ref !== undefined && node.props?.style?.lineHeight === 0);
+  assert.ok(logoHost !== undefined, 'the alignment SVG has its own host');
+  const logoNode = logoHost.props.ref.current.children[0];
+  assert.ok(logoNode !== undefined, 'the logo was appended');
+  const baseWidth = Number(logoNode.getAttribute('width'));
+  assert.ok(baseWidth > 0, 'the logo carries its natural width');
+  const zoomIn = elements(harness.tree, 'button').find((node) => node.props?.title === 'Zoom in');
+  assert.ok(zoomIn !== undefined, 'the zoom-in control exists');
+  zoomIn.props.onClick();
+  await harness.render();
+  assert.ok(Number(logoNode.getAttribute('width')) > baseWidth, 'zooming in widens the logo');
+  assert.ok(markup(harness.tree).includes('125%'), 'the zoom level is reported');
+
+  // A single-sequence FASTA is printed, not aligned and not drawn as a logo.
+  const singleRow = elements(harness.tree, 'div').filter((node) => node.props?.title?.startsWith('single.fasta'));
+  assert.equal(singleRow.length, 1, 'the single-sequence file is listed');
+  singleRow[0].props.onClick();
+  await harness.render();
+  rendered = markup(harness.tree);
+  assert.ok(rendered.includes('1 sequence'), 'one sequence is reported as such');
+  assert.ok(rendered.includes('16 residues'), 'with its residue count');
+  assert.ok(rendered.includes('>solo'), 'the FASTA header travels with the sequence');
+  assert.ok(rendered.includes('ACGTACGT'), 'the residues are printed');
+  assert.ok(!rendered.includes('125%'), 'text gets no zoom controls');
+
+  // A protein FASTA is reported, not silently aligned as DNA. The old path
+  // dropped amino acids the logo's alphabet did not know and drew the gaps.
+  const protRow = elements(harness.tree, 'div').filter((node) => node.props?.title?.startsWith('prot.fasta'));
+  assert.equal(protRow.length, 1, 'the protein FASTA is listed');
+  protRow[0].props.onClick();
+  await harness.render();
+  rendered = markup(harness.tree);
+  assert.ok(rendered.includes('not nucleotide'), 'the panel says the file is not nucleotide');
+  assert.ok(rendered.includes('NOT aligned'), 'and that it was not aligned');
+  assert.ok(rendered.includes('>p1'), 'the sequences are printed instead');
+  assert.ok(rendered.includes('MKTAYIAK'), 'with their residues');
+  assert.ok(!rendered.includes('125%'), 'and no zoom controls');
+
   // Click the PDB entry: the panel paints a realistic 3D frame into a canvas,
   // not a logo or a 2D projection.
   const pdbRow = elements(harness.tree, 'div').filter((node) => node.props?.title?.startsWith('tiny.pdb'));
@@ -454,6 +509,34 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   await harness.render();
   assert.ok(canvas.props.ref.current.puts > before, 'dragging repaints the canvas');
 
+  harness.unmount();
+}
+
+// ── Molbio panel: no cwd in the snapshot still lists the workspace root ─────
+//
+// A session-scope body can receive a list snapshot whose summary carries no
+// `cwd` (or arrives after first render). The panel must still list the
+// workspace — the host resolves '.' against the Session's workspace root —
+// instead of sitting in a waiting state, because "waiting" and "no files" look
+// identical to a user, which is how a missing cwd survived a restart.
+
+{
+  const files = remote({
+    '.': [
+      { name: 'pUC118.dna', type: 'file' },
+      { name: 'reads.fasta', type: 'file' },
+    ],
+    'pUC118.dna': puc118Bytes,
+  });
+  globalThis.__molbioTestHooks = mount(MolbioPanel);
+  const harness = globalThis.__molbioTestHooks;
+  const noCwd = (selector) => selector({ byId: {}, projectionsBySession: {} });
+  harness.setProps({ sessionId: SESSION, remote: files, useSessions: noCwd });
+  await harness.render();
+  const rendered = markup(harness.tree ?? null);
+  assert.ok(rendered.includes('pUC118.dna'), 'the root listing is used when the store has no cwd');
+  assert.ok(rendered.includes('reads.fasta'), 'and every openable root file is listed');
+  assert.ok(rendered.includes('session workspace'), 'the header says the absolute path is unresolved');
   harness.unmount();
 }
 
@@ -520,32 +603,6 @@ const PapersPanel = bodyFor('dsh-molbio-tools/papers');
   harness.unmount();
 }
 
-// ── Molbio panel: the pre-0.1.7 `readAll` transport still works ────────────
-//
-// The block above proves the `readBytes` fallback every current install takes.
-// This one pins the other half of the feature-detect: when a harness DOES
-// expose `readAll`, the panel must prefer it rather than silently requiring
-// `readBytes`. Without this, deleting the `readAll` branch would go unnoticed
-// until someone ran an older DSH.
-
-{
-  const files = remote({
-    [CWD]: [{ name: 'pUC118.dna', type: 'file' }],
-    [`${CWD}/pUC118.dna`]: puc118Bytes,
-  }, { legacyReadAll: true });
-  assert.equal(typeof files.workspaceFiles.readAll, 'function', 'the legacy stub exposes readAll');
-  globalThis.__molbioTestHooks = mount(MolbioPanel);
-  const harness = globalThis.__molbioTestHooks;
-  harness.setProps({ sessionId: SESSION, remote: files, useSessions });
-  await harness.render();
-  elements(harness.tree, 'div').find((node) => node.props?.title?.startsWith('pUC118.dna')).props.onClick();
-  await harness.render();
-  const rendered = markup(harness.tree);
-  assert.ok(rendered.includes('3162 bp'), 'readAll still yields the parsed record');
-  assert.ok(rendered.includes('AmpR'), 'and its features');
-  harness.unmount();
-}
-
 // ── Molbio panel: a workspace listing failure is shown ─────────────────────
 
 {
@@ -591,7 +648,7 @@ const library = {
 };
 
 {
-  const files = remote({ [`${CWD}/${DEFAULT_LIBRARY_FILE}`]: JSON.stringify(library) });
+  const files = remote({ [`${DEFAULT_LIBRARY_FILE}`]: JSON.stringify(library) });
   globalThis.__molbioTestHooks = mount(PapersPanel);
   const harness = globalThis.__molbioTestHooks;
   harness.setProps({ sessionId: SESSION, remote: files, useSessions });
@@ -644,7 +701,7 @@ const library = {
 
 // An absent papers.json is an EMPTY library with a pointer at the tools.
 {
-  const files = remote({ [CWD]: [] });
+  const files = remote({});
   globalThis.__molbioTestHooks = mount(PapersPanel);
   const harness = globalThis.__molbioTestHooks;
   harness.setProps({ sessionId: SESSION, remote: files, useSessions });
@@ -657,7 +714,7 @@ const library = {
 
 // A corrupt library is an ERROR, never an empty list.
 {
-  const files = remote({ [`${CWD}/${DEFAULT_LIBRARY_FILE}`]: '{ this is not json' });
+  const files = remote({ [`${DEFAULT_LIBRARY_FILE}`]: '{ this is not json' });
   globalThis.__molbioTestHooks = mount(PapersPanel);
   const harness = globalThis.__molbioTestHooks;
   harness.setProps({ sessionId: SESSION, remote: files, useSessions });
@@ -763,7 +820,7 @@ const library = {
   await flush();
   sectionHarness.unmount();
 
-  const files = remote({ [`${CWD}/${DEFAULT_LIBRARY_FILE}`]: JSON.stringify(library) });
+  const files = remote({ [`${DEFAULT_LIBRARY_FILE}`]: JSON.stringify(library) });
   globalThis.__molbioTestHooks = mount(PapersPanel);
   const harness = globalThis.__molbioTestHooks;
   harness.setProps({ sessionId: SESSION, remote: files, useSessions });

@@ -34,7 +34,7 @@ export {
 export { parseGenBank } from '../genbank.mjs';
 export { parseSnapGeneBytes, parseXml } from '../snapgene.mjs';
 export { renderPlasmidMap } from '../plasmid.mjs';
-export { normalizeAlignedRow, progressiveAlign, conservationAnalysis, pairwiseIdentities } from '../msa.mjs';
+export { normalizeAlignedRow, normalizeMsaSequence, progressiveAlign, conservationAnalysis, pairwiseIdentities } from '../msa.mjs';
 export { columnComposition, renderSequenceLogo } from '../logo.mjs';
 export { designGrnas, findProtospacers, evaluateGuide } from '../crispr.mjs';
 export { entryStats, parseFasta } from '../seqio.mjs';

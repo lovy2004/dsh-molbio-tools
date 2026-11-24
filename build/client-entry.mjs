@@ -22,8 +22,11 @@
  * The body receives the slot framework's `sessionId`/`actions` injection plus
  * the `useSessions` selector hook the runtime synthesises from the root hook
  * sources (every root hook becomes a `use<Name>` prop for session-scope slots),
- * so the workspace root is `useSessions((state) => state.byId[sessionId]?.cwd)`.
- * This package's own `inject` factory only has to hand over the Remote face.
+ * so the workspace root comes from `useSessions` through
+ * `selectSessionDirectory` (panel-core.mjs): the session's `workingDirectory`
+ * projection first, the summary's projection values next, `cwd` last — the
+ * order DSH 0.2.3's own tab bodies use. This package's own `inject` factory only
+ * has to hand over the Remote face.
  *
  * No JSX and no CSS files on purpose: the bundler lowers plain ESM only, and
  * inline styles keep the artifact a single self-contained file — styles injected
@@ -56,6 +59,8 @@ import {
   parseStructureFile,
   plasmidSvg,
   readWorkspaceText,
+  selectSessionDirectory,
+  sequenceText,
   sortEntries,
   structureImage,
   DEFAULT_STRUCTURE_VIEW,
@@ -71,17 +76,19 @@ const PANEL_KIND = 'molbio-panel';
 const PAPERS_ID = 'dsh-molbio-tools/papers';
 const PAPERS_KIND = 'molbio-papers';
 
-/** Read one file's raw bytes through the workspace Remote. */
+/**
+ * Read one file's raw bytes through the workspace Remote.
+ *
+ * The FIRST argument is the SessionId `lookup` (`workspaceFileScopeId`), not a
+ * scope object: the host declares it with a strict string codec and resolves it
+ * to the Session's workspace root on its own — exactly how
+ * `ui-sidebar-documentpreview` calls `readBytes(file.sessionId, …)`. Passing
+ * `{ sessionId }` here (the shape this panel used until 0.27.1) is rejected by
+ * the gateway's argument codec, so EVERY listing and read failed and the panel
+ * showed an empty workspace no matter which extensions the files had.
+ */
 async function readBytes(remote, sessionId, path, signal) {
-  const scope = { sessionId };
-  // Feature-detect the METHOD, normalise the VALUE (see decodeWorkspaceBytes).
-  // DSH 0.1.7-alpha.1 dropped `readAll` and answers `readBytes` with a
-  // Uint8Array, so this fallback is the live path on every current install —
-  // and the bug it hides (feeding the raw bytes to a base64 decoder) is exactly
-  // why test/panel-render.mjs now drives a Remote that has no `readAll` at all.
-  const result = typeof remote.workspaceFiles.readAll === 'function'
-    ? await remote.workspaceFiles.readAll(scope, path, signal)
-    : await remote.workspaceFiles.readBytes(scope, path, { offset: 0, length: 8 * 1024 * 1024 }, signal);
+  const result = await remote.workspaceFiles.readBytes(sessionId, path, { offset: 0, length: 8 * 1024 * 1024 }, signal);
   if (result === null || typeof result !== 'object' || !result.ok) {
     const failure = result !== null && typeof result === 'object' ? result.error : undefined;
     throw new Error(failure?.message ?? `the workspace read of ${path} failed`);
@@ -91,7 +98,7 @@ async function readBytes(remote, sessionId, path, signal) {
 
 /** List one directory, newest-first ordering rules applied by the caller. */
 async function listDirectory(remote, sessionId, path, signal) {
-  const result = await remote.workspaceFiles.list({ sessionId }, path, signal);
+  const result = await remote.workspaceFiles.list(sessionId, path, signal);
   if (result === null || typeof result !== 'object' || !result.ok) {
     const failure = result !== null && typeof result === 'object' ? result.error : undefined;
     throw new Error(failure?.message ?? `the workspace listing of ${path} failed`);
@@ -140,6 +147,27 @@ const styles = {
   error: { color: 'var(--dsh-danger, #c0392b)', padding: '10px 12px', whiteSpace: 'pre-wrap' },
   muted: { opacity: 0.6, padding: '10px 12px' },
   svg: { maxWidth: '100%', height: 'auto' },
+  svgScroll: {
+    overflow: 'auto',
+    maxHeight: '68vh',
+    padding: '8px',
+    border: '1px solid var(--dsh-border, #e3e6ea)',
+    borderRadius: '6px',
+    background: '#ffffff',
+  },
+  sequence: {
+    margin: 0,
+    padding: '10px',
+    maxHeight: '68vh',
+    overflow: 'auto',
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+    fontSize: '12px',
+    lineHeight: 1.45,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+    background: 'var(--dsh-soft, #f6f7f9)',
+    borderRadius: '6px',
+  },
   canvas: { maxWidth: '100%', height: 'auto', display: 'block', border: '1px solid var(--dsh-border, #e3e6ea)', borderRadius: '6px', cursor: 'grab', touchAction: 'none', background: '#f7f9fb' },
   button: (active) => ({
     fontSize: '11px',
@@ -161,12 +189,24 @@ const styles = {
 
 /** The panel body: a file list on the left, the rendered record on the right. */
 function MolbioPanel({ sessionId, remote, useSessions }) {
-  const cwd = useSessions((sessions) => sessions.byId[sessionId]?.cwd);
+  const cwd = useSessions((state) => selectSessionDirectory(state, sessionId));
+  // The listing never blocks on the store: `'.'` is the Session's workspace
+  // root as the HOST resolves it, so a session whose `cwd` is missing from the
+  // list snapshot (or arrives after first render) still lists its files. Reads
+  // use the same base as the listing so an absent `cwd` cannot mix the two.
+  const root = cwd ?? '.';
+  const base = cwd ?? '';
   const [entries, setEntries] = useState([]);
   const [selected, setSelected] = useState(null);
   const [record, setRecord] = useState(null);
-  const [status, setStatus] = useState({ kind: cwd === undefined ? 'waiting' : 'loading' });
+  const [status, setStatus] = useState({ kind: 'loading' });
   const [view, setView] = useState({ ...DEFAULT_STRUCTURE_VIEW });
+  // Multi-sequence alignments are drawn at their NATURAL pixel width and the
+  // pane scrolls; zoom scales that width. Fitting a 2 000-column logo into the
+  // pane is what made long alignments unreadable in the first place.
+  const [logoZoom, setLogoZoom] = useState(1);
+  const svgNode = useRef(null);
+  const svgNatural = useRef({ width: 0, height: 0 });
   const [dragging, setDragging] = useState(false);
   const svgHost = useRef(null);
   const canvasHost = useRef(null);
@@ -174,10 +214,9 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
 
   // Directory listing, re-read when the session's workspace root changes.
   useEffect(() => {
-    if (cwd === undefined) return undefined;
     const controller = new AbortController();
     setStatus({ kind: 'loading' });
-    listDirectory(remote, sessionId, cwd, controller.signal)
+    listDirectory(remote, sessionId, root, controller.signal)
       .then((rows) => {
         if (controller.signal.aborted) return;
         setEntries(rows);
@@ -187,14 +226,14 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
         if (!controller.signal.aborted) setStatus({ kind: 'error', message: String(error?.message ?? error) });
       });
     return () => controller.abort();
-  }, [cwd, remote, sessionId]);
+  }, [root, remote, sessionId]);
 
   // The selected file, parsed with the plugin's own parsers.
   useEffect(() => {
-    if (selected === null || cwd === undefined) return undefined;
+    if (selected === null) return undefined;
     const controller = new AbortController();
     setStatus({ kind: 'loading' });
-    readBytes(remote, sessionId, childPath(cwd, selected.name), controller.signal)
+    readBytes(remote, sessionId, childPath(base, selected.name), controller.signal)
       .then((bytes) => {
         if (controller.signal.aborted) return;
         const kind = classifyEntry(selected);
@@ -207,6 +246,7 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
         // A new structure starts from the same deterministic camera; the
         // previous file's yaw/pitch would be meaningless on a different molecule.
         if (parsed.kind === 'structure') setView({ ...DEFAULT_STRUCTURE_VIEW });
+        if (parsed.kind === 'alignment') setLogoZoom(1);
         setStatus({ kind: 'ready' });
       })
       .catch((error) => {
@@ -226,7 +266,11 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     const host = svgHost.current;
     if (host === null) return;
     host.replaceChildren();
-    if (record === null || status.kind !== 'ready' || record.kind === 'structure') return;
+    svgNode.current = null;
+    // A single-sequence FASTA is printed as text (no logo, no SVG host), and a
+    // structure owns the canvas instead.
+    if (record === null || status.kind !== 'ready' || record.kind === 'structure'
+      || (record.kind === 'alignment' && (record.single === true || record.protein === true))) return;
     // The renderer refuses what it cannot draw (renderPlasmidMap caps a map at
     // 200 features). Letting that throw out of the effect leaves the pane empty
     // with no explanation, so it becomes the pane's error state instead.
@@ -243,9 +287,31 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
       return;
     }
     const svg = parsed.documentElement;
-    svg.setAttribute('style', 'max-width:100%;height:auto');
+    if (record.kind === 'alignment') {
+      // Natural size + a scrolling pane: the zoom effect below scales this.
+      svgNatural.current = {
+        width: Number(svg.getAttribute('width')) || 0,
+        height: Number(svg.getAttribute('height')) || 0,
+      };
+      svg.setAttribute('style', 'display:block');
+    } else {
+      svgNatural.current = { width: 0, height: 0 };
+      svg.setAttribute('style', 'max-width:100%;height:auto');
+    }
+    svgNode.current = svg;
     host.append(document.importNode(svg, true));
   }, [record, status.kind]);
+
+  // Scale the appended alignment SVG in place: regenerating the markup on every
+  // zoom step would re-run the alignment's composition for no reason.
+  useEffect(() => {
+    const svg = svgNode.current;
+    const natural = svgNatural.current;
+    if (svg === null || natural.width === 0) return;
+    if (record === null || record.kind !== 'alignment' || record.single === true) return;
+    svg.setAttribute('width', String(Math.max(1, Math.round(natural.width * logoZoom))));
+    svg.setAttribute('height', String(Math.max(1, Math.round(natural.height * logoZoom))));
+  }, [logoZoom, record, status.kind]);
 
   // Structures are rasterized into an RGB buffer and painted into a canvas.
   // The renderer is deterministic and shared with the Node tests; only the
@@ -324,7 +390,13 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
 
   const openable = useMemo(() => entries.filter(isOpenable), [entries]);
 
-  const head = h('div', { style: styles.listHead }, 'Sequence & structure files');
+  // The header names the directory being listed. Without it a wrong/empty
+  // workspace is indistinguishable from "the panel is broken", which is how a
+  // missing `cwd` stayed invisible through a restart.
+  const head = h('div', { style: styles.listHead },
+    h('div', null, 'Sequence & structure files'),
+    h('div', { style: styles.listSub, title: root }, cwd ?? 'session workspace'),
+    h('div', { style: styles.listSub }, openable.length === 0 ? 'no openable files' : `${openable.length} file(s)`));
   const list = h(
     'div',
     { style: styles.list },
@@ -347,7 +419,6 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
   );
 
   const body = [];
-  if (status.kind === 'waiting') body.push(h('div', { key: 'wait', style: styles.muted }, 'Waiting for the session workspace…'));
   if (status.kind === 'error') body.push(h('div', { key: 'err', style: styles.error }, status.message));
   if (status.kind === 'loading') body.push(h('div', { key: 'load', style: styles.muted }, 'Reading…'));
   if (status.kind === 'ready' && record === null) {
@@ -380,10 +451,47 @@ function MolbioPanel({ sessionId, remote, useSessions }) {
     }
   }
   if (status.kind === 'ready' && record !== null && record.kind === 'alignment') {
-    body.push(h('div', { key: 'meta', style: styles.meta },
-      h('span', null, `${record.rows.length} sequences`),
-      h('span', null, `${record.rows[0]?.length ?? 0} aligned columns`)));
-    body.push(h('div', { key: 'svg', ref: svgHost, style: styles.svg }));
+    if (record.protein === true) {
+      // Protein FASTA: the aligner and the logo are nucleotide-only. Saying so
+      // beats the old behaviour, which aligned amino acids as if they were DNA
+      // ambiguity codes and drew a logo with most letters dropped.
+      body.push(h('div', { key: 'meta', style: styles.meta },
+        h('span', null, `${record.rows.length} sequence(s)`),
+        h('span', null, 'not nucleotide')));
+      body.push(h('div', { key: 'notice', style: styles.note },
+        'This FASTA is not a nucleotide (IUPAC DNA) file. The sequence logo aligns nucleotide sequences only, '
+        + 'so these sequences are shown as plain text and are NOT aligned.'));
+      body.push(h('pre', { key: 'sequence', style: styles.sequence }, sequenceText(record)));
+    } else if (record.single === true) {
+      // One sequence is DATA, not an alignment: print it (wrapped) instead of
+      // drawing a one-glyph-per-column logo that shrinks to noise on a long
+      // sequence. No zoom controls are needed for text.
+      body.push(h('div', { key: 'meta', style: styles.meta },
+        h('span', null, '1 sequence'),
+        h('span', null, `${record.rows[0]?.length ?? 0} residues`)));
+      body.push(h('pre', { key: 'sequence', style: styles.sequence }, sequenceText(record)));
+    } else {
+      body.push(h('div', { key: 'meta', style: styles.meta },
+        h('span', null, `${record.rows.length} sequences`),
+        h('span', null, `${record.rows[0]?.length ?? 0} aligned columns`)));
+      body.push(h('div', { key: 'zoom', style: styles.meta },
+        h('button', {
+          key: 'out',
+          style: styles.button(false),
+          title: 'Zoom out',
+          onClick: () => setLogoZoom((value) => Math.max(0.1, value / 1.25)),
+        }, '−'),
+        h('span', { key: 'level', style: { minWidth: '48px', textAlign: 'center' } }, `${Math.round(logoZoom * 100)}%`),
+        h('button', {
+          key: 'in',
+          style: styles.button(false),
+          title: 'Zoom in',
+          onClick: () => setLogoZoom((value) => Math.min(8, value * 1.25)),
+        }, '+'),
+        h('button', { key: 'reset', style: styles.button(false), title: 'Actual size', onClick: () => setLogoZoom(1) }, 'Reset')));
+      body.push(h('div', { key: 'svg-scroll', style: styles.svgScroll },
+        h('div', { key: 'svg', ref: svgHost, style: { lineHeight: 0 } })));
+    }
   }
   if (status.kind === 'ready' && record !== null && record.kind === 'structure') {
     body.push(h('div', { key: 'meta', style: styles.meta },
@@ -582,9 +690,15 @@ function MolbioFigureCard({ block, inspect }) {
  * tools instead (see EMPTY_HINT).
  */
 function PapersPanel({ sessionId, remote, useSessions }) {
-  const cwd = useSessions((sessions) => sessions.byId[sessionId]?.cwd);
+  // The library path is WORKSPACE-RELATIVE, matching how the tools resolve it
+  // (papers.mjs `workspaceFilePath` joins `workspaceRoot`, the sandbox root,
+  // not the session cwd). Building it from `cwd` read the wrong file whenever
+  // those two differ. `useSessions` stays in the signature because the slot
+  // runtime provides it (and the contract pins that); this panel needs no path
+  // from the store — a useless `cwd` is what the property is for.
+  const libraryPath = LIBRARY_FILE;
   const [papers, setPapers] = useState([]);
-  const [status, setStatus] = useState({ kind: 'waiting' });
+  const [status, setStatus] = useState({ kind: 'loading' });
   const [query, setQuery] = useState('');
   const [tag, setTag] = useState('');
   const [selectedId, setSelectedId] = useState(null);
@@ -592,13 +706,9 @@ function PapersPanel({ sessionId, remote, useSessions }) {
   const keyView = ncbiKeyView(keyState);
 
   useEffect(() => {
-    if (cwd === undefined) {
-      setStatus({ kind: 'waiting' });
-      return undefined;
-    }
     const controller = new AbortController();
     setStatus({ kind: 'loading' });
-    readWorkspaceText(remote, sessionId, childPath(cwd, LIBRARY_FILE), controller.signal)
+    readWorkspaceText(remote, sessionId, libraryPath, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return;
         if (result.kind === 'missing') {
@@ -621,7 +731,7 @@ function PapersPanel({ sessionId, remote, useSessions }) {
         if (!controller.signal.aborted) setStatus({ kind: 'error', message: String(error?.message ?? error) });
       });
     return () => controller.abort();
-  }, [cwd, remote, sessionId]);
+  }, [libraryPath, remote, sessionId]);
 
   const tags = useMemo(() => libraryTags(papers), [papers]);
   const visible = useMemo(() => filterPapers(papers, { query, tag }), [papers, query, tag]);
@@ -667,7 +777,6 @@ function PapersPanel({ sessionId, remote, useSessions }) {
         h('div', { style: styles.listSub }, paperSummary(paper))))));
 
   const detail = [];
-  if (status.kind === 'waiting') detail.push(h('div', { key: 'wait', style: styles.muted }, 'Waiting for the session workspace…'));
   if (status.kind === 'loading') detail.push(h('div', { key: 'load', style: styles.muted }, 'Reading papers.json…'));
   if (status.kind === 'error') detail.push(h('div', { key: 'err', style: styles.error }, status.message));
   if (status.kind === 'empty') {
@@ -950,7 +1059,13 @@ function NcbiKeySection({ subject, remote }) {
 }
 
 /** Required browser services. */
-const inject = ['slots', 'sidebarRightTabs', 'remote'];
+// `remote.workspaceFiles` is a namespace sub-service, not a plain property:
+// every shipped consumer (ui-sidebar-files, ui-sidebar-documentpreview,
+// ui-reference, ui-open-in-app) injects it beside `remote`, and this package
+// used to declare only `remote`. Waiting for the namespace is what makes
+// `ctx.remote.workspaceFiles` usable the moment `apply()` runs and the panels
+// render; without it the lookup is a race the panel cannot report.
+const inject = ['slots', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles'];
 
 /**
  * Claim seats through `ctx.slots.inject`, never a bare `ctx.slots.register` —

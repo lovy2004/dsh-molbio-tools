@@ -17,7 +17,7 @@
 #
 # Edit THIS file, then run `node build/preset-patch.mjs`.
 #
-# NOTE: the mode is the ONLY place these 64 tools load. The same bundle patch's
+# NOTE: the mode is the ONLY place these 65 tools load. The same bundle patch's
 # other insert (`molbio-client` → `./host.mjs`) deliberately registers nothing —
 # registering the tool at the host level as well would put it in every session
 # and is not what this package is for.
@@ -48,12 +48,16 @@
 # list carries no comments of its own, so none appear below; provenance and the
 # upgrade rules live in this header.
 #
-# Baseline: the `standard` preset of dsh 0.2.2-rc.5 (the installed desktop
+# Baseline: the `standard` preset of dsh 0.2.3-alpha.2 (the installed desktop
 # runtime, `resources/app.asar` →
 # `dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`,
-# 7286 B, sha256 e40bb192…; rows live under the `preset-standard` row's
-# `config.plugins:`). rc.4 and rc.5 ship it byte-identical to rc.3 / rc.2, and
-# rc.2 changed the preset in exactly three places, all absorbed verbatim below: a new
+# 7363 B, sha256 57c14c30…; rows live under the `preset-standard` row's
+# `config.plugins:`). 0.2.3-alpha.2 differs from 0.2.2-rc.5 in exactly two
+# places, both absorbed verbatim below: a new `tool-cordis` row
+# (`@deepseek-ai/dsh-tool-cordis`, between `tool-web` and `present`) and a
+# conditional `tool-plugin-manager` disable
+# (`!!js "!ctx.get('profileContext')"`, so that row is ENABLED inside a
+# profile). Everything else matches the rc.2–rc.5 list, whose changes were: a new
 # `tool-office` row
 # (`@deepseek-ai/dsh-tool-office`), `customSkillDirs` on `skill-filesystem`
 # (the shipped `@deepseek-ai/dsh-agent-preset/skills` directory), and
@@ -209,18 +213,20 @@
   config:
     fetch: true
     searchTimeoutMs: 60000
+- id: tool-cordis
+  name: '@deepseek-ai/dsh-tool-cordis'
 - id: present
   name: '@deepseek-ai/dsh-tool-present'
 - id: tool-office
   name: '@deepseek-ai/dsh-tool-office'
 - id: tool-plugin-manager
   name: '@deepseek-ai/dsh-plugin-manager/tools'
-  disabled: true
+  disabled: !!js "!ctx.get('profileContext')"
 - id: tool-plugin-market
   name: '@deepseek-ai/dsh-plugin-market/tools'
   disabled: true
 
-# dsh-molbio-tools: molecular-biology toolset (64 tools across sequence
+# dsh-molbio-tools: molecular-biology toolset (65 tools across sequence
 # analysis, primers (incl. TaqMan probes and multiplex compatibility),
 # in-silico PCR, cloning (incl. Golden Gate), enzyme catalog, methylation-aware
 # and double digests, plasmids, Sanger verification, proteins (incl. helical

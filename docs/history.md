@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.27.1 | — | **DSH 0.2.3-alpha.2 适配**：上游 `standard` 两处变更（新增 `tool-cordis`、`tool-plugin-manager` 改条件禁用）；面板改读 `workingDirectory` projection（`selectSessionDirectory`，旧版回退 `cwd`）；守卫改用 Include 的 `parseEntryYaml`；工具数不变 | 65 |
 | 0.27.0 | — | **双链热力学（survey #9）**：新增 `molbio_duplex_thermo`（ΔH/ΔS/ΔG°37/Tm + 3' 端稳定性、发夹、二聚体；错配双链拒绝估算）；NN 计算提成可复用函数；工具 64 → 65，benchmark 66 题（65/65 覆盖） | 65 |
 | 0.26.0 | — | **PubMed key 常驻标志**：Papers tab 顶部 key 状态徽标（绿/灰/红点，跟随凭据事件刷新）、检索结果标注凭据通道、详情页状态改徽标；工具数不变 | 64 |
 | 0.25.3 | — | **DSH 0.2.2-rc.5 适配**：上游 `standard` 与 rc.3 / rc.2 逐字节一致，preset 零改动；两份清单补上 rc.5 `compatible`、rc.4 `unknown`；工具数不变 | 64 |

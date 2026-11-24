@@ -236,14 +236,15 @@ check('a session-scope tab body receives sessionId + useSessions (official prece
     /function [A-Za-z_$][\w$]*\(\{(?=[^}]*\buseTabInfo\b)(?=[^}]*\bsessionId\b)(?=[^}]*\buseSessions\b)/,
     'the official tab body receives useTabInfo + sessionId + useSessions from its props',
   );
-  // The desktop distribution ships this bundle MINIFIED: `useSessions(sessions=>…)`
-  // (no parameter parentheses, no spaces) and template-literal registry names.
-  // Pin the CALL, not the npm build's spelling.
-  assert.match(
-    files.text,
-    /useSessions\(\s*\(?\s*sessions\s*\)?\s*=>\s*sessions\.byId\[sessionId\]\?\.cwd\s*\)/,
-    'and reads the workspace root exactly as the panel does',
-  );
+  // 0.2.3 replaced the direct `byId[sessionId].cwd` read with a shared
+  // projection-first selector. The official bundle is MINIFIED, so pin the
+  // RULE the host now states, not one spelling of the call: the selector
+  // exists, and it consults the `workingDirectory` session projection before
+  // the summary fields. Reading `cwd` alone is what this package did and what
+  // made the panel empty on sessions whose directory is projection-only.
+  assert.match(files.text, /function selectSessionDirectory\(/, 'the official tab body resolves the session directory through the shared selector');
+  assert.match(files.text, /projectionsBySession/, 'and reads the workingDirectory session projection first');
+  assert.match(files.text, /projectionValues/, 'then the summary projection values, before falling back to cwd');
   assert.match(files.text, /["'\x60]slots["'\x60]/, 'and injects the slot registry');
   assert.match(files.text, /["'\x60]sidebarRightTabs["'\x60]/, 'and the right-sidebar tab registry');
 });
@@ -290,19 +291,17 @@ check('workspaceFiles exposes list / read / readBytes on the host Remote', () =>
   // 0.1.7-alpha.1 REMOVED `readAll` and replaced it with `readBytes`, whose
   // `data` is a Uint8Array the gateway lifts into a base64 ATTACHMENT (see
   // `encodeRpcResult`/`writeBytes` in dsh-api-gateway) rather than inlining it
-  // as base64 text. The panel features-detects `readAll` and falls back to
-  // `readBytes`, so this pins the method the panel actually calls today —
-  // `readAll` is deliberately NOT required, and a reintroduction would not be
-  // an error either.
+  // as base64 text. Every supported release therefore has `readBytes` and no
+  // `readAll`; the panel calls `readBytes` directly.
   for (const method of ['async list(', 'async read(', 'async readBytes(']) {
     assert.ok(host.text.includes(method), `the host Remote implements ${method.trim()}`);
   }
   assert.ok(host.text.includes('workspace-file/not-found'), 'the wire still carries the not-found code the empty-library state keys on');
-  // The byte window the fallback asks for, and the field it decodes. A window
+  // The byte window the panel asks for, and the field it decodes. A window
   // above `maxBytes` is REFUSED rather than shortened, so the panel's fixed
   // 8 MiB request is a real contract with the deployment caps: if the default
-  // cap ever drops below it, `readBytes` starts failing where `readAll` used to
-  // succeed, and only this assertion would notice before a user did.
+  // cap ever drops below it, `readBytes` starts failing, and only this
+  // assertion would notice before a user did.
   assert.ok(/offset:\s*0/.test(host.text) || host.text.includes('readBytes'), 'readBytes serves the byte window the panel requests');
   const gateway = hostHalf('@deepseek-ai/dsh-api-gateway');
   assert.ok(gateway !== undefined, 'api-gateway is installed (it owns the byte attachment encoding)');
@@ -335,7 +334,15 @@ check('the built bundle registers the seats and services the framework expects',
   const declaration = /const inject = \[([^\]]*)\]/.exec(bundle);
   assert.ok(declaration !== null, 'the bundle declares its inject list');
   const declared = declaration[1].split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''));
-  assert.deepEqual(declared, ['slots', 'sidebarRightTabs', 'remote'], 'and injects the same three services ui-sidebar-files does');
+  // `remote.workspaceFiles` is a namespace SUB-service: every shipped consumer
+  // injects it beside `remote`, and the panel reads the namespace on first
+  // render. Declaring only `remote` was a race (0.2.3) and, on this harness,
+  // the concrete reason the tab could come up without a usable Remote.
+  assert.deepEqual(
+    declared,
+    ['slots', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles'],
+    'and injects the registries plus the Remote and its workspaceFiles namespace',
+  );
 
   // Seats: both page types register a body and a title in the keyed seats.
   // The bundle is generated from sources that spell seats with single quotes.
@@ -344,15 +351,33 @@ check('the built bundle registers the seats and services the framework expects',
   }
   assert.ok(bundle.includes('sidebarRightTabs.register'), 'the bundle registers its tab types');
 
-  // The panel's own reads, with the argument order the host Remote declares.
-  assert.ok(/workspaceFiles\.readAll\(scope, path, signal\)/.test(bundle), 'the panel calls readAll(scope, path, signal)');
-  assert.ok(/workspaceFiles\.read\(\{ sessionId \}, path, undefined, signal\)/.test(bundle), 'the panel calls read({sessionId}, path, …)');
-  assert.ok(/workspaceFiles\.list\(\{ sessionId \}, path, signal\)/.test(bundle), 'the panel calls list({sessionId}, path, signal)');
+  // The panel's own calls, with the argument the host Remote declares: the
+  // FIRST parameter is the SessionId lookup (`workspaceFileScopeId`, strict
+  // string codec), which the gateway resolves to the Session's workspace root.
+  // An object there (`{ sessionId }`, the shape this bundle used until 0.27.1)
+  // fails decoding and makes every listing empty, so pin the string form —
+  // and pin that the object form is gone, because a regex that only checks the
+  // method name would keep passing while the panel could open nothing.
+  assert.ok(/workspaceFiles\.readBytes\(sessionId, path, \{ offset: 0, length: [^}]+\}, signal\)/.test(bundle), 'the panel calls readBytes(sessionId, path, window, signal)');
+  // The host's `read()` destructures `range.offset`, so the third argument
+  // must be an OBJECT even when the caller wants the page defaults. A
+  // `undefined` there is not a shorthand: it throws before the file is touched,
+  // which is how the Papers tab stayed empty while every unit test (whose stub
+  // ignored the argument) stayed green.
+  assert.ok(/workspaceFiles\.read\(sessionId, path, \{\}, signal\)/.test(bundle), 'the panel calls read(sessionId, path, {}, signal)');
+  assert.ok(!/workspaceFiles\.read\(sessionId, path, undefined, signal\)/.test(bundle), 'and never passes undefined for the range object');
+  assert.ok(/workspaceFiles\.list\(sessionId, path, signal\)/.test(bundle), 'the panel calls list(sessionId, path, signal)');
+  assert.ok(!/workspaceFiles\.(list|read|readBytes|readAll)\(\{ sessionId \}/.test(bundle), 'no workspaceFiles call passes a scope object as its first argument');
 
   // The props the body reads must be the ones the rule produces.
   assert.ok(/function MolbioPanel\(\{ sessionId, remote, useSessions \}\)/.test(bundle), 'the body destructures sessionId / remote / useSessions');
   assert.ok(/function PapersPanel\(\{ sessionId, remote, useSessions \}\)/.test(bundle), 'the papers body does too');
-  assert.ok(bundle.includes('useSessions((sessions) => sessions.byId[sessionId]?.cwd)'), 'and reads the workspace root from useSessions');
+  assert.ok(
+    bundle.includes('useSessions((state) => selectSessionDirectory(state, sessionId))'),
+    'and reads the workspace root through the projection-first selector',
+  );
+  assert.ok(bundle.includes('function selectSessionDirectory('), 'the selector ships in the bundle');
+  assert.ok(bundle.includes("'workingDirectory'"), 'and names the workingDirectory projection');
   // The inject factory must hand over exactly the services the framework does
   // NOT provide, so it can never shadow sessionId or a synthesised hook.
   assert.ok(/inject: \(\) => \(\{ remote \}\)/.test(bundle), 'the body injects only the Remote face');

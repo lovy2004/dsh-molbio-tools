@@ -17,7 +17,7 @@ L = 需要新机制或外部资源）。
 - PubMed API key 在 **Papers** tab 顶部有常驻状态徽标（已配置/未配置/不可读），检索结果也标注凭据通道。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
   （见 [benchmark/README.md](../benchmark/README.md)）。
-- 基线：DSH **0.2.2-rc.5**；DSH 桌面版内嵌 Node 24.21.0，`engines.node` 与 CI 矩阵都按这个下限。
+- 基线：DSH **0.2.3-alpha.2**；DSH 桌面版内嵌 Node 24.22.3，`engines.node` 与 CI 矩阵都按这个下限。
 - **CI 已在位**（`.github/workflows/test.yml`，0.18.2 起）：push / PR / 手动都跑全套；harness 装
   **钉死版本**，并用 `npm prefix -g` 显式导出 `DSH_HARNESS_ROOT`。0.18.4 起**同时跑
   `ubuntu-latest` 与 `windows-latest`**——3.6 已修，套件不再依赖宿主分隔符。

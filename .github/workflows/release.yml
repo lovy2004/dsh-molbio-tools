@@ -138,7 +138,7 @@ jobs:
           "
 
       - name: Install the DSH baseline the guards compare against
-        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.5
+        run: npm install --global --no-audit --no-fund @deepseek-ai/dsh@0.2.3-alpha.2
 
       # Same derivation as test.yml: on a runner npm's global prefix is the Node
       # toolchain directory, and several guards resolve the harness through

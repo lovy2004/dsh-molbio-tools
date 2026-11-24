@@ -28,7 +28,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { findHarnessRoot } from '../benchmark/harness.mjs';
+import { findHarnessRoot, readComposition } from '../benchmark/harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, '..');
@@ -60,16 +60,6 @@ assert.ok(existsSync(packagesDir), `the harness packages must be installed at ${
 console.log(`harness : ${harnessRoot}`);
 console.log(`profile : ${profileDir}`);
 
-/** Locate an installed package directory by name, profile first. */
-function packageInstalled(name) {
-  const pkg = name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/');
-  for (const base of [join(profileDir, 'node_modules'), join(harnessRoot, 'node_modules'), join(harnessRoot)]) {
-    const candidate = join(base, ...pkg.split('/'));
-    if (existsSync(join(candidate, 'package.json'))) return candidate;
-  }
-  return undefined;
-}
-
 // ── the profile's mounted rows ──────────────────────────────────────────────
 
 /**
@@ -78,14 +68,13 @@ function packageInstalled(name) {
  * A patch layer is a list of patch ENTRIES: each either targets an existing row
  * by `id` (config override / disable) or carries an `insert:` list of new rows.
  * The mounted plugins are the inserted rows, and their groups nest further rows
- * under `config`. Parsed with the harness's own YAML dialect (the one carrying
- * `!!js`, via `cordis-plugin-include`'s entry-list schema).
+ * under `config`. Parsed with the harness's OWN dialect through
+ * `benchmark/harness.mjs`: 0.2.3 moved Include to the `yaml` package and
+ * `parseEntryYaml` (a stock `js-yaml` load rejects `!!js`), and this file must
+ * not carry a second, older copy of that knowledge.
  */
 async function rowsOf(patchPath) {
-  const { entryListSchema } = await import(pathToFileURL(join(packagesDir, 'cordis-plugin-include', 'lib', 'index.js')).href);
-  const yamlDir = packageInstalled('js-yaml');
-  const yaml = (await import(pathToFileURL(join(yamlDir, 'index.js')).href)).default;
-  const entries = yaml.load(readFileSync(patchPath, 'utf8'), { schema: entryListSchema }) ?? [];
+  const entries = await readComposition(patchPath, harnessRoot) ?? [];
   const names = [];
   const walk = (list) => {
     for (const row of list) {

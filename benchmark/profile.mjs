@@ -52,6 +52,10 @@ export const SKIPPED_ROWS = new Map([
   ['skill-filesystem', 'not needed: these tasks are computation, and the row would scan the workspace for skills'],
   ['command-goal', 'a human slash command; no human is at the keyboard in a one-shot run'],
   ['tool-goal', 'a long-horizon goal loop; every task here is one turn'],
+  // 0.2.3 enables this row inside a profile (`disabled: !!js "!ctx.get('profileContext')"`).
+  // Its model tools manage the profile's plugins — an operator action no benchmark
+  // task performs, and a service the headless run does not need.
+  ['tool-plugin-manager', 'admin-only: plugin management is an operator action, not a task step'],
 ]);
 
 /**
@@ -76,6 +80,12 @@ export function resolveDisabled(value) {
     const expression = value.__jsExpr.trim();
     if (expression === "process.platform === 'win32'") return process.platform === 'win32';
     if (expression === "process.platform !== 'win32'") return process.platform !== 'win32';
+    // 0.2.3's standard preset guards `tool-plugin-manager` with the profile
+    // context. The benchmark generates a real profile under
+    // `$DSH_HOME/profiles/molbio-bench`, so the service exists and the row is
+    // ENABLED there; `benchmarkProfileRows` then drops it through SKIPPED_ROWS,
+    // where the omission is named and guarded against getting stale.
+    if (expression === "!ctx.get('profileContext')") return false;
     throw new Error(
       `benchmark: unrecognised \`!!js\` expression in \`disabled\`: ${JSON.stringify(expression)} — ` +
         'add it to resolveDisabled rather than guessing',
@@ -156,8 +166,8 @@ function molbioRow(rows) {
  * @returns {Promise<string>} the YAML text.
  */
 export async function renderProfilePatch(options) {
-  const { yaml, schema } = await loaderYaml(options.harnessRoot);
-  const document = await yaml.load(await readFile(options.presetPath, 'utf8'), { schema });
+  const { parse } = await loaderYaml(options.harnessRoot);
+  const document = await parse(await readFile(options.presetPath, 'utf8'));
   const rows = presetPlugins(document);
   if (rows.length === 0) {
     throw new Error(`benchmark: ${options.presetPath} declares no preset rows — refusing to generate an empty profile`);
@@ -237,10 +247,9 @@ export async function writeProfile(options) {
   });
   await writeFile(patchPath, patch, 'utf8');
 
-  const { yaml, schema } = await loaderYaml(options.harnessRoot);
-  const document = yaml.load(
+  const { parse } = await loaderYaml(options.harnessRoot);
+  const document = await parse(
     await readFile(join(options.repoRoot, 'preset', 'molbio-lab', 'agent.cordis.yml'), 'utf8'),
-    { schema },
   );
   const { kept, skipped } = benchmarkProfileRows(presetPlugins(document));
   return { dir, patchPath, rows: kept.length, skipped };
