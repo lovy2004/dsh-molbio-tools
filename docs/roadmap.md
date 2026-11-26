@@ -10,9 +10,10 @@ L = 需要新机制或外部资源）。
 
 ---
 
-## 1. 当前状态（0.27.0）
+## 1. 当前状态（0.28.0）
 
-- 65 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- 72 个 `molbio_*` 工具，零依赖，随 preset 分发（见 [README](../README.md)）。
+- **0.28.0 交付 survey #13 / #21 / #14 / #10 / #27 / #31**：蛋白注释（PTM/低复杂度/不稳定指数、von Heijne 信号肽与跨膜段、Kolaskar-Tongaonkar 抗原性）、注释导出（GFF3/BED/CSV）与序列编辑、Sanger 读段组装与编辑结果归类。工具 65 → 72，benchmark 66 → 73；面板产物未变（三个新模块只在宿主半）。
 - **0.27.0 交付 survey #9 双链热力学**：新增 `molbio_duplex_thermo` —— ΔH/ΔS（原始与盐校正）/ΔG°37/Tm，外加 3' 端稳定性、发夹与同源/异源二聚体；`partner` 不是精确反向互补时**拒绝估算**（Allawi 错配参数集未实现）。工具 64 → 65。
 - PubMed API key 在 **Papers** tab 顶部有常驻状态徽标（已配置/未配置/不可读），检索结果也标注凭据通道。
 - 离线测试金字塔 + 组合漂移守卫全绿；`benchmark/` 提供**模型使用**维度的评估
@@ -218,6 +219,27 @@ v16 的 CRISPR 已有订购 CSV 先例，可直接复用格式。
 会"看起来合理但差几 kcal/mol"。DMSO/甲酰胺同样没有建模，文档里写明。工具 64 → 65，
 benchmark 65 → 66 题（65/65 覆盖）。
 
+### 2.12 ✅ 已做（0.28.0）蛋白注释 / 格式互操作 / 测序判读
+
+一次交付 survey 的六条候选：
+
+- **#13 蛋白特征**（`molbio_protein_features`）：PTM 线性基序、SEG 风格熵窗口低复杂度、芳香性、
+  Guruprasad 不稳定指数。大表（DIWV 20×20）转录自 Biopython 1.88，用手算值钉住。
+- **#21 信号肽与跨膜段**（`molbio_signal_peptide`）：von Heijne 1986 的 −13..+2 权重（EMBOSS
+  sigcleave 的真核/革兰阴性两套），只扫 N 端前 50 个残基；跨膜段复用 hydropathy 的窗口/阈值，
+  所以两个工具不会给出两套数。**第一版全序列扫描把 GFP 片段误判成信号肽**——N 端范围本身是参数。
+- **#14 抗原性**（`molbio_antigenicity`）：Kolaskar–Tongaonkar 7-mer A(p) 倾向；Parker/Emini/
+  Vihinen 只作区间均值并列，不合成单一分数。
+- **#10 注释导出与序列编辑**（`molbio_feature_export` / `molbio_sequence_edit`）：GFF3 1-based
+  闭区间与 BED 0-based 半开逐格式转换并写明；CDS phase 不建模，写 `.`；编辑不重映射特征。
+- **#27 Sanger 组装**（`molbio_sanger_assemble`）：贪心 OLC、双朝向、Phred 末端修剪、质量加权共识、
+  覆盖度/冲突/未放置读、可选精确环化。
+- **#31 编辑结果归类**（`molbio_editing_outcome`）：精确变异签名聚类，频率是已比对 reads 的比例，
+  不是 TIDE；移码用净长度变化判定（被比对拆开的 3 bp 缺失仍判 in-frame）；短局部匹配不算比对。
+
+**这一版留下的两条新规则**：①发表表格的转录必须给出处，并用可手算的已知值钉住；
+②任何“是否算比对成功”的判据，除 identity 之外还要有**跨度**下界（这里是读长一半、最少 20 bp）。
+
 ---
 
 ## 3. 技术债（明确的"欠着"）
@@ -236,7 +258,7 @@ v18 想做"工具写一个工作区 PNG 文件"而**不能**：`dsh-fs` 明文�
 
 ### 3.2 benchmark 的覆盖面
 
-- 66 条任务覆盖 **65/65 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
+- 73 条任务覆盖 **72/72 个工具**（0.15.0 起由 `test/benchmark-coverage.mjs` 机器断言；
   core 档 14 题）。**但多数工具只出现在一条任务里，覆盖是浅的**——见
   [benchmark/README.md](../benchmark/README.md) 的"What this benchmark does NOT measure"。
 - 没有断言 **`attach_image` 交付的图片内容**（只当参数用），也不加载客户端产物。
@@ -336,7 +358,7 @@ Node 做路径运算（Windows 是 `<prefix>/node_modules`，POSIX 是 `<prefix>
 - **agent 驱动浏览器终端**：无 `dsh-tool-terminal`，且面板明确不把输出转给模型。
   `ctx.computerUse`/`ctx.browserUse` 这类 seam 只允许**一个** provider 注册，
   第三方插件即便在未来版本也不能自带一个并行实现去抢。
-- **把 65 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
+- **把 72 个工具做成全局可见**：bundle 安装 ≠ 工具全局可见是**设计如此**（工具多了会占
   提示预算）。真要全局可见需要自己加一层宿主行，而那会让专属模式里的同一行变成死行。
 - **持久 shell 进 preset**：收益有限、风险明确（工具名冲突要 disable 一次性那行，
   且需要未经验证的 `isolate: { terminals: true }` 分组），详见

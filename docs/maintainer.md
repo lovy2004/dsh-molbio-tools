@@ -21,7 +21,7 @@
 | [benchmark/README.md](../benchmark/README.md) | 性能/可用性评估：模型能不能找到并用对工具 |
 | [client-panel.md](client-panel.md) | 浏览器内面板：产物格式、服务契约、上限、验证方式、已知限制 |
 | [capability-gap-survey.md](capability-gap-survey.md) | 能力缺口调查：40 条排序候选、必做 top-5、以及"想做但不可行"的确切阻断原因 |
-| [v20-plan.md](v20-plan.md) / [v19-plan.md](v19-plan.md) | 当时的施工设计文档，保留原样以便对照"计划 vs 落地" |
+| [v28-plan.md](v28-plan.md) / [v24-plan.md](v24-plan.md) / [v20-plan.md](v20-plan.md) / [v19-plan.md](v19-plan.md) | 当时的施工设计文档，保留原样以便对照"计划 vs 落地"（v28 在第 9 节记录偏差） |
 | [route-b.md](route-b.md) | 安装渠道 B 的历史记录（0.1.7-alpha.1 起该渠道已废弃） |
 | [client-pipeline-exploration.md](client-pipeline-exploration.md) | 浏览器内面板的可行性与实现路径调研 |
 | [CHANGELOG.md](../CHANGELOG.md) | 变更日志（包版本 ↔ 历史 preset 版本目录对照） |
@@ -30,13 +30,13 @@
 
 ## 60 秒速览
 
-- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**65 个 `molbio_*` 工具**（其中
+- **包**：`dsh-molbio-tools`，零依赖 DSH 插件包，**72 个 `molbio_*` 工具**（其中
   `molbio_plot` 一个工具承载 8 种图表）。
-- **基线**：DSH **0.2.3-alpha.2**；`package.json` 版本 0.27.1（DSH 桌面版内嵌 Node 24.22.3 / Electron 44.11.5）。
+- **基线**：DSH **0.2.3-alpha.2**；`package.json` 版本 0.28.0（DSH 桌面版内嵌 Node 24.22.3 / Electron 44.11.5）。
 - **两条分发渠道**：根包（工具 + 面板）与 `packages/molbio-panel`（只面板），
   **两个独立的 npm 条目、两条独立的版本线**，必须分别发布。
 - **工具只在专属模式里出现**（设计如此）：bundle 的 `cordis.patch.yml` 只插一行**惰性宿主锚点**
-  （`molbio-client` → `./host.mjs`），65 个工具由同文件里的 preset insert 承载，
+  （`molbio-client` → `./host.mjs`），72 个工具由同文件里的 preset insert 承载，
   只会挂进 "Molecular Biology Lab" 模式。
 - **测试**：`npm test` = 插件（`smoke`）+ 画面（`svgpng`/`svgio`/`charts`）+ 客户端四套件 +
   DSH 契约（`contract`）+ 组合（`preset-health`）+ 漂移守卫（`drift-probe`）+
@@ -45,14 +45,14 @@
   `build/release-preflight.mjs`，然后用 **OIDC 可信发布**（仓库里没有任何长期 token）分两步发
   两个 npm 条目，最后用 CHANGELOG 该版本段落建 GitHub Release。**首次发布必须手动做一次**
   （可信发布要求包已存在），完整步骤见 [workflow.md](workflow.md) 第 4 节的 CD 段。
-- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 66 题），分
+- **benchmark**：`npm run bench` 用真实模型跑 core 档 14 题（`bench:full` 全部 73 题），分
   `tools_ok` / `args_ok` / `answer_ok` 三项判分；`npm run bench:offline` 零成本校验期望值。
 
 包内目录结构：
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 65 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 72 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）
@@ -61,6 +61,9 @@ dsh-molbio-tools/
 ├── protein.mjs      # 蛋白性质 / 肽段酶切 / 密码子优化
 ├── protein-structure.mjs # 螺旋轮与疏水性图
 ├── protein-charge.mjs # 电荷-pH 滴定曲线 + pI（两套 pK 表）
+├── protein-annotate.mjs # 蛋白注释：PTM/低复杂度/不稳定指数、信号肽与跨膜段、抗原性
+├── sequence-ops.mjs  # 注释导出（GFF3/BED/CSV）与序列编辑（rotate/insert/delete/replace/split/join）
+├── sequencing.mjs    # Sanger 读段组装与编辑结果归类
 ├── contamination.mjs # 内置载体/接头短签名 + 双链污染筛查
 ├── fastq-trim.mjs    # FASTQ 修剪/过滤（质量/接头/引物/poly/N/长度）
 ├── genbank.mjs      # GenBank flatfile 解析器

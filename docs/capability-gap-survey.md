@@ -6,7 +6,7 @@ mainstream bioinformatics landscape offer that this toolset does **not**, and wh
 deterministic algorithms in a few hundred lines of dependency-free JS with **no external data files,
 binaries, network, or reference databases**?
 
-> **Status note (0.24.0).** The baseline below is the 52-tool package this survey was written
+> **Status note (0.28.0).** Rows 10, 13, 14, 21, 27 and 31 shipped in 0.28.0 (feature export + sequence editing, protein feature suite, antigenicity, signal peptide + TM segments, Sanger assembly, editing-outcome clustering). The note below records the 0.24.0 baseline. The baseline below is the 52-tool package this survey was written
 > against. Since then rows 1–9, 11, 12, 23, 30, 34, 40 and the Cas-family half of row 20 have shipped
 > (row 9, duplex thermodynamics, shipped as `molbio_duplex_thermo` in 0.27.0).
 > (see [history.md](history.md) and the roadmap); the remaining rows are still candidates unless

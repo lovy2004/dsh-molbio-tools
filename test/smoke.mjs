@@ -3442,7 +3442,7 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
     'molbio_grna_design', 'molbio_qpcr_efficiency', 'molbio_plot', 'molbio_virtual_gel',
     'molbio_sequence_logo', 'molbio_helical_wheel', 'molbio_hydropathy_plot',
     'molbio_fastq_qc', 'molbio_phylogenetic_tree', 'molbio_pcr_simulate', 'molbio_gc_composition',
-    'molbio_protein_charge', 'molbio_dotplot',
+    'molbio_protein_charge', 'molbio_dotplot', 'molbio_signal_peptide',
   ];
   for (const toolName of pictureTools) {
     const tool = toolByName(toolName);
@@ -3450,7 +3450,7 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
     assert.ok(Object.hasOwn(tool.output.schema.properties, 'image'), `${toolName} can report the attached image`);
     assert.ok(Object.hasOwn(tool.output.schema.properties, 'image_note'), `${toolName} can explain a missing image`);
   }
-  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 17, 'exactly the 17 picture tools — the report-only analysis tools are untouched');
+  assert.equal(registered.filter((tool) => Object.hasOwn(tool.parameters.properties, 'attach_image')).length, 18, 'exactly the 18 picture tools — the report-only analysis tools are untouched');
 
   // 9. Rendering text alone still works (the attachment must not break render).
   const logo = await runWith('molbio_sequence_logo', { alignment: ['ACGTACGT', 'ACGTTCGT'], attach_image: true }, routedExec);
@@ -4601,8 +4601,197 @@ if (savedNcbiEnv.MOLBIO_NCBI_API_KEY !== undefined) process.env.MOLBIO_NCBI_API_
   assert.match(text, /dimers: homodimer Tm any/);
 }
 
+// ── v0.28.0: protein annotation, format interchange, sequencing read sets ───
+
+{
+  // #13 — PTM motifs, low-complexity regions and composition.
+  const flat = await run('molbio_protein_features', { sequence: 'AAAA' });
+  assert.equal(flat.length, 4);
+  assert.equal(flat.composition.instability_index, 7.5);
+  assert.equal(flat.composition.instability_class, 'stable');
+  assert.equal(flat.composition.aromaticity, 0);
+  assert.deepEqual(flat.ptm_sites, []);
+  assert.deepEqual(flat.low_complexity_regions, [], 'a protein shorter than the window has no low-complexity region');
+
+  const motifs = await run('molbio_protein_features', { sequence: 'AANASWAAWGEASTALKAERRASAAE' });
+  const foundMotifs = motifs.ptm_sites.map((site) => `${site.type}@${site.position}`);
+  for (const expected of [
+    'N-glycosylation@3',
+    'C-mannosylation@6',
+    'SUMOylation@17',
+    'PKA phosphorylation@22',
+    'CK2 phosphorylation@23',
+  ]) assert.ok(foundMotifs.includes(expected), `the scan reports ${expected}`);
+  assert.ok(!foundMotifs.some((entry) => entry.startsWith('N-myristoylation')), 'myristoylation is N-terminal only');
+  const myristoyl = await run('molbio_protein_features', { sequence: 'GEASTAAAA' });
+  assert.ok(myristoyl.ptm_sites.some((site) => site.type === 'N-myristoylation' && site.position === 1));
+
+  const lowComplexity = await run('molbio_protein_features', { sequence: 'A'.repeat(20) });
+  assert.deepEqual(lowComplexity.low_complexity_regions.map((region) => [region.start, region.end, region.entropy]), [[1, 20, 0]]);
+  assert.equal(lowComplexity.low_complexity_regions[0].min_window_entropy, 0);
+
+  const capped = await run('molbio_protein_features', { sequence: 'SP'.repeat(5), max_sites: 1 });
+  assert.equal(capped.ptm_sites.length, 1);
+  assert.equal(capped.truncated, true);
+  await assert.rejects(() => run('molbio_protein_features', { sequence: 'AAAA', entropy_threshold: 9 }), /entropy_threshold/);
+  await assert.rejects(() => run('molbio_protein_features', { sequence: 'ATGX' }), /invalid character/);
+
+  // #21 — signal-peptide cleavage and candidate transmembrane segments.
+  const insulin = 'MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALY';
+  const signal = await run('molbio_signal_peptide', { sequence: insulin, output_path: at('signal.svg') });
+  assert.equal(signal.cleavable, true);
+  assert.equal(signal.cleavage_after, 24);
+  assert.equal(signal.best_score, 6.852);
+  assert.equal(signal.signal_peptide, 'MALWMRLLPLLALLALWGPDPAAA');
+  assert.equal(signal.mature_sequence, 'FVNQHLCGSHLVEALY');
+  assert.deepEqual([signal.window_start, signal.window_end], [12, 26]);
+  assert.equal(signal.svg_path, at('signal.svg'));
+  assert.ok(memFs.files.get(signal.svg_path).toString('utf8').includes('<svg'));
+
+  const gfp = await run('molbio_signal_peptide', { sequence: 'MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLK' });
+  assert.equal(gfp.cleavable, false);
+  assert.equal(gfp.cleavage_after, 0);
+  const tm = await run('molbio_signal_peptide', { sequence: 'M' + 'A'.repeat(30) + 'KKKK' });
+  assert.equal(tm.transmembrane_segments.length, 1);
+  assert.deepEqual([tm.transmembrane_segments[0].start, tm.transmembrane_segments[0].end], [1, 22]);
+  assert.equal(tm.transmembrane_segments[0].mean_hydropathy, 1.81);
+  await assert.rejects(() => run('molbio_signal_peptide', { sequence: 'M'.repeat(10) }), /at least 15/);
+  await assert.rejects(() => run('molbio_signal_peptide', { sequence: insulin, organism: 'plant' }), /organism/);
+  await assert.rejects(() => run('molbio_signal_peptide', { sequence: insulin, threshold: 99 }), /threshold/);
+
+  // #14 — Kolaskar-Tongaonkar propensity on a homopolymer (every value is A(p)=1.064).
+  const antigenic = await run('molbio_antigenicity', { sequence: 'A'.repeat(20) });
+  assert.equal(antigenic.mean_propensity, 1.064);
+  assert.equal(antigenic.threshold, 1);
+  assert.equal(antigenic.regions.length, 1);
+  assert.deepEqual([antigenic.regions[0].start, antigenic.regions[0].end], [4, 17]);
+  assert.equal(antigenic.regions[0].length, 14);
+  assert.equal(antigenic.regions[0].parker_mean, 2.1);
+  assert.equal(antigenic.regions[0].emini_mean, 0.815);
+  assert.equal(antigenic.regions[0].flexibility_mean, 0.984);
+  await assert.rejects(() => run('molbio_antigenicity', { sequence: 'AAAAAAA' }), /at least 8/);
+
+  // #10 — feature export keeps the two coordinate systems apart.
+  const exportInput = {
+    sequence: 'ACGTACGTAC',
+    features: [{ type: 'CDS', start: 2, end: 6, strand: 1, label: 'gene1' }],
+    format: 'gff3',
+  };
+  const gff3 = await run('molbio_feature_export', exportInput);
+  assert.equal(gff3.coordinate_system, '1-based inclusive');
+  assert.match(gff3.content, /^##gff-version 3$/m);
+  assert.match(gff3.content, /\tCDS\t2\t6\t\.\t\+\t\.\tID=CDS_1;Name=gene1/);
+  const bed = await run('molbio_feature_export', { ...exportInput, format: 'bed' });
+  assert.equal(bed.coordinate_system, '0-based half-open');
+  assert.match(bed.content, /^sequence\t1\t6\tgene1\t0\t\+$/m);
+  const csv = await run('molbio_feature_export', { ...exportInput, format: 'csv' });
+  assert.match(csv.content, /^sequence,CDS,2,6,\+,5,gene1,,,$/m);
+  const reverseBed = await run('molbio_feature_export', { sequence: 'ACGTACGTAC', features: [{ start: 2, end: 6, strand: -1, label: 'r' }], format: 'bed' });
+  assert.match(reverseBed.content, /^sequence\t1\t6\tr\t0\t-$/m, 'a parser-style -1 strand becomes - in BED');
+  const multi = await run('molbio_feature_export', {
+    sequence: 'ACGTACGTAC',
+    features: [{ type: 'misc_feature', start: 1, end: 9, label: 'joined', location: 'join(1..3,7..9)', multi_part: true }],
+    format: 'gff3',
+  });
+  assert.ok(multi.notes.some((note) => note.includes('multi-part')));
+  assert.match(multi.content, /location=join\(1\.\.3%2C7\.\.9\)/);
+  const savedFeatures = await run('molbio_feature_export', { ...exportInput, output_path: at('features.gff3') });
+  assert.equal(savedFeatures.saved_to, at('features.gff3'));
+  assert.match(memFs.files.get(savedFeatures.saved_to).toString('utf8'), /##gff-version 3/);
+  await assert.rejects(() => run('molbio_feature_export', { sequence: 'ACGT', features: [{ start: 1, end: 9 }], format: 'gff3' }), /past the sequence length/);
+
+  // #10 — sequence surgery.
+  const rotated = await run('molbio_sequence_edit', { sequence: 'AACCGGTT', operation: 'rotate', position: 3 });
+  assert.equal(rotated.sequences[0], 'CCGGTTAA');
+  const inserted = await run('molbio_sequence_edit', { sequence: 'AAAACCCC', operation: 'insert', position: 0, inserted: 'TT' });
+  assert.equal(inserted.sequences[0], 'TTAAAACCCC');
+  const deleted = await run('molbio_sequence_edit', { sequence: 'AAAACCCC', operation: 'delete', start: 2, end: 4 });
+  assert.equal(deleted.sequences[0], 'ACCCC');
+  const replaced = await run('molbio_sequence_edit', { sequence: 'AAAACCCC', operation: 'replace', start: 2, end: 4, replacement: 'GG' });
+  assert.equal(replaced.sequences[0], 'AGGCCCC');
+  const split = await run('molbio_sequence_edit', { sequence: 'AAAACCCC', operation: 'split', position: 4 });
+  assert.deepEqual(split.sequences, ['AAAA', 'CCCC']);
+  const joined = await run('molbio_sequence_edit', { sequence: 'AAAACC', operation: 'join', join_with: 'CCGGGG', overlap: 2 });
+  assert.equal(joined.sequences[0], 'AAAACCGGGG');
+  const splitFile = await run('molbio_sequence_edit', { sequence: 'AAAACCCC', operation: 'split', position: 4, output_path: at('parts.fa') });
+  assert.match(memFs.files.get(splitFile.saved_to).toString('utf8'), />edited_part1/);
+  await assert.rejects(() => run('molbio_sequence_edit', { sequence: 'AAAACC', operation: 'join', join_with: 'TTGGGG', overlap: 2 }), /does not match/);
+  await assert.rejects(() => run('molbio_sequence_edit', { sequence: 'AAAACCCC', operation: 'delete', start: 3, end: 2 }), /start <= end/);
+
+  // #27 — greedy overlap-layout assembly with both read orientations.
+  let seed = 7;
+  const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const assemblyRef = Array.from({ length: 400 }, () => 'ACGT'[Math.floor(rand() * 4)]).join('');
+  const assemblyReads = [
+    { name: 'r1', sequence: assemblyRef.slice(0, 220) },
+    { name: 'r2', sequence: assemblyRef.slice(150, 370) },
+    { name: 'r3', sequence: reverseComplementOf(assemblyRef.slice(280, 400)) },
+  ];
+  const assembly = await run('molbio_sanger_assemble', { reads: assemblyReads, min_overlap: 40, trim_quality: 0, output_path: at('contig.fa') });
+  assert.equal(assembly.length, 400);
+  assert.equal(assembly.sequence, assemblyRef);
+  assert.equal(assembly.placed_count, 3);
+  assert.equal(assembly.coverage_mean, 1.4);
+  assert.equal(assembly.coverage_min, 1);
+  assert.equal(assembly.conflicts, 0);
+  assert.deepEqual(assembly.reads.map((read) => [read.name, read.orientation, read.start, read.end]), [
+    ['r1', 'forward', 1, 220], ['r2', 'forward', 151, 370], ['r3', 'reverse', 281, 400],
+  ]);
+  assert.equal(assembly.saved_to, at('contig.fa'));
+  assert.match(memFs.files.get(assembly.saved_to).toString('utf8'), />contig/);
+  const withJunk = await run('molbio_sanger_assemble', { reads: [...assemblyReads, { name: 'junk', sequence: 'N'.repeat(60) }], min_overlap: 40, trim_quality: 0 });
+  assert.equal(withJunk.placed_count, 3);
+  assert.deepEqual(withJunk.unplaced.map((read) => read.name), ['junk']);
+  await assert.rejects(() => run('molbio_sanger_assemble', { reads: [] }), /provide paths/);
+
+  // #31 — allele clustering and the CDS effect call.
+  const editRef = 'ATG' + 'GCT'.repeat(30) + 'TAA';
+  const editReads = [
+    { name: 'wt1', sequence: editRef },
+    { name: 'wt2', sequence: editRef },
+    { name: 'del', sequence: editRef.slice(0, 3) + editRef.slice(6) },
+    { name: 'sub', sequence: editRef.slice(0, 3) + 'A' + editRef.slice(4) },
+    { name: 'junk', sequence: 'C'.repeat(60) },
+  ];
+  const outcome = await run('molbio_editing_outcome', {
+    reads: editReads, reference: editRef, circular: false, cds_start: 1, cds_end: editRef.length,
+  });
+  assert.equal(outcome.total_reads, 5);
+  assert.equal(outcome.aligned_reads, 4);
+  assert.equal(outcome.unaligned_reads, 1);
+  assert.equal(outcome.alleles.length, 3);
+  const wildType = outcome.alleles.find((allele) => allele.signature === 'wild_type');
+  assert.equal(wildType.frequency, 0.5);
+  assert.equal(wildType.effect, 'wild_type');
+  const deletion = outcome.alleles.find((allele) => allele.effect === 'in_frame_indel');
+  assert.equal(deletion.frequency, 0.25);
+  assert.deepEqual([deletion.edited_from, deletion.edited_to], [3, 6]);
+  const substitution = outcome.alleles.find((allele) => allele.signature === 'sub:4:G>A');
+  assert.equal(substitution.effect, 'missense');
+  assert.equal(substitution.protein_change, 'A2T');
+  assert.equal(substitution.frequency, 0.25);
+  assert.ok(outcome.notes.some((note) => note.includes('not TIDE')));
+  const frameOutcome = await run('molbio_editing_outcome', {
+    reads: [{ name: 'wt', sequence: editRef }, { name: 'fs', sequence: editRef.slice(0, 3) + editRef.slice(4) }],
+    reference: editRef, circular: false, cds_start: 1, cds_end: editRef.length,
+  });
+  assert.equal(frameOutcome.alleles.find((allele) => allele.effect === 'frameshift').frequency, 0.5);
+  const silentOutcome = await run('molbio_editing_outcome', {
+    reads: [{ name: 'wt', sequence: editRef }, { name: 'silent', sequence: editRef.slice(0, 5) + 'C' + editRef.slice(6) }],
+    reference: editRef, circular: false, cds_start: 1, cds_end: editRef.length,
+  });
+  assert.equal(silentOutcome.alleles.find((allele) => allele.effect === 'silent').frequency, 0.5);
+  const noWildType = await run('molbio_editing_outcome', {
+    reads: [{ name: 'del', sequence: editRef.slice(0, 3) + editRef.slice(6) }],
+    reference: editRef, circular: false, cds_start: 1, cds_end: editRef.length,
+  });
+  assert.ok(noWildType.notes.some((note) => note.includes('no read matches the reference exactly')), 'a read set with no wild type is diagnosed');
+  await assert.rejects(() => run('molbio_editing_outcome', { reads: editReads, reference: editRef, cds_start: 1 }), /both cds_start and cds_end/);
+  await assert.rejects(() => run('molbio_editing_outcome', { reads: editReads, reference: editRef, min_frequency: 2 }), /min_frequency/);
+}
 // ── plugin surface ──────────────────────────────────────────────────────────
 
+assert.equal(registered.length, 72, 'the registry carries the 65 shipped tools plus the 7 v0.28.0 tools');
 assert.equal(plugin.name, 'dsh-molbio-tools');
 assert.deepEqual(plugin.inject, ['tools', 'systemPrompt']);
 

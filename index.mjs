@@ -6,8 +6,9 @@
  * package — so the toolset travels with an agent preset and can be referenced
  * by a package-name row (see README.md and rules.md rule 1).
  *
- * Every tool is pure computation: deterministic, no network, no filesystem.
- * The plugin publishes no service, so the preset row needs no isolate realm.
+ * Every tool is deterministic. File-reading/writing tools go through ctx.fs with
+ * the session sandboxPolicy; PubMed search is the only network path. The plugin
+ * publishes no service, so the preset row needs no isolate realm.
  */
 
 import {
@@ -72,6 +73,9 @@ import { addExperiment, addProtocol, loadRecords, recordPath, saveRecords, updat
 import { toBibtex } from './papers.mjs';
 import { parseXml } from './snapgene.mjs';
 import { analyzeDuplex } from './thermo.mjs';
+import { antigenicityProfile, renderSignalPeptideProfile, scanProteinFeatures, signalPeptideAnalysis } from './protein-annotate.mjs';
+import { editSequence, exportFeatures } from './sequence-ops.mjs';
+import { assembleReads, callEditingOutcomes } from './sequencing.mjs';
 import { smithWaterman } from './align.mjs';
 import { conservationAnalysis, normalizeAlignedRow, normalizeMsaSequence, pairwiseIdentities, progressiveAlign } from './msa.mjs';
 import { ALIGN_POST_LIMITS, CONSENSUS_MODES, alignmentPostprocess } from './align-post.mjs';
@@ -8192,6 +8196,627 @@ const paperRemoveTool = (ctx) => define({
 
 // ── plugin apply ────────────────────────────────────────────────────────────
 
+// ── v0.28.0: protein annotation (#13/#14/#21) ───────────────────────────────
+
+const PTM_SITE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['type', 'motif', 'position', 'context'],
+  properties: {
+    type: { type: 'string' },
+    motif: { type: 'string' },
+    position: { type: 'integer' },
+    context: { type: 'string' },
+  },
+};
+
+const proteinFeaturesTool = define({
+  name: 'molbio_protein_features',
+  description: 'Scan a protein for post-translational-modification motifs (N-glycosylation N-{P}-[S/T], C-mannosylation W-x-x-W, N-terminal N-myristoylation, SUMOylation [LIVFM]-K-x-E, PKA R-R-x-[S/T], CK2 [S/T]-x-x-[D/E], proline-directed [S/T]-P), SEG-style low-complexity regions from an entropy window, and composition flags (aromaticity, instability index with its stable/unstable call). Motifs are linear consensus patterns and low complexity is an entropy approximation — a match is a candidate, not evidence that the site is modified.',
+  parameters: {
+    type: 'object',
+    required: ['sequence'],
+    properties: {
+      sequence: requiredString('Protein sequence (one-letter amino acid codes).'),
+      window: { type: 'integer', description: 'Low-complexity entropy window in residues (4-50, default 12).' },
+      entropy_threshold: { type: 'number', description: 'Entropy threshold in bits (0-4.5, default 2.2); windows below it are low complexity.' },
+      max_sites: { type: 'integer', description: 'Maximum reported PTM sites (1-2000, default 200).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['length', 'ptm_sites', 'low_complexity_regions', 'composition', 'window', 'entropy_threshold', 'truncated', 'notes'],
+    properties: {
+      length: { type: 'integer' },
+      ptm_sites: { type: 'array', items: PTM_SITE_SCHEMA },
+      low_complexity_regions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['start', 'end', 'length', 'entropy', 'min_window_entropy'],
+          properties: {
+            start: { type: 'integer' },
+            end: { type: 'integer' },
+            length: { type: 'integer' },
+            entropy: { type: 'number' },
+            min_window_entropy: { type: 'number' },
+          },
+        },
+      },
+      composition: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['aromaticity', 'instability_index', 'instability_class'],
+        properties: {
+          aromaticity: { type: 'number' },
+          instability_index: { type: 'number' },
+          instability_class: { type: 'string', enum: ['stable', 'unstable'] },
+        },
+      },
+      window: { type: 'integer' },
+      entropy_threshold: { type: 'number' },
+      truncated: { type: 'boolean' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`${value.length} aa · ${value.ptm_sites.length} PTM site(s) · ${value.low_complexity_regions.length} low-complexity region(s)`];
+    if (value.ptm_sites.length === 0) lines.push('PTM sites: none matched the built-in motifs');
+    else {
+      lines.push('PTM sites:');
+      for (const site of value.ptm_sites.slice(0, 20)) lines.push(`  ${site.position}: ${site.type} (${site.motif}) ${site.context}`);
+      if (value.ptm_sites.length > 20) lines.push(`  ... ${value.ptm_sites.length - 20} more`);
+    }
+    if (value.low_complexity_regions.length > 0) {
+      lines.push(`low-complexity regions (entropy < ${value.entropy_threshold} bits, window ${value.window}):`);
+      for (const region of value.low_complexity_regions.slice(0, 10)) lines.push(`  ${region.start}-${region.end} (${region.length} aa, entropy ${region.entropy} bits)`);
+    }
+    lines.push(`aromaticity ${value.composition.aromaticity} · instability index ${value.composition.instability_index} (${value.composition.instability_class}; >40 is conventionally unstable)`);
+    lines.push('Heuristics: linear motif matches and an entropy-window low-complexity approximation (SEG-style, not SEG); not a modification predictor.');
+    return lines.join('\n');
+  },
+  execute(args) {
+    return scanProteinFeatures(args.sequence, {
+      window: args.window,
+      entropyThreshold: args.entropy_threshold,
+      maxSites: args.max_sites,
+    });
+  },
+});
+
+const SIGNAL_CANDIDATE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['cleavage_after', 'score'],
+  properties: {
+    cleavage_after: { type: 'integer' },
+    score: { type: 'number' },
+  },
+};
+
+const TM_SEGMENT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['start', 'end', 'length', 'mean_hydropathy', 'peak_position'],
+  properties: {
+    start: { type: 'integer' },
+    end: { type: 'integer' },
+    length: { type: 'integer' },
+    mean_hydropathy: { type: 'number' },
+    peak_position: { type: 'integer' },
+  },
+};
+
+const signalPeptideTool = (ctx) => define({
+  safe: false,
+  name: 'molbio_signal_peptide',
+  description: 'Score N-terminal signal-peptide cleavage with the von Heijne 1986 position weights (the EMBOSS sigcleave table, eukaryote or gram-negative) and list candidate transmembrane segments with the same Kyte-Doolittle window molbio_hydropathy_plot uses. Returns the best cleavage position (residues in the signal peptide), the signal peptide itself, candidate cleavage sites above the threshold, and a score-profile SVG written to the workspace. A score above the threshold is a candidate, NOT a SignalP prediction; topology/orientation is not predicted.',
+  parameters: {
+    type: 'object',
+    required: ['sequence'],
+    properties: {
+      sequence: requiredString('Protein sequence (one-letter amino acid codes).'),
+      organism: { type: 'string', enum: ['eukaryote', 'gram_negative'], description: 'Which von Heijne table to use (default eukaryote).' },
+      threshold: { type: 'number', description: 'Minimum score to report a cleavage site (-20 to 20, default 3.5 = EMBOSS sigcleave minweight).' },
+      max_cleavage: { type: 'integer', description: 'Only score cleavage positions up to this residue (15-200, default 50; signal peptides are N-terminal).' },
+      tm_window: { type: 'integer', description: 'Kyte-Doolittle window for transmembrane segments (3-51, default 19).' },
+      tm_threshold: { type: 'number', description: 'Kyte-Doolittle threshold for transmembrane segments (-4.5 to 4.5, default 1.6).' },
+      title: { type: 'string', description: 'Title drawn on the SVG (default "Signal-peptide score profile").' },
+      output_path: { type: 'string', description: 'Optional SVG file path; default signal-peptide.svg in the session workspace.' },
+      auto_view: { type: 'boolean', description: 'Open the SVG automatically with the OS default application (default true).' },
+      ...ATTACH_IMAGE_PARAM,
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['length', 'organism', 'threshold', 'cleavable', 'best_score', 'cleavage_after', 'scanned_to', 'window_start', 'window_end', 'signal_peptide', 'mature_sequence', 'candidates', 'transmembrane_segments', 'tm_window', 'tm_threshold', 'svg_path', 'auto_viewed', 'notes'],
+    properties: {
+      length: { type: 'integer' },
+      organism: { type: 'string', enum: ['eukaryote', 'gram_negative'] },
+      threshold: { type: 'number' },
+      cleavable: { type: 'boolean' },
+      best_score: { type: 'number' },
+      cleavage_after: { type: 'integer' },
+      scanned_to: { type: 'integer' },
+      window_start: { type: 'integer' },
+      window_end: { type: 'integer' },
+      signal_peptide: { type: 'string' },
+      mature_sequence: { type: 'string' },
+      candidates: { type: 'array', items: SIGNAL_CANDIDATE_SCHEMA },
+      transmembrane_segments: { type: 'array', items: TM_SEGMENT_SCHEMA },
+      tm_window: { type: 'integer' },
+      tm_threshold: { type: 'number' },
+      svg_path: { type: 'string' },
+      auto_viewed: { type: 'boolean' },
+      image: ATTACHED_IMAGE_SCHEMA,
+      image_note: { type: 'string' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`${value.length} aa · ${value.organism} weights · threshold ${value.threshold}`];
+    if (value.cleavable) {
+      lines.push(`candidate signal peptide: cleavage after residue ${value.cleavage_after} (score ${value.best_score}, window ${value.window_start}-${value.window_end})`);
+      lines.push(`signal peptide (${value.signal_peptide.length} aa): ${value.signal_peptide}`);
+      lines.push(`mature protein starts at residue ${value.cleavage_after + 1} (${value.mature_sequence.length} aa)`);
+    } else lines.push(`no cleavage site above ${value.threshold} (best score ${value.best_score} over the first ${value.scanned_to} residues)`);
+    if (value.candidates.length > 1) lines.push(`other candidates: ${value.candidates.slice(1, 6).map((c) => `${c.cleavage_after} (${c.score})`).join(', ')}`);
+    if (value.transmembrane_segments.length === 0) lines.push(`no candidate transmembrane segment above ${value.tm_threshold} (window ${value.tm_window})`);
+    else lines.push(`candidate transmembrane segments: ${value.transmembrane_segments.map((s) => `${s.start}-${s.end} (${s.length} aa)`).join(', ')}`);
+    lines.push('Heuristics: von Heijne 1986 weights and Kyte-Doolittle runs — candidates, not SignalP/TMHMM predictions; topology is not predicted.');
+    lines.push(`score profile: ${value.svg_path}${value.auto_viewed ? ' (opened in the default viewer)' : ''}`);
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const analysis = signalPeptideAnalysis(args.sequence, {
+      organism: args.organism,
+      threshold: args.threshold,
+      maxCleavage: args.max_cleavage,
+      tmWindow: args.tm_window,
+      tmThreshold: args.tm_threshold,
+    });
+    const { profile, ...value } = analysis;
+    const svg = renderSignalPeptideProfile(analysis, { title: args.title });
+    const { file, viewed, attached } = await writeSvgFile(ctx, exec, args, svg, 'signal-peptide');
+    return mergeAttachedImage({ ...value, svg_path: file, auto_viewed: viewed }, attached);
+  },
+});
+
+const ANTIGENIC_REGION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['start', 'end', 'length', 'peak_position', 'peak_propensity', 'parker_mean', 'emini_mean', 'flexibility_mean'],
+  properties: {
+    start: { type: 'integer' },
+    end: { type: 'integer' },
+    length: { type: 'integer' },
+    peak_position: { type: 'integer' },
+    peak_propensity: { type: 'number' },
+    parker_mean: { type: 'number' },
+    emini_mean: { type: 'number' },
+    flexibility_mean: { type: 'number' },
+  },
+};
+
+const antigenicityTool = define({
+  name: 'molbio_antigenicity',
+  description: 'Rank candidate surface-exposed (antigenic) regions with the Kolaskar & Tongaonkar 1990 7-mer antigenic propensity, and report Parker hydrophilicity, Emini accessibility and Vihinen flexibility as region means. A residue is selected when its 7-mer <A(p)> reaches the protein mean (or 1.0 when that mean is at least 1.0); a region needs at least min_region_length consecutive selected residues. This is a documented propensity ranking, NOT an epitope predictor (BepiPred/NetMHC are trained models with different semantics).',
+  parameters: {
+    type: 'object',
+    required: ['sequence'],
+    properties: {
+      sequence: requiredString('Protein sequence (one-letter amino acid codes).'),
+      min_region_length: { type: 'integer', description: 'Minimum consecutive selected residues for a region (1-100, default 6).' },
+      max_regions: { type: 'integer', description: 'Maximum reported regions (1-200, default 20).' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['length', 'window', 'mean_propensity', 'threshold', 'regions', 'parker_mean', 'emini_mean', 'flexibility_mean', 'truncated', 'notes'],
+    properties: {
+      length: { type: 'integer' },
+      window: { type: 'integer' },
+      mean_propensity: { type: 'number' },
+      threshold: { type: 'number' },
+      regions: { type: 'array', items: ANTIGENIC_REGION_SCHEMA },
+      parker_mean: { type: 'number' },
+      emini_mean: { type: 'number' },
+      flexibility_mean: { type: 'number' },
+      truncated: { type: 'boolean' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`${value.length} aa · mean A(p) ${value.mean_propensity} · selection threshold ${value.threshold} · ${value.regions.length} candidate region(s)`];
+    for (const region of value.regions.slice(0, 10)) {
+      lines.push(`  ${region.start}-${region.end} (${region.length} aa, peak ${region.peak_propensity} at ${region.peak_position}; Parker ${region.parker_mean}, Emini ${region.emini_mean}, flexibility ${region.flexibility_mean})`);
+    }
+    if (value.regions.length > 10) lines.push(`  ... ${value.regions.length - 10} more`);
+    lines.push('Heuristic ranking (Kolaskar-Tongaonkar 1990 propensity), not an epitope predictor; the three scales are reported separately, not combined into one score.');
+    return lines.join('\n');
+  },
+  execute(args) {
+    return antigenicityProfile(args.sequence, {
+      minRegionLength: args.min_region_length,
+      maxRegions: args.max_regions,
+    });
+  },
+});
+// ── v0.28.0: format interchange and sequence surgery (#10) ──────────────────
+
+const EXPORT_FEATURE_IN_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['start', 'end'],
+  properties: {
+    type: { type: 'string', description: 'Feature type written to the type column (default misc_feature).' },
+    start: { type: 'integer', description: '1-based inclusive start.' },
+    end: { type: 'integer', description: '1-based inclusive end.' },
+    strand: { type: 'integer', enum: [1, -1], description: '1 = forward (default), -1 = reverse.' },
+    label: { type: 'string', description: 'Feature name; defaults to the type.' },
+    gene: { type: 'string' },
+    product: { type: 'string' },
+    note: { type: 'string' },
+    location: { type: 'string', description: 'Raw location string (e.g. join(1..10,50..60)); kept in the export.' },
+    multi_part: { type: 'boolean', description: 'True when start-end is only the outer bound of a multi-part location.' },
+  },
+};
+
+async function writeTextOutput(ctx, exec, path, content) {
+  const fs = fsService(ctx);
+  const sandboxPolicyService = ctx.get('sandboxPolicy');
+  const policy = sandboxPolicyService?.resolve({ ...exec?.agent !== undefined ? { session: exec.agent.session } : {} });
+  const file = workspaceFilePath(path, exec, policy?.workspaceRoot);
+  await writeWorkspaceFile(fs, file, content, policy);
+  return file;
+}
+
+const featureExportTool = (ctx) => define({
+  safe: (args) => args.output_path === undefined || args.output_path === '',
+  name: 'molbio_feature_export',
+  description: 'Export a plasmid/genome annotation as GFF3, BED or CSV, with each format\'s coordinate convention kept explicit: GFF3 and CSV are 1-based inclusive, BED is 0-based half-open (start-1 .. end). Features come from a .dna/.gb file (source_path) or from an inline sequence plus a features array. Multi-part features are written as their OUTER span with the raw location preserved; CDS phase is NOT computed (the transcript frame is not modelled), so that column is \'.\'. Writes the file when output_path is given and returns the text either way.',
+  parameters: {
+    type: 'object',
+    properties: {
+      source_path: { type: 'string', description: 'Path to a .dna/.gb/.gbk file whose features are exported (alternative to sequence + features).' },
+      sequence: { type: 'string', description: 'Inline sequence (used with features when no source_path is given).' },
+      features: { type: 'array', items: EXPORT_FEATURE_IN_SCHEMA, description: 'Features to export (1-based inclusive); required with an inline sequence.' },
+      format: { type: 'string', enum: ['gff3', 'bed', 'csv'], description: 'Output format (required).' },
+      output_path: { type: 'string', description: 'Optional file path; when omitted the content is returned inline only.' },
+    },
+    required: ['format'],
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['format', 'coordinate_system', 'count', 'content', 'saved_to', 'notes'],
+    properties: {
+      format: { type: 'string', enum: ['gff3', 'bed', 'csv'] },
+      coordinate_system: { type: 'string' },
+      count: { type: 'integer' },
+      content: { type: 'string' },
+      saved_to: { type: 'string' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`exported ${value.count} feature(s) as ${value.format} (${value.coordinate_system})`];
+    for (const line of value.content.split('\n').filter((line) => line !== '').slice(0, 4)) lines.push(`  ${line.length > 160 ? line.slice(0, 160) + '…' : line}`);
+    if (value.saved_to !== '') lines.push(`written to ${value.saved_to}`);
+    else lines.push('content returned inline (no output_path given)');
+    for (const note of value.notes) lines.push(`note: ${note}`);
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const vector = await resolveVector(ctx, exec, args, 'source_path');
+    const features = args.features ?? vector.features;
+    if (features.length === 0) throw new MolbioInputError('no features to export; pass a file with annotations or a features array');
+    const result = exportFeatures({ name: vector.name, sequence: vector.sequence, features, format: args.format });
+    const savedTo = args.output_path === undefined || args.output_path === '' ? '' : await writeTextOutput(ctx, exec, args.output_path, result.content);
+    return { ...result, saved_to: savedTo };
+  },
+});
+
+const sequenceEditTool = (ctx) => define({
+  safe: (args) => args.output_path === undefined || args.output_path === '',
+  name: 'molbio_sequence_edit',
+  description: 'Edit a DNA sequence: rotate (circular), insert, delete, replace, split or join (with an optional exact overlap). All coordinates are 1-based inclusive; insert.position and split.position count the bases kept before the cut (0 = prepend, length = append). Optionally write the result(s) as FASTA. Features are NOT remapped — re-export annotations against the new coordinates if an edit moves them.',
+  parameters: {
+    type: 'object',
+    properties: {
+      source_path: { type: 'string', description: 'Path to a .dna/.gb/.fa file (alternative to sequence).' },
+      sequence: { type: 'string', description: 'Inline DNA sequence (alternative to source_path).' },
+      operation: { type: 'string', enum: ['rotate', 'insert', 'delete', 'replace', 'split', 'join'], description: 'Which edit to perform (required).' },
+      position: { type: 'integer', description: 'rotate: the 1-based base that becomes base 1. insert: bases kept before the insertion (0..length). split: split after this base.' },
+      start: { type: 'integer', description: 'delete/replace: 1-based inclusive start.' },
+      end: { type: 'integer', description: 'delete/replace: 1-based inclusive end.' },
+      inserted: { type: 'string', description: 'insert: the sequence to insert.' },
+      replacement: { type: 'string', description: 'replace: the replacement sequence.' },
+      join_with: { type: 'string', description: 'join: the second sequence.' },
+      overlap: { type: 'integer', description: 'join: exact suffix/prefix overlap to merge (0-…, default 0).' },
+      name: { type: 'string', description: 'FASTA record name (default edited).' },
+      output_path: { type: 'string', description: 'Optional FASTA output path; split writes one record per part.' },
+    },
+    required: ['operation'],
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['operation', 'input_length', 'output_length', 'sequences', 'saved_to', 'notes'],
+    properties: {
+      operation: { type: 'string', enum: ['rotate', 'insert', 'delete', 'replace', 'split', 'join'] },
+      input_length: { type: 'integer' },
+      output_length: { type: 'integer' },
+      sequences: { type: 'array', items: { type: 'string' } },
+      saved_to: { type: 'string' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`${value.operation}: ${value.input_length} bp → ${value.sequences.length === 1 ? value.output_length + ' bp' : value.sequences.length + ' parts'}`];
+    value.sequences.forEach((sequence, index) => {
+      lines.push(value.sequences.length === 1 ? sequence : `part ${index + 1} (${sequence.length} bp): ${sequence}`);
+    });
+    if (value.saved_to !== '') lines.push(`written to ${value.saved_to}`);
+    for (const note of value.notes) lines.push(`note: ${note}`);
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const vector = await resolveVector(ctx, exec, args, 'source_path');
+    const result = editSequence({
+      sequence: vector.sequence,
+      operation: args.operation,
+      position: args.position,
+      start: args.start,
+      end: args.end,
+      inserted: args.inserted,
+      replacement: args.replacement,
+      joinWith: args.join_with,
+      overlap: args.overlap,
+    });
+    let savedTo = '';
+    if (args.output_path !== undefined && args.output_path !== '') {
+      const stem = sanitizeFastaName(args.name ?? 'edited');
+      const records = result.sequences.map((sequence, index) => `>${stem}${result.sequences.length > 1 ? `_part${index + 1}` : ''} (${args.operation})\n${wrapFasta(sequence)}`).join('');
+      savedTo = await writeTextOutput(ctx, exec, args.output_path, records);
+    }
+    return { ...result, saved_to: savedTo };
+  },
+});
+
+function sanitizeFastaName(value) {
+  return String(value).trim().replace(/[\s]+/g, '_') || 'edited';
+}
+
+function wrapFasta(sequence) {
+  const lines = [];
+  for (let i = 0; i < sequence.length; i += 70) lines.push(sequence.slice(i, i + 70));
+  return lines.join('\n') + '\n';
+}
+
+// ── v0.28.0: sequencing read sets (#27/#31) ─────────────────────────────────
+
+const READ_IN_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['sequence'],
+  properties: {
+    name: { type: 'string', description: 'Read name (default readN).' },
+    sequence: { type: 'string', description: 'Read bases (IUPAC DNA).' },
+    qualities: { type: 'array', items: { type: 'number' }, description: 'Optional per-base Phred qualities (0-100).' },
+  },
+};
+
+async function readSequencingInputs(ctx, exec, args) {
+  const reads = [];
+  for (const path of args.paths ?? []) {
+    const bytes = await readFileBytes(ctx, exec, path);
+    const trace = readTraceFromBytes(bytes, path);
+    const name = String(path).split(/[\\/]/).pop().replace(/\.[^.]*$/, '') || 'read';
+    reads.push({ name, sequence: trace.bases, qualities: trace.qualities });
+  }
+  for (const read of args.reads ?? []) reads.push(read);
+  if (reads.length === 0) throw new MolbioInputError('provide paths (sequencing files) and/or an inline reads array');
+  return reads;
+}
+
+const ASSEMBLED_READ_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'orientation', 'start', 'end', 'length', 'trimmed_bases', 'overlap_left', 'overlap_right', 'mismatches'],
+  properties: {
+    name: { type: 'string' },
+    orientation: { type: 'string', enum: ['forward', 'reverse'] },
+    start: { type: 'integer' },
+    end: { type: 'integer' },
+    length: { type: 'integer' },
+    trimmed_bases: { type: 'integer' },
+    overlap_left: { type: 'integer' },
+    overlap_right: { type: 'integer' },
+    mismatches: { type: 'integer' },
+  },
+};
+
+const UNPLACED_READ_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'reason'],
+  properties: {
+    name: { type: 'string' },
+    reason: { type: 'string' },
+  },
+};
+
+const sangerAssembleTool = (ctx) => define({
+  safe: (args) => args.output_path === undefined || args.output_path === '',
+  name: 'molbio_sanger_assemble',
+  description: 'Assemble a handful of Sanger reads (1-24 .ab1/.seq/.fasta files, or inline reads) into one quality-weighted consensus contig by greedy overlap-layout. Each read is tried in both orientations; quality trimming (default Phred 20 at the ends), overlap length/mismatch limits and exact-overlap circular closure (opt-in) are configurable. Reports every read\'s placement, coverage, conflicts and any unplaced read, and can write the contig as FASTA. This is not a genome assembler and does not merge paired-end reads.',
+  parameters: {
+    type: 'object',
+    properties: {
+      paths: { type: 'array', items: { type: 'string' }, description: 'Sequencing files: .ab1 (with qualities), .seq/.txt/.fasta (plain bases).' },
+      reads: { type: 'array', items: READ_IN_SCHEMA, description: 'Inline reads (alternative or in addition to paths).' },
+      name: { type: 'string', description: 'Contig name (default contig).' },
+      min_overlap: { type: 'integer', description: 'Minimum acceptable overlap in bases (5-500, default 20).' },
+      max_overlap: { type: 'integer', description: 'Longest overlap tested (min_overlap-2000, default 250).' },
+      max_mismatch_fraction: { type: 'number', description: 'Mismatch fraction allowed inside an overlap (0-0.5, default 0.1).' },
+      trim_quality: { type: 'number', description: 'Trim read ends below this Phred value (0-60, default 20; 0 disables).' },
+      circular: { type: 'boolean', description: 'Try exact-overlap circular closure of the finished contig (default false).' },
+      output_path: { type: 'string', description: 'Optional FASTA output path for the contig.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['name', 'sequence', 'length', 'read_count', 'placed_count', 'coverage_mean', 'coverage_min', 'conflicts', 'conflict_positions', 'circular_requested', 'circularized', 'circular_overlap', 'reads', 'unplaced', 'saved_to', 'notes'],
+    properties: {
+      name: { type: 'string' },
+      sequence: { type: 'string' },
+      length: { type: 'integer' },
+      read_count: { type: 'integer' },
+      placed_count: { type: 'integer' },
+      coverage_mean: { type: 'number' },
+      coverage_min: { type: 'integer' },
+      conflicts: { type: 'integer' },
+      conflict_positions: { type: 'array', items: { type: 'integer' } },
+      circular_requested: { type: 'boolean' },
+      circularized: { type: 'boolean' },
+      circular_overlap: { type: 'integer' },
+      reads: { type: 'array', items: ASSEMBLED_READ_SCHEMA },
+      unplaced: { type: 'array', items: UNPLACED_READ_SCHEMA },
+      saved_to: { type: 'string' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`${value.name}: ${value.length} bp from ${value.placed_count}/${value.read_count} read(s) · coverage ${value.coverage_mean}× (min ${value.coverage_min}×) · ${value.conflicts} conflict(s)`];
+    for (const read of value.reads) lines.push(`  ${read.name} ${read.orientation} ${read.start}-${read.end} (${read.length} bp, overlaps ${read.overlap_left}/${read.overlap_right}, ${read.mismatches} mismatch(es), ${read.trimmed_bases} trimmed)`);
+    if (value.unplaced.length > 0) lines.push(`unplaced: ${value.unplaced.map((read) => `${read.name} (${read.reason})`).join('; ')}`);
+    if (value.circular_requested) lines.push(value.circularized ? `circularized by removing a ${value.circular_overlap} bp exact end overlap` : 'circular closure requested but no acceptable end overlap was found');
+    if (value.saved_to !== '') lines.push(`contig written to ${value.saved_to}`);
+    for (const note of value.notes) lines.push(`note: ${note}`);
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const reads = await readSequencingInputs(ctx, exec, args);
+    const result = assembleReads(reads, {
+      name: args.name,
+      minOverlap: args.min_overlap,
+      maxOverlap: args.max_overlap,
+      maxMismatchFraction: args.max_mismatch_fraction,
+      trimQuality: args.trim_quality,
+      circular: args.circular,
+    });
+    const savedTo = args.output_path === undefined || args.output_path === ''
+      ? ''
+      : await writeTextOutput(ctx, exec, args.output_path, `>${sanitizeFastaName(result.name)}\n${wrapFasta(result.sequence)}`);
+    return { ...result, saved_to: savedTo };
+  },
+});
+
+const VARIANT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['kind', 'position', 'ref', 'alt', 'length'],
+  properties: {
+    kind: { type: 'string', enum: ['mismatch', 'deletion', 'insertion'] },
+    position: { type: 'integer' },
+    end: { type: 'integer' },
+    ref: { type: 'string' },
+    alt: { type: 'string' },
+    length: { type: 'integer' },
+  },
+};
+
+const ALLELE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['signature', 'label', 'count', 'frequency', 'variants', 'variant_count', 'edited_from', 'edited_to', 'effect', 'protein_change', 'representative', 'mean_identity'],
+  properties: {
+    signature: { type: 'string' },
+    label: { type: 'string' },
+    count: { type: 'integer' },
+    frequency: { type: 'number' },
+    variants: { type: 'array', items: VARIANT_SCHEMA },
+    variant_count: { type: 'integer' },
+    edited_from: { type: 'integer' },
+    edited_to: { type: 'integer' },
+    effect: { type: 'string', enum: ['wild_type', 'silent', 'missense', 'nonsense', 'frameshift', 'in_frame_indel', 'outside_cds', 'not_evaluated'] },
+    protein_change: { type: 'string' },
+    representative: { type: 'string' },
+    mean_identity: { type: 'number' },
+  },
+};
+
+const editingOutcomeTool = (ctx) => define({
+  name: 'molbio_editing_outcome',
+  description: 'Cluster ALL reads against the reference in ONE call and report each allele\'s frequency and (inside an optional CDS) its protein effect — do not call this once per read and do not re-derive the effect with molbio_translate, a script, or a shell command; the result already carries frameshift/missense/nonsense/silent/in_frame_indel. Pass every read in `reads` as [{name, sequence}] with sequences copied exactly (or pass `paths` for .ab1/.seq/.fasta files instead of retyping them), and pass the COMPLETE reference molecule in `reference` — not the CDS and not one of the reads; `cds_start`/`cds_end` are 1-based inclusive coordinates ON that reference. Reads align in both orientations; reads below the identity/span thresholds are reported as unaligned rather than forced into an allele. Frequencies are fractions of the ALIGNED reads (read-fraction clustering, NOT TIDE peak decomposition). A `wild_type` allele means a read identical to the reference; if you expected wild-type reads and none appear, check that `reference` is the full molecule.',
+  parameters: {
+    type: 'object',
+    properties: {
+      paths: { type: 'array', items: { type: 'string' }, description: 'Sequencing files (.ab1/.seq/.fasta); prefer this over retyping inline sequences when the reads are files.' },
+      reads: { type: 'array', items: READ_IN_SCHEMA, description: 'Inline reads; each item needs sequence (IUPAC DNA, copied exactly) and accepts name/qualities. Pass all reads in one call.' },
+      reference: { type: 'string', description: 'The COMPLETE reference molecule (alternative to reference_path), not the CDS; cds_start/cds_end index into it.' },
+      reference_path: { type: 'string', description: 'Path to the reference .dna/.gb/.fa file.' },
+      circular: { type: 'boolean', description: 'Treat the reference as circular (default true); pass false for a linear amplicon, because the wrong topology misplaces reads that span the ends.' },
+      min_frequency: { type: 'number', description: 'Omit alleles below this aligned-read fraction (0-1, default 0.01).' },
+      identity_threshold: { type: 'number', description: 'Minimum alignment identity for a read to count (0-1, default 0.6).' },
+      cds_start: { type: 'integer', description: 'Optional CDS start (1-based inclusive) ON the reference; give both cds_start and cds_end or neither.' },
+      cds_end: { type: 'integer', description: 'Optional CDS end (1-based inclusive) ON the reference.' },
+    },
+  },
+  outputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['reference_length', 'circular', 'total_reads', 'aligned_reads', 'unaligned_reads', 'unaligned', 'alleles', 'allele_count', 'cds_start', 'cds_end', 'notes'],
+    properties: {
+      reference_length: { type: 'integer' },
+      circular: { type: 'boolean' },
+      total_reads: { type: 'integer' },
+      aligned_reads: { type: 'integer' },
+      unaligned_reads: { type: 'integer' },
+      unaligned: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'identity'], properties: { name: { type: 'string' }, identity: { type: 'number' } } } },
+      alleles: { type: 'array', items: ALLELE_SCHEMA },
+      allele_count: { type: 'integer' },
+      cds_start: { type: 'integer' },
+      cds_end: { type: 'integer' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  render(value) {
+    const lines = [`${value.aligned_reads}/${value.total_reads} read(s) aligned to a ${value.reference_length} bp ${value.circular ? 'circular' : 'linear'} reference · ${value.allele_count} allele(s)`];
+    for (const allele of value.alleles) {
+      const span = allele.edited_from === 0 ? '' : ` @${allele.edited_from}-${allele.edited_to}`;
+      lines.push(`  ${(allele.frequency * 100).toFixed(1)}% (${allele.count}) ${allele.label}${span}${allele.effect === 'not_evaluated' ? '' : ` → ${allele.effect}${allele.protein_change === '' ? '' : ' ' + allele.protein_change}`}`);
+    }
+    if (value.unaligned_reads > 0) lines.push(`${value.unaligned_reads} read(s) did not align (${value.unaligned.map((read) => `${read.name} ${read.identity}%`).join(', ')})`);
+    lines.push('Read-fraction clustering, not TIDE: mixed Sanger peaks are not decomposed; frequencies are fractions of the aligned reads.');
+    return lines.join('\n');
+  },
+  async execute(args, exec) {
+    const vector = await resolveVector(ctx, exec, args, 'reference_path');
+    const reads = await readSequencingInputs(ctx, exec, args);
+    return callEditingOutcomes(reads, vector.sequence, {
+      circular: args.circular,
+      minFrequency: args.min_frequency,
+      identityThreshold: args.identity_threshold,
+      cdsStart: args.cds_start,
+      cdsEnd: args.cds_end,
+    });
+  },
+});
+
+// ── prompt guidance for the v0.28.0 tools ──────────────────────────────────
+
+const NEW_PROMPT_LINES = [
+  '- Protein annotation (v0.28): molbio_protein_features (PTM motifs, SEG-style low-complexity regions, aromaticity, instability index), molbio_signal_peptide (von Heijne 1986 cleavage score + candidate transmembrane segments + a score SVG) and molbio_antigenicity (Kolaskar-Tongaonkar 7-mer propensity with Parker/Emini/Vihinen region means). All three are heuristics from published tables: never call them SignalP/TMHMM/NetNGlyc/BepiPred predictions.',
+  '- Formats and sequence surgery (v0.28): molbio_feature_export writes features as GFF3 (1-based inclusive), BED (0-based half-open) or CSV and states which convention it used; molbio_sequence_edit rotates/inserts/deletes/replaces/splits/joins and does NOT remap features — re-export annotations when an edit moves them.',
+  '- Sequencing read sets (v0.28): molbio_sanger_assemble builds a quality-weighted consensus contig from a few reads (both orientations, opt-in circular closure); molbio_editing_outcome clusters reads into alleles and classifies the CDS effect. Its frequencies are fractions of aligned reads, not TIDE peak decomposition.',
+].join('\n');
 const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available with the molbio_* prefix:
 - Sequence math: molbio_reverse_complement, molbio_gc_content, molbio_translate, molbio_restriction_sites, molbio_methylation_check (which enzymes a Dam/Dcm-methylated template blocks, plus the enzymes that survive), molbio_double_digest (two enzymes: per-enzyme and combined fragments + whether they share a buffer).
 - Primer work: molbio_design_primers (automatic pair design), molbio_design_intron_primers (qPCR primers spanning an exon-exon junction against a genomic sequence + exon list, so gDNA does not amplify), molbio_primer_tm, molbio_primer_check, molbio_duplex_thermo (ΔH/ΔS/ΔG°37/Tm for one exact duplex plus hairpin and dimer checks; a mismatched partner is refused, not estimated), molbio_design_taqman (hydrolysis-probe assay: primer pair + probe with the no-5'-G / probe-Tm-margin rules; probe_chemistry='mgb' for shorter MGB probes with an explicitly unmodified NN Tm, and save_path for an ordering CSV of F/R/P with modifications/scale/purification), molbio_multiplex_check (whether several primer pairs can share one tube: cross-dimers, cross-template annealing, gel-resolvable amplicon sizes, plus an annealing-temperature recommendation and a size-balanced starting primer-concentration plan).
@@ -8208,6 +8833,8 @@ const PROMPT_SECTION = `Molecular-biology tools (dsh-molbio-tools) are available
 - Literature & records: molbio_pubmed_abstract (fetch abstracts by PMID — needs web fetch; an NCBI key comes from the api_key argument, the credential store's NCBI_API_KEY, or the environment), molbio_paper_export_bibtex (papers.json → .bib), molbio_protocol_add / molbio_protocol_list / molbio_protocol_update (protocols.json), molbio_experiment_log / molbio_experiment_list (experiments.json).
 - Bench analysis (v19): molbio_fastq_qc (read-level QC for a FASTQ file: per-base quality with quartiles, per-read quality, base content, GC distribution, length, exact duplication, over-represented sequences, adapter screen, plus a report SVG — use it for "is this run good"), molbio_codon_usage (CAI/RSCU/Nc/GC3, rare-codon list and CDS CpG against E. coli/yeast/human — use it for "will this gene express"; it explains, molbio_codon_optimize rewrites), molbio_phylogenetic_tree (distance method: p-distance/JC/K2P/Tamura-Nei, UPGMA or neighbour-joining, bootstrap support, consensus, Newick file and an SVG tree — it is NOT a maximum-likelihood or Bayesian analysis, and bootstrap percentages are not p-values), molbio_pcr_simulate (where a primer pair amplifies: product sizes and coordinates on both strands, mismatch detail, the 3'-end exact-match requirement, circular templates, screening other templates, and an expected gel — use it for "what band will I see"), molbio_gc_composition (sliding-window GC, CpG islands under the Gardiner-Garden or Takai criteria, GC/AT skew with the cumulative-skew origin/terminus indication, dinucleotide obs/exp, entropy, complexity, N50/L50, plus a figure — use it for "is this a promoter or an origin"), molbio_fastq_trim (trim low-quality 3' tails, exact adapters/primers, poly-G/poly-A, then filter by length/N and write FASTQ/FASTA — not a paired-end merger).
 - Literature: molbio_pubmed_search — with an NCBI API key (api_key argument, the credential store under NCBI_API_KEY / MOLBIO_NCBI_API_KEY, or the environment) it uses the official PubMed E-utilities API and returns PMIDs, titles, journal/year, authors and DOI; without a key it falls back to the harness web search. The reading library is molbio_paper_add / molbio_paper_list / molbio_paper_update / molbio_paper_remove (papers.json in the workspace).
+
+${NEW_PROMPT_LINES}
 
 Cloning workflow rules (follow them to avoid slow re-derivation):
 - To clone a sequence into a plasmid, call molbio_clone_simulate FIRST — pass the BARE insert with add_flanks: true and the tool adds the enzyme recognition sites itself. The tool also validates single cutting, insert orientation, and internal sites itself: never pre-verify enzymes, cutting counts, or flank construction by thinking. Its output already contains final_sequence AND the remapped feature coordinates (features field). NEVER recompute feature coordinates or insert positions by reasoning — always take them from the tool output.
@@ -8288,6 +8915,13 @@ export function apply(ctx) {
     paperListTool(ctx),
     paperUpdateTool(ctx),
     paperRemoveTool(ctx),
+    proteinFeaturesTool,
+    signalPeptideTool(ctx),
+    antigenicityTool,
+    featureExportTool(ctx),
+    sequenceEditTool(ctx),
+    sangerAssembleTool(ctx),
+    editingOutcomeTool(ctx),
   ];
   for (const tool of tools) ctx.tools.register(tool);
 }

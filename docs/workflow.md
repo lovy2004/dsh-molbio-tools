@@ -20,7 +20,7 @@
 | 使用 | 模型找得到、用得对吗？ | `benchmark/`（见 [benchmark/README.md](../benchmark/README.md)） |
 
 ```bash
-node test/smoke.mjs         # 插件：mock 注册表跑全部 64 个工具 + 输出 schema 校验
+node test/smoke.mjs         # 插件：mock 注册表跑全部 72 个工具 + 输出 schema 校验
 node test/svgpng.mjs        # 光栅化器：PNG 结构 + inflate 回像素断言 + 真实渲染器子集检查
 node test/svgio.mjs         # 共享绘图助手：几何手算值 + 每种助手拼一张文档后光栅化必须干净
 node test/charts.mjs        # 图表：CSV/TSV 读取层 + 八种图表（含色带）的统计量与光栅化
@@ -50,7 +50,7 @@ node benchmark/run.mjs --offline # benchmark 的期望值是否仍等于工具�
 
 ### 各套件到底在防什么
 
-- **`smoke.mjs`** 证明**插件**可用：mock 注册表运行全部 64 个工具，并用 harness 自身的
+- **`smoke.mjs`** 证明**插件**可用：mock 注册表运行全部 72 个工具，并用 harness 自身的
   `assertSupportedJsonSchema` / `validateJsonSchemaValue` 校验每个输出 schema 与返回值；
   覆盖已知值用例（EcoRI 酶切、ΔΔCt=-3 → fold 8、GenBank/SnapGene 解析、引物对一致性、
   SVG 文件写入与无旋转标签断言、克隆模拟手算序列比对、合成 ABIF 夹具、环状参考跨原点
@@ -218,7 +218,7 @@ benchmark 不是"每天跑一遍"的门禁，而是**行为的验收测试**—�
 
 | 这次改了什么 | benchmark 要不要动 | 为什么 |
 | --- | --- | --- |
-| 新增一个工具 | **必须**：加任务 + `verifications.mjs` 的 invocation | `test/benchmark-coverage.mjs` 会**直接 FAIL**（`64/64 tools covered` 是断言） |
+| 新增一个工具 | **必须**：加任务 + `verifications.mjs` 的 invocation | `test/benchmark-coverage.mjs` 会**直接 FAIL**（`72/72 tools covered` 是断言） |
 | 改工具的参数、默认值、输出字段、渲染文本 | **必须**：更新受影响任务的断言，重跑 `--offline`，再重跑该任务 | 断言比对的是**渲染文本**，改了文本就改了对错 |
 | 改工具的描述或参数说明（prompt 面） | **必须**：重跑对应任务 | 这正是 benchmark 唯一能测的东西——模型是否还选得对 |
 | 改 `preset/molbio-lab/agent.cordis.yml`（行清单） | **必须**：先 `node test/benchmark-profile.mjs`，再重建 profile | 行清单变了，benchmark 的 headless profile 是**推导**出来的，守卫会 FAIL |
@@ -237,7 +237,7 @@ benchmark 不是"每天跑一遍"的门禁，而是**行为的验收测试**—�
 
 ```bash
 node benchmark/run.mjs --offline    # 每条 where:"tool" 断言是否仍等于工具的真实渲染输出
-node test/benchmark-coverage.mjs    # 64/64 工具有任务覆盖、fixture 前提仍成立、tier 与占位符健全
+node test/benchmark-coverage.mjs    # 72/72 工具有任务覆盖、fixture 前提仍成立、tier 与占位符健全
 node test/benchmark-score.mjs       # 判分器对冻结的真实响应仍判对，且仍能判错
 ```
 
@@ -299,7 +299,7 @@ $ touch lib.mjs && node benchmark/run.mjs --list --changed
 1. **不可判定 → 全量**：没有 git / 没有 HEAD / 读不到插件结构，一律回落全量并打印原因；
 2. **认不出的文件 → 全量**：新模块、重命名的文件（`not in the plugin's module set`）；
 3. **`index.mjs` → 全量**：它是绑定全部工具的那个入口；
-4. **映射到的工具有题没覆盖 → 全量**（并由 `test/benchmark-coverage.mjs` 断言 64/64 覆盖）。
+4. **映射到的工具有题没覆盖 → 全量**（并由 `test/benchmark-coverage.mjs` 断言 72/72 覆盖）。
 
 反过来，**唯一会返回"无事可跑"的情况**是改动**可证明**不影响工具行为：`docs/`、
 `CHANGELOG.md`、`README.md`、`test/`、`benchmark/`、`package.json`。这不是走后门——

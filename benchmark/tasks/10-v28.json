@@ -1,0 +1,300 @@
+{
+  "$comment": [
+    "v0.28.0 tool surface: protein annotation (#13/#14/#21), format interchange (#10),",
+    "and sequencing read sets (#27/#31).",
+    "",
+    "Each task pins RENDERED text the tool actually produces, not only 'it ran': the",
+    "instability index and its stable/unstable call, the von Heijne cleavage site, the",
+    "two coordinate conventions (1-based GFF3 vs 0-based BED is covered offline in",
+    "smoke), read placement/orientation in the contig, and allele frequencies with their",
+    "CDS effects. The editing task's frequency is a fraction of ALIGNED reads — the",
+    "task says so because a model that reports TIDE-style efficiency would be wrong."
+  ],
+  "tasks": [
+    {
+      "id": "protein-features",
+      "category": "protein",
+      "tier": "full",
+      "covers": [
+        "molbio_protein_features"
+      ],
+      "instruction": "Before I express this peptide I want its annotation: which PTM motifs are present, whether there is a low-complexity region, and whether the instability index calls it stable. Use the defaults.\n\nProtein: AANASWAAWGEASTALKAERRASAAEAAAAAAAAAAAAAAAA",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_protein_features"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "42 aa · 5 PTM",
+          "note": "length and motif count"
+        },
+        {
+          "where": "tool",
+          "pattern": "3: N-glycosylation",
+          "note": "N-glycosylation motif at residue 3"
+        },
+        {
+          "where": "tool",
+          "pattern": "17: SUMOylation",
+          "note": "SUMOylation motif at residue 17"
+        },
+        {
+          "where": "tool",
+          "pattern": "17-42 \\(26 aa, entropy 1\\.222 bits\\)",
+          "note": "the low-complexity region at the C-terminus"
+        },
+        {
+          "where": "tool",
+          "pattern": "instability index 13\\.54 \\(stable",
+          "note": "Guruprasad instability index and its call"
+        },
+        {
+          "where": "answer",
+          "pattern": "glycosylation|SUMO|instability",
+          "note": "the model reports annotation content, not only a count"
+        }
+      ]
+    },
+    {
+      "id": "signal-peptide",
+      "category": "protein",
+      "tier": "full",
+      "covers": [
+        "molbio_signal_peptide"
+      ],
+      "instruction": "Does this protein have a cleavable signal peptide? Give the cleavage position, the signal-peptide sequence and any candidate transmembrane segment.\n\nProtein: MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALY",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_signal_peptide"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "candidate signal peptide: cleavage after residue 24",
+          "note": "the von Heijne score peaks at the preproinsulin cleavage site"
+        },
+        {
+          "where": "tool",
+          "pattern": "score 6\\.852, window 12-26",
+          "note": "the score and the -13..+2 window"
+        },
+        {
+          "where": "tool",
+          "pattern": "signal peptide \\(24 aa\\): MALWMRLLPLLALLALWGPDPAAA",
+          "note": "the cleaved signal peptide"
+        },
+        {
+          "where": "tool",
+          "pattern": "candidate transmembrane segments: 2-9",
+          "note": "the hydropathy run is reported as a candidate, not a topology"
+        },
+        {
+          "where": "answer",
+          "pattern": "24|MALWMRLL",
+          "note": "the model reports the position/sequence"
+        }
+      ]
+    },
+    {
+      "id": "antigenicity",
+      "category": "protein",
+      "tier": "full",
+      "covers": [
+        "molbio_antigenicity"
+      ],
+      "instruction": "Which regions of proinsulin look surface-exposed by the Kolaskar-Tongaonkar propensity? Use the defaults and tell me the top region.\n\nProtein: MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_antigenicity"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "mean A\\(p\\) 1\\.065",
+          "note": "the protein mean propensity"
+        },
+        {
+          "where": "tool",
+          "pattern": "5 candidate region",
+          "note": "region count at the default 6-residue minimum"
+        },
+        {
+          "where": "tool",
+          "pattern": "5-19 \\(15 aa, peak 1\\.197",
+          "note": "the first region and its peak"
+        },
+        {
+          "where": "tool",
+          "pattern": "21-46 \\(26 aa, peak 1\\.199",
+          "note": "the highest-peak region"
+        },
+        {
+          "where": "answer",
+          "pattern": "5-19|21-46|1\\.19",
+          "note": "the model reports a region, not only a count"
+        }
+      ]
+    },
+    {
+      "id": "feature-export",
+      "category": "formats",
+      "tier": "full",
+      "covers": [
+        "molbio_feature_export"
+      ],
+      "instruction": "Export this toy annotation as GFF3 and tell me which coordinate convention the file uses. Sequence ACGTACGTAC, one CDS at 2-6 on the forward strand labelled gene1.",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_feature_export"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "1-based inclusive",
+          "note": "the coordinate convention is stated"
+        },
+        {
+          "where": "tool",
+          "pattern": "CDS\\s+2\\s+6",
+          "note": "the 1-based inclusive span"
+        },
+        {
+          "where": "tool",
+          "pattern": "ID=CDS_1;Name=gene1",
+          "note": "the GFF3 attributes"
+        },
+        {
+          "where": "tool",
+          "pattern": "phase column is '\\.'",
+          "note": "CDS phase is not invented"
+        },
+        {
+          "where": "answer",
+          "pattern": "GFF3|1-based",
+          "note": "the model names the format/convention"
+        }
+      ]
+    },
+    {
+      "id": "sequence-edit",
+      "category": "formats",
+      "tier": "full",
+      "covers": [
+        "molbio_sequence_edit"
+      ],
+      "instruction": "Rotate the sequence AACCGGTT so that base 3 becomes base 1, and show me the result.",
+      "timeout_ms": 240000,
+      "expect_tools": [
+        "molbio_sequence_edit"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "rotate: 8 bp",
+          "note": "the operation and length are reported"
+        },
+        {
+          "where": "tool",
+          "pattern": "CCGGTTAA",
+          "note": "the rotated sequence"
+        },
+        {
+          "where": "tool",
+          "pattern": "original base 3 is now base 1",
+          "note": "the coordinate note"
+        },
+        {
+          "where": "answer",
+          "pattern": "CCGGTTAA",
+          "note": "the model reports the sequence"
+        }
+      ]
+    },
+    {
+      "id": "sanger-assemble",
+      "category": "sequencing",
+      "tier": "full",
+      "covers": [
+        "molbio_sanger_assemble"
+      ],
+      "instruction": "Assemble these three Sanger reads into one contig (minimum overlap 40, no quality trimming) and tell me the coverage and whether every read placed.\n\nr1: GCGTGGTTATAATACAAGTTGAGCATATAAGGTTTGACAGCCTCTGACGCCTGCGGCGAAGGCCCATAATGGTACCGGAAGACTTCCGCCTCGATGCATCACTCACATCGGTGTCACCTGTTGTCGTCCGTTAACAAGTAGCAGGTTAGATCCGATCCGCGTCTAGGAGTGATCCTTATCAAATTGACTCAAAGGCGATATACAGCGAAAACATCAACCG\n\nr2: TCCGATCCGCGTCTAGGAGTGATCCTTATCAAATTGACTCAAAGGCGATATACAGCGAAAACATCAACCGTGGACTTCAGGAACACGGTGTGAGGGTTGGTCTCTTTTGAGAGATATTACAGACACTTTCTGGAGGACAACCGTGGTTTGGAACTGAATTGTCAAGGCGACATTACCTTAAAGCGTAGTTGGGTGGTGACTTTGAGCTGATGATAACGTA\n\nr3: TCCATGTTCGGTATAAACATTGCTGGTCCCTACGTTATCATCAGCTCAAAGTCACCACCCAACTACGCTTTAAGGTAATGTCGCCTTGACAATTCAGTTCCAAACCACGGTTGTCCTCCA",
+      "timeout_ms": 300000,
+      "expect_tools": [
+        "molbio_sanger_assemble"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "400 bp from 3/3 read",
+          "note": "the full contig from all three reads"
+        },
+        {
+          "where": "tool",
+          "pattern": "coverage 1\\.4× \\(min 1×\\)",
+          "note": "the depth summary"
+        },
+        {
+          "where": "tool",
+          "pattern": "r3 reverse 281-400",
+          "note": "the reverse-complement read is placed and oriented"
+        },
+        {
+          "where": "tool",
+          "pattern": "0 conflict",
+          "note": "no base conflicts"
+        },
+        {
+          "where": "answer",
+          "pattern": "400|1\\.4|reverse",
+          "note": "the model reports length/coverage, not only success"
+        }
+      ]
+    },
+    {
+      "id": "editing-outcome",
+      "category": "sequencing",
+      "tier": "full",
+      "covers": [
+        "molbio_editing_outcome"
+      ],
+      "instruction": "These four Sanger reads come from editing a 96 bp reference (ATG + 30×GCT + TAA). Cluster them into alleles, and give each frequency and protein effect inside the CDS 1-96. Treat the reference as linear.\n\nwt1 and wt2: ATGGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTTAA\ndel: ATGGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTTAA\nsub: ATGACTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTGCTTAA",
+      "timeout_ms": 300000,
+      "expect_tools": [
+        "molbio_editing_outcome"
+      ],
+      "assertions": [
+        {
+          "where": "tool",
+          "pattern": "4/4 read\\(s\\) aligned",
+          "note": "every read aligned"
+        },
+        {
+          "where": "tool",
+          "pattern": "50\\.0% \\(2\\) wild type",
+          "note": "the wild-type allele frequency"
+        },
+        {
+          "where": "tool",
+          "pattern": "25\\.0% \\(1\\).*in_frame_indel",
+          "note": "the 3 bp deletion is in frame"
+        },
+        {
+          "where": "tool",
+          "pattern": "missense A2T",
+          "note": "the substitution's protein effect"
+        },
+        {
+          "where": "tool",
+          "pattern": "not TIDE",
+          "note": "the method boundary is stated"
+        },
+        {
+          "where": "answer",
+          "pattern": "50%|A2T|in frame|in-frame",
+          "note": "the model reports allele frequencies and effects"
+        }
+      ]
+    }
+  ]
+}

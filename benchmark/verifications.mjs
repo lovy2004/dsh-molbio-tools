@@ -34,6 +34,22 @@ const GENBANK_TEXT = readFileSync(
 
 
 
+
+/** Inputs behind the v0.28.0 tasks; the same literals the task instructions carry. */
+const V28_INSULIN = 'MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN';
+const V28_ASSEMBLY_REF = 'GCGTGGTTATAATACAAGTTGAGCATATAAGGTTTGACAGCCTCTGACGCCTGCGGCGAAGGCCCATAATGGTACCGGAAGACTTCCGCCTCGATGCATCACTCACATCGGTGTCACCTGTTGTCGTCCGTTAACAAGTAGCAGGTTAGATCCGATCCGCGTCTAGGAGTGATCCTTATCAAATTGACTCAAAGGCGATATACAGCGAAAACATCAACCGTGGACTTCAGGAACACGGTGTGAGGGTTGGTCTCTTTTGAGAGATATTACAGACACTTTCTGGAGGACAACCGTGGTTTGGAACTGAATTGTCAAGGCGACATTACCTTAAAGCGTAGTTGGGTGGTGACTTTGAGCTGATGATAACGTAGGGACCAGCAATGTTTATACCGAACATGGA';
+const V28_ASSEMBLY_READS = [
+  { name: 'r1', sequence: V28_ASSEMBLY_REF.slice(0, 220) },
+  { name: 'r2', sequence: V28_ASSEMBLY_REF.slice(150, 370) },
+  { name: 'r3', sequence: 'TCCATGTTCGGTATAAACATTGCTGGTCCCTACGTTATCATCAGCTCAAAGTCACCACCCAACTACGCTTTAAGGTAATGTCGCCTTGACAATTCAGTTCCAAACCACGGTTGTCCTCCA' },
+];
+const V28_EDIT_REF = 'ATG' + 'GCT'.repeat(30) + 'TAA';
+const V28_EDIT_READS = [
+  { name: 'wt1', sequence: V28_EDIT_REF },
+  { name: 'wt2', sequence: V28_EDIT_REF },
+  { name: 'del', sequence: V28_EDIT_REF.slice(0, 3) + V28_EDIT_REF.slice(6) },
+  { name: 'sub', sequence: V28_EDIT_REF.slice(0, 3) + 'A' + V28_EDIT_REF.slice(4) },
+];
 /** The plasmid sequence, loaded once per offline run. */
 let puc118;
 
@@ -389,6 +405,39 @@ export function invocationsFor(task) {
     'genbank-parse': () => [
       { tool: 'molbio_parse_genbank', args: { genbank: GENBANK_TEXT } },
       { tool: 'molbio_parse_snapgene', args: { path: at('pUC118.dna') } },
+    ],
+
+    // v0.28.0
+    'protein-features': () => [
+      { tool: 'molbio_protein_features', args: { sequence: 'AANASWAAWGEASTALKAERRASAAE' + 'A'.repeat(16) } },
+    ],
+    'signal-peptide': () => [
+      { tool: 'molbio_signal_peptide', args: { sequence: V28_INSULIN.slice(0, 40) } },
+    ],
+    'antigenicity': () => [
+      { tool: 'molbio_antigenicity', args: { sequence: V28_INSULIN } },
+    ],
+    'feature-export': () => [
+      {
+        tool: 'molbio_feature_export',
+        args: {
+          sequence: 'ACGTACGTAC',
+          features: [{ type: 'CDS', start: 2, end: 6, strand: 1, label: 'gene1' }],
+          format: 'gff3',
+        },
+      },
+    ],
+    'sequence-edit': () => [
+      { tool: 'molbio_sequence_edit', args: { sequence: 'AACCGGTT', operation: 'rotate', position: 3 } },
+    ],
+    'sanger-assemble': () => [
+      { tool: 'molbio_sanger_assemble', args: { reads: V28_ASSEMBLY_READS, min_overlap: 40, trim_quality: 0 } },
+    ],
+    'editing-outcome': () => [
+      {
+        tool: 'molbio_editing_outcome',
+        args: { reads: V28_EDIT_READS, reference: V28_EDIT_REF, circular: false, cds_start: 1, cds_end: V28_EDIT_REF.length },
+      },
     ],
 
     // network (see NETWORK_TASKS: online-only assertions, `where: "answer"`)

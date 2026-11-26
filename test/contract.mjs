@@ -767,8 +767,8 @@ check('a tool may show the model a picture the way read_image does', () => {
   // The count is deliberate: it is what catches a NEW picture tool that forgets
   // the hand-off (or a report tool that quietly grows it).
   const index = readFileSync(join(packageRoot, 'index.mjs'), 'utf8');
-  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 17, 'all 17 picture tools declare the image output field');
-  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 17, 'and offer the opt-in attach_image parameter');
+  assert.equal((index.match(/image: ATTACHED_IMAGE_SCHEMA/g) ?? []).length, 18, 'all 18 picture tools declare the image output field');
+  assert.equal((index.match(/\.\.\.ATTACH_IMAGE_PARAM/g) ?? []).length, 18, 'and offer the opt-in attach_image parameter');
   assert.ok(/output\.render/.test(index) || index.includes('imageBlockFor(value)'), 'the block builder is wired into define()');
 });
 

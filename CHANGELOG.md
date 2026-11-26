@@ -10,6 +10,88 @@
   改为按**包名**引用后模块缓存问题随之消失——没有拷贝，也就没有需要保持同步的版本目录。
   下文历史条目里出现的 `vN` 目录保持原样，作为当时的记录。
 
+## [0.28.0] — 2026-11-26（蛋白注释 + 格式互操作 + 测序判读：survey #13/#14/#21/#10/#27/#31）
+
+**工具数 65 → 72，benchmark 66 → 73 题（72/72 覆盖）。** 这一版把三条候选线一次做完：蛋白注释、
+注释格式与序列编辑、Sanger 读段判读。上游没有可跟的版本（`0.2.3-alpha.2` 仍是 npm `alpha` 的最新，
+`latest`/`next` 仍是 `0.2.2-rc.5`），所以这一版全部是工具行为，`dshReleases` / `engines` / preset 行清单
+都没有改。
+
+### 1. 蛋白注释（#13 / #21 / #14）
+
+- **`molbio_protein_features`**（#13）：PTM 基序扫描（N-糖基化 N-{P}-[S/T]、C-甘露糖基化 W-x-x-W、
+  N-端肉豆蔻酰化、SUMO 化 ψKxE、PKA R-R-x-[S/T]、CK2 [S/T]-x-x-[D/E]、脯氨酸导向 [S/T]-P）、
+  SEG 风格的熵窗口低复杂度区、芳香性与 Guruprasad 不稳定指数（>40 报 `unstable`）。
+- **`molbio_signal_peptide`**（#21）：von Heijne 1986 的 −13..+2 位置权重（真核 / 革兰阴性两套，
+  与 EMBOSS sigcleave 的 `log(count/expected)` 构造一致），给出最佳切割位点、信号肽、候选切割位点，
+  以及**与 `molbio_hydropathy_plot` 同一窗口/阈值**的候选跨膜段；附一张分数曲线 SVG。
+  只扫描 N 端前 50 个残基（`max_cleavage` 可调），避免把中段偶然高分读成信号肽。
+- **`molbio_antigenicity`**（#14）：Kolaskar–Tongaonkar 1990 的 7-mer A(p) 倾向，按“全蛋白均值 / 1.0”
+  选位点、连续 ≥6 个残基成区；同时报 Parker 亲水性、Emini 可及性与 Vihinen 柔性的**区间均值**，
+  不合成单一分数。
+- **表格来源与验证**：DIWV（20×20）、Parker/Emini/Vihinen（各 20）转录自 Biopython 1.88
+  `ProtParamData.py`（BSD-3，Guruprasad 1990 的参考实现）；A(p) 与两套信号肽计数转录自
+  EMBOSS 6.6.0 的 `data/Eantigenic.dat`、`data/Esig.euk`、`data/Esig.pro`。所有值都在源码注释里
+  注明出处，测试用可手算的已知值钉住（`AAAA` 的不稳定指数 7.5、20×A 的 A(p) 区间 4-17、
+  胰岛素原信号肽切割位点 24、绿色荧光蛋白片段不报信号肽）。
+
+### 2. 注释格式与序列编辑（#10）
+
+- **`molbio_feature_export`**：把 `.dna`/`.gb` 或内联序列 + features 导出为 **GFF3（1-based inclusive）**、
+  **BED（0-based half-open）**或 CSV，并在输出里写明用的是哪套坐标；`location` 原样保留，
+  多段特征按外边界导出并给出提示。**CDS phase 不计算**（没有建模转录本阅读框），列写 `.`，
+  而不是猜一个看起来合理的数。写文件仍走 `ctx.fs` + `sandboxPolicy`。
+- **`molbio_sequence_edit`**：rotate / insert / delete / replace / split / join（可带精确 overlap 校验）。
+  坐标统一 1-based inclusive；`insert.position` / `split.position` 是“保留在前面的碱基数”。
+  **不重映射特征坐标**，输出里明确提示：编辑移动了注释就要重新导出。
+
+### 3. Sanger 读段判读（#27 / #31）
+
+- **`molbio_sanger_assemble`**（#27）：1–24 条 `.ab1`/`.seq`/`.fasta` 或内联 reads 的贪心 overlap-layout
+  组装；每条读两种朝向都试，按“overlap − 2×mismatch”选最优；Phred 末端修剪；每次放置后用
+  **质量加权共识**重建 contig；报每条读的位置/朝向/overlap、覆盖度、冲突与未放置读；
+  可选精确 end-overlap 环化。文本写明它不是基因组组装器，也不合并 paired-end。
+- **`molbio_editing_outcome`**（#31）：每条读两向比对参考（环状参考按加倍处理），按**精确变异签名**
+  聚类成等位基因，报频率与 CDS 内的蛋白效应（wild_type / silent / missense / nonsense / frameshift /
+  in_frame_indel / outside_cds）。频率是**已比对 reads 的比例**，不是 TIDE 的峰分解。
+  **两条边界**：identity 之外还要求至少比对到读长的一半（最少 20 bp），否则一段偶然的短局部匹配
+  会被误收成等位基因；indel 的移码判定用**净长度变化**，所以被比对拆成两段的 3 bp 缺失仍判 in-frame。
+
+### 4. 测试、benchmark 与守卫
+
+- `test/smoke.mjs`：新增 7 个工具的已知值/边界/错误路径断言（基序正负例、低复杂度、截断、
+  信号肽阳性/阴性、跨膜段、A(p) 手算值、GFF3/BED/CSV 三套坐标、旋转/插入/删除/替换/拆分/合并、
+  三读组装与未放置读、四读等位基因聚类与 A2T/in-frame 判定）；工具数断言 65 → 72。
+- 图片工具 17 → 18（`molbio_signal_peptide`）；`test/contract.mjs` 同步；`test/svgpng.mjs` 的
+  样本集加入信号肽曲线，仍然证明 `unsupported` / `missing_glyphs` 为空。
+- benchmark：新增 `protein-features`、`signal-peptide`、`antigenicity`、`feature-export`、
+  `sequence-edit`、`sanger-assemble`、`editing-outcome` 七条 full 档任务（`tasks/10-v28.json`），
+  并加到 `benchmark/verifications.mjs`；`bench --offline` 73 题全绿，`benchmark-coverage` 72/72。
+  可复现的输入记录在 `benchmark/_probe-v28.mjs`。
+- **首次真实模型跑后的可用性修正（editing-outcome）**：第一跑用了 10 次工具调用 / 107 s——模型把 96 bp
+  参考抄成了 93 bp 的 read，随后逐条重试、用 shell 核对长度、再用 `translate` 复核。据此把工具描述
+  改成“一次调用传全部 reads、`reference` 是完整分子而不是 CDS 或 read、不要在 shell/translate 里重算”，
+  并在结果里增加“没有任何 read 与参考完全一致”的诊断（全编辑样本也会触发，所以是提示而非报错）。
+  同题重跑：**27 s / 4 次调用 / 180,845 tokens，仍 PASS**。
+- `test/benchmark-profile.mjs` 的 headless profile 现为 14 行 / 72 工具。
+
+### 5. 文档与版本
+
+- README 的工具表/计数、`preset.yml` 描述、`agent.cordis.yml` 注释、`cordis.patch.yml`（重新生成）、
+  `docs/maintainer.md`、`docs/roadmap.md`、`docs/capability-gap-survey.md` 同步到 72 工具 / 73 题。
+- 根包 `0.27.1 → 0.28.0`；面板包保持 `0.1.17`：三个新模块只在宿主半，
+  `lib/client.js` 字节未变（与 0.27.0 因 `lib.mjs` 进浏览器半而 bump 的情形不同）。
+
+### 6. 验收（本机 0.2.3-alpha.2 桌面版 `app.asar`）
+
+- `smoke`（72 工具）、`svgpng`（23）、`svgio`、`charts`、`structure`、`client`、`panel-render`、
+  `map-card`、`client-mount`、`contract`（17）、`drift-probe`（17 个突变）、`preset-health`（31 行）、
+  `benchmark-profile`（72 工具）、`benchmark-score`、`benchmark-coverage`（72/72、73 题）、
+  `bench --offline`（73 题）全部通过。
+- `test/release.mjs` **13 项全绿**（npm 11.20.0，满足可信发布下限 11.5.1）；
+  `build/release-preflight.mjs --tag v0.28.0` 通过（根包 0.28.0 待发布，面板 0.1.17 已发布且字节一致）。
+  注意：npm 版本探测在 DSH 沙箱内会因管道捕获子进程而返回 `EPERM`，发布守卫应在沙箱外跑；
+  本版验收时已在沙箱外实跑。
 ## [0.27.1] — 2026-11-24（DSH 0.2.3-alpha.2 适配：面板改读 workingDirectory projection 并修正 workspaceFiles 首参、守卫换用 Include 解析器、preset 跟上游两行）
 
 **工具数不变（65），benchmark 不变（66 题）。** 0.25.3 的验收基线是 **0.2.2-rc.5**；这一版把基线推到

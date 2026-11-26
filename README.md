@@ -1,6 +1,6 @@
 # dsh-molbio-tools
 
-**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **65 个
+**给 AI 助手装上分子生物学的"手"**：一个零依赖的 DeepSeek Harness 插件包，为它提供 **72 个
 `molbio_*` 工具**——序列分析、引物/探针自动设计、克隆模拟、质粒图谱、测序验证、蛋白与 CRISPR
 分析、qPCR 统计、文献与实验记录。装上之后，你可以直接用自然语言让助手完成这些计算，并把结果
 画成图。
@@ -31,7 +31,7 @@
 ## 目录
 
 - [安装](#安装)（3 步）
-- [它会做什么](#它会做什么)（按任务分组的 65 个工具）
+- [它会做什么](#它会做什么)（按任务分组的 72 个工具）
 - [典型用法示例](#典型用法示例)
 - [输出文件、自动打开与浏览器面板](#输出文件自动打开与浏览器面板)
 - [方法学与使用须知](#方法学与使用须知)（各工具的模型、估算范围与边界）
@@ -46,7 +46,7 @@
 
 ### 推荐：在 DSH 插件页安装（3 步）
 
-装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**65 个工具只在这个模式里出现**，
+装完后，预设选择器里会出现 **Molecular Biology Lab** 模式；**72 个工具只在这个模式里出现**，
 不会污染你其它会话（这点很重要：工具多了会占提示预算）。**右栏的 Molbio / Papers 两个面板也随这个包
 一起装好**，不需要再装 `dsh-molbio-panel`。
 
@@ -106,9 +106,9 @@ dsh plugin --profile web update dsh-molbio-tools
 | 层（同一个 `cordis.patch.yml` 里的两段） | 作用 |
 | --- | --- |
 | `molbio-client` → `./host.mjs` | 只插一行**惰性宿主锚点**，不注册任何工具 |
-| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，65 个工具在这一层里 |
+| `preset-molbio-lab` → `@deepseek-ai/dsh-agent-preset` | 声明 **Molecular Biology Lab** 模式，72 个工具在这一层里 |
 
-所以 65 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
+所以 72 个工具**只在选中该模式的会话里加载**，其它模式（standard / ptc / minimal / cordis）
 不带它们，不占提示预算。bundle 安装 ≠ 工具全局可见：bundle 只是把"模式"和"面板"一起装进来。
 
 > **那一行锚点不是多余的。** DSH 的客户端模块扫描只走**宿主 Loader 树**（官方原话：
@@ -124,7 +124,7 @@ dsh plugin --profile web update dsh-molbio-tools
 
 ### 只要浏览器面板
 
-如果只想要图形面板、不想让该 profile 装 65 个工具（连模式都不装），装面板专用包即可
+如果只想要图形面板、不想让该 profile 装 72 个工具（连模式都不装），装面板专用包即可
 （见[浏览器面板](#浏览器面板可选)）。**它和 `dsh-molbio-tools` 二选一**：两者注册同一组右栏 tab
 （`dsh-molbio-tools` / `dsh-molbio-tools/papers`），同时装会重复注册并报
 `tab type id ... is already registered`。同样在 **插件 → 添加插件** 里输入 `dsh-molbio-panel`，
@@ -140,10 +140,10 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 
 ## 它会做什么
 
-65 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
+72 个工具按任务分为十组。下表是"你想做什么 → 用哪个工具"的索引，参数细节模型会在调用时自己
 填；你只需要把意图说清楚。
 
-### 1. 序列分析与酶切（9）
+### 1. 序列分析与酶切（11）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -156,8 +156,10 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_double_digest` | **双酶切规划**：两个酶各自的切点/片段、合并切点与片段，以及两者**是否共用 buffer**（无共用则提示顺序酶切或换用厂商双酶切 buffer） |
 | `molbio_dotplot` | **序列自身 dotplot**：按 k-mer 精确匹配画直接重复（黑）与反向重复（红），网格分箱以限制文件大小，并报告匹配数与任何扫描/绘图截断；是精确 k-mer 视图，不是滑窗同一性打分图 |
 | `molbio_contamination_screen` | **载体/接头污染筛查**：用内置的短签名表（pUC/pBR322、pUC19 lacZ/M13、pET T7、pcDNA CMV/BGH、Gateway attB1/attB2、Illumina/Nextera 接头）扫描序列或 FASTA/FASTQ；双链、默认精确、可选 0–2 错配，报告每个签名命中的 reads 数、示例位置/链/错配。**短签名筛查，不是 BLAST/全库比对；未命中不等于干净** |
+| `molbio_feature_export` | **注释导出**：特征 → GFF3（1-based 闭区间）/ BED（0-based 半开）/ CSV，输出里写明用哪套坐标；多段特征按外边界导出并保留原 `location`；CDS phase 不建模，写 `.` |
+| `molbio_sequence_edit` | **序列编辑**：rotate / insert / delete / replace / split / join（join 可校验精确 overlap）；坐标 1-based 闭区间；**不重映射特征** |
 
-### 2. 引物设计（6）
+### 2. 引物设计（7）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -190,7 +192,7 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_silent_site_mutagenesis` | **静默酶切位点突变**：在同义密码子范围内添加/移除限制性位点，保持蛋白序列不变；输出逐碱基变化、可直接喂给 `molbio_mutagenesis_primers` 的 mutation texts、突变后序列；只支持识别序列无简并碱基的酶 |
 | `molbio_extract_region` | 从质粒文件按特征名（如 "AmpR"、"MCS"）或坐标提取子序列，可选反向互补与存 FASTA |
 
-### 5. 测序与实验数据（6）
+### 5. 测序与实验数据（8）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -200,8 +202,10 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_lab_math` | 稀释计算、摩尔浓度、DNA 拷贝数 |
 | `molbio_plot` | **实验数据图表（8 种）**：柱状图（均值±SD 误差棒）、散点图（可选拟合线）、折线图（按分组列拆多条序列）、直方图（分箱默认 Freedman-Diaconis）、箱型图（Q1–Q3 箱 + 中位线 + 1.5×IQR 须 + 离群点）、**小提琴图**（高斯核密度轮廓 + 内部箱；看分布形状时用它）、**火山图**（log2FC × 显著性，带虚线阈值；**只画不检验**，p 值必须由表提供）、**热力图**（行×列矩阵，一格一色 + 色标；支持宽表与长表两种版式，`scale: row_zscore\|log2` 是**显式申报的展示变换**）。表类图表直接读工作区 **CSV/TSV**（`data_path` + `columns` 指名列），也可用 `data` 内联表格文本；结果里带回算好的统计量，**报数请引用它而不是照图估读** |
 | `molbio_virtual_gel` | **虚拟琼脂糖凝胶**：给出预期片段大小 → SVG 凝胶图 + 分子量 ladder，和真胶对照 |
+| `molbio_sanger_assemble` | **Sanger 读段组装**：1–24 条 `.ab1`/`.seq`/`.fasta` 的贪心 overlap-layout，双朝向、Phred 末端修剪、质量加权共识、覆盖度/冲突/未放置读，可选精确 end-overlap 环化 |
+| `molbio_editing_outcome` | **编辑结果归类**：读段两向比对参考 → 按精确变异签名聚类 → 频率与 CDS 蛋白效应（silent/missense/nonsense/frameshift/in_frame_indel）；频率是**已比对 reads** 的比例，不是 TIDE |
 
-### 6. 蛋白质（6）
+### 6. 蛋白质（9）
 
 | 工具 | 用途 |
 | --- | --- |
@@ -211,6 +215,9 @@ dsh plugin --profile <profile> add dsh-molbio-panel
 | `molbio_codon_optimize` | E. coli/酵母/人密码子优化，可顺便避开指定酶切位点 |
 | `molbio_helical_wheel` | **螺旋轮投影**：残基按 3.6 残基/圈落在圆周上、按性质着色，给出疏水矩 μH（判断是否两亲性），出 SVG |
 | `molbio_hydropathy_plot` | **Kyte-Doolittle 疏水性图**：滑动窗口曲线 + GRAVY + 达到跨膜阈值的峰，出 SVG |
+| `molbio_protein_features` | **蛋白注释**：PTM 基序（N-糖基化/甘露糖基化/肉豆蔻酰化/SUMO/PKA/CK2/脯氨酸导向）、SEG 风格低复杂度区、芳香性、Guruprasad 不稳定指数（>40 = unstable） |
+| `molbio_signal_peptide` | **信号肽与跨膜段**：von Heijne 1986 −13..+2 权重（真核/革兰阴性），报切割位点/信号肽/候选位点；跨膜段与 `molbio_hydropathy_plot` 同窗口同阈值；出分数曲线 SVG |
+| `molbio_antigenicity` | **抗原性**：Kolaskar–Tongaonkar 1990 的 7-mer A(p) 倾向 + Parker/Emini/Vihinen 区间均值；启发式排序，不是表位预测 |
 
 ### 7. 比对与保守性（7）
 
@@ -645,6 +652,24 @@ mutations remain deferred"）。所以插件无法在工作区里合法地落一
   *指示*，不是判定**，且只对闭合复制子有意义——序列太短时工具**不给**这个提示并说明原因。
   简并碱基被排除在 skew/CpG/词频统计之外并计入 `n_percent`。
 
+### 蛋白注释与测序判读（0.28.0）
+
+- **三个蛋白工具都是发表表格的转录 + 滑窗，不是训练权重模型。** PTM 是线性共识基序（命中不等于
+  真的被修饰）；低复杂度是 SEG 风格的熵窗口近似，不是 SEG 本身；不稳定指数用 Guruprasad 1990 的
+  DIWV 表（>40 按惯例读作 unstable）。不要把它们说成 SignalP/TMHMM/NetNGlyc/BepiPred 的预测。
+- **信号肽**用 von Heijne 1986 的 −13..+2 位置权重（EMBOSS `sigcleave` 的两套表），分数是
+  `log(count/expected)` 求和；只扫描 N 端前 50 个残基（`max_cleavage` 可调），因为信号肽在 N 端，
+  全序列扫描会把中段偶然高分也报出来。**跨膜段**直接复用 `molbio_hydropathy_plot` 的窗口/阈值，
+  所以两个工具不会给出两套数；拓扑朝向**不预测**。
+- **抗原性**是 Kolaskar–Tongaonkar 1990 的 7-mer A(p) 倾向：按“全蛋白均值 / 1.0”选位点，连续
+  ≥6 个残基成区；Parker/Emini/Vihinen 只作为区间均值并列展示，**不合成单一分数**。
+- **GFF3 与 BED 的坐标体系不同**：GFF3/CSV 是 1-based 闭区间，BED 是 0-based 半开（start−1 .. end）。
+  工具逐格式转换并在输出里写明；多段特征按**外边界**导出、原 `location` 保留；CDS phase 不建模，
+  列写 `.`——不猜一个看起来合理的数。**序列编辑不重映射特征**，编辑移动了注释就要重新导出。
+- **Sanger 组装**是贪心 overlap-layout（读段双朝向、质量加权共识），不是基因组组装器；长于
+  `min_overlap` 的重复可能塌缩。**编辑结果归类**按精确变异签名聚类，频率是已比对 reads 的比例，
+  不做 TIDE 的混合峰分解；一条读还必须至少比对到自身一半长度（最少 20 bp），否则一段偶然的短
+  局部匹配会被误收成一个等位基因。
 ### 明确不做的事（以及为什么）
 
 这些是这个工具集的**边界**，写在这里是为了不再重复勘察：**BAM/CRAM**（二进制格式）、
@@ -732,13 +757,13 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 想评估"模型到底会不会用这些工具"，看 **[benchmark/README.md](benchmark/README.md)**：
 `npm run bench:offline` 零成本校验期望值（在 `npm test` 里），`npm run bench` 用真实模型
-跑 **core 档 14 题**，`npm run bench:full` 跑**全部 66 题（覆盖 65/65 个工具）**。
+跑 **core 档 14 题**，`npm run bench:full` 跑**全部 73 题（覆盖 72/72 个工具）**。
 
 > **改动与 benchmark 的关系（硬规则）**：新增或改动任何工具行为，**必须**新增/更新对应的
 > benchmark 任务并重跑；没有改动就不必重跑。日常只需要一条命令——
 > `node benchmark/run.mjs --model --changed`——它会从你的改动反推出该跑哪几题
 > （`lib.mjs` 这类共享库会自动放大到全量），改动只在文档/测试时则直接回答"无事可跑"。
-> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 65/65 覆盖），
+> `test/benchmark-coverage.mjs` 会拦住"新工具没有任务"（断言 72/72 覆盖），
 > `bench --offline` 会拦住"期望值过期"。完整对照表见
 > [docs/workflow.md](docs/workflow.md) 第 2 节。
 
@@ -765,7 +790,7 @@ agent 的 shell 子进程继承**，内联参数会出现在对话记录与工�
 
 ```
 dsh-molbio-tools/
-├── index.mjs        # 插件入口：export { name, inject, apply }，注册 65 个工具
+├── index.mjs        # 插件入口：export { name, inject, apply }，注册 72 个工具
 ├── lib.mjs          # 基础库：IUPAC、翻译、酶表、NN 热力学、qPCR、lab math、甲基化/buffer 参考表
 ├── design.mjs       # 引物自动设计（含跨内含子 qPCR）
 ├── taqman.mjs       # TaqMan 水解探针设计（复用 design.mjs 的引物引擎）

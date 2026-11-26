@@ -16,6 +16,7 @@
 
 | 包版本 | preset 版本 | 内容 | 工具数 |
 | --- | --- | --- | --- |
+| 0.28.0 | — | **蛋白注释 + 格式互操作 + 测序判读**：新增 `molbio_protein_features` / `molbio_signal_peptide` / `molbio_antigenicity`（#13/#21/#14）、`molbio_feature_export` / `molbio_sequence_edit`（#10）、`molbio_sanger_assemble` / `molbio_editing_outcome`（#27/#31）；GFF3 与 BED 两套坐标各自显式转换，编辑结果频率明确不是 TIDE | 65 → 72 |
 | 0.27.1 | — | **DSH 0.2.3-alpha.2 适配**：上游 `standard` 两处变更（新增 `tool-cordis`、`tool-plugin-manager` 改条件禁用）；面板改读 `workingDirectory` projection（`selectSessionDirectory`，旧版回退 `cwd`）；守卫改用 Include 的 `parseEntryYaml`；工具数不变 | 65 |
 | 0.27.0 | — | **双链热力学（survey #9）**：新增 `molbio_duplex_thermo`（ΔH/ΔS/ΔG°37/Tm + 3' 端稳定性、发夹、二聚体；错配双链拒绝估算）；NN 计算提成可复用函数；工具 64 → 65，benchmark 66 题（65/65 覆盖） | 65 |
 | 0.26.0 | — | **PubMed key 常驻标志**：Papers tab 顶部 key 状态徽标（绿/灰/红点，跟随凭据事件刷新）、检索结果标注凭据通道、详情页状态改徽标；工具数不变 | 64 |
@@ -57,6 +58,52 @@
 
 ---
 
+## v0.28.0（2026-11-26，包 0.28.0）
+
+三条候选线一次交付：蛋白注释、注释格式/序列编辑、Sanger 读段判读。没有上游可跟（`0.2.3-alpha.2`
+仍是 npm `alpha` 的最新），所以这一版全部是工具行为，preset 行清单与 `dshReleases` 都没有改。
+
+### 三条边界是这一版真正的设计工作
+
+- **大表只从可复核的来源转录。** DIWV（400 个数）、Parker/Emini/Vihinen、Kolaskar–Tongaonkar
+  A(p)、两套 von Heijne 计数表全部抄自 Biopython 1.88 与 EMBOSS 6.6.0 的**数据文件**，并在源码
+  注释里写明出处；测试用手算值钉住（`AAAA` → 7.5、20×A → A(p) 区间 4-17、胰岛素原切割位点 24）。
+  抄错一个数不会报错，只会给出“看起来合理”的错答案——所以表的来源必须可追溯，而不是“记得是这样”。
+- **信号肽只扫 N 端 50 个残基。** 第一版沿用 EMBOSS sigcleave 的“全序列扫描”，绿色荧光蛋白片段
+  在残基 70 处拿到 4.787 分，被判成有信号肽。信号肽是 N 端特征，因此扫描范围本身就是一个参数
+  （`max_cleavage`），默认 50；阴性对照随之写进 smoke（同一片段现在不报）。
+- **编辑结果的移码用净长度变化判定，不用单个 indel 的长度。** 一个 3 bp 缺失会被局部比对拆成
+  “删 2 + 删 1”两段，逐段判 %3 会误报 frameshift；而同一段序列又确实是从第 3 位到第 6 位少 3 个碱基。
+  改成比较突变 CDS 与参考 CDS 的**净长度差**后，判定与生物学一致。
+
+### benchmark 抓到的第一条可用性问题
+
+`editing-outcome` 的首次真实模型跑（2026-11-26）花了 **10 次工具调用 / 107 s**：模型先把 96 bp 参考
+抄成了 93 bp 的 read（于是 3 条 read 看起来都带 3 bp 缺失），随后逐条单 read 重跑、用 `pwsh` 核对长度、
+再用 `translate` 复核蛋白效应，最后才用正确的输入一次成功。三项判分一直是过的——它暴露的是**可用性**，
+不是正确性。
+
+据此做了两件事：
+
+1. 工具描述写明**一次调用传全部 reads**、`reference` 是**完整分子**（不是 CDS，也不是其中一条 read）、
+   `cds_start/end` 是参考上的坐标，并明确“结果已带蛋白效应，不要再用 shell/translate 重算”。
+2. 结果在**没有任何 read 与参考完全一致**时加一条诊断：这可能是全编辑样本（合法），也可能是参考抄错
+   （本 case）。措辞是“检查”，不是报错。
+
+同题重跑：**27 s / 4 次调用 / 180,845 tokens，仍 PASS**。`translate` 与 `pwsh` 仍各出现一次（模型想
+自己核对蛋白与长度），但不再逐条重试；进一步的空间在“让结果直接给出突变后蛋白”，而不是继续加描述。
+
+### 两个“看起来能用、其实会误收”的输入边界
+
+- `molbio_editing_outcome` 最初只按 identity 过滤，一段 60 nt 的纯 C 读段能在参考里找到一小段
+  100% 相同的局部比对，于是被收成 wild type 等位基因。现在还必须**至少比对到读长的一半（最少 20 bp）**。
+- `molbio_feature_export` 的 strand 来自解析器的 `1/-1`，而 GFF3/BED 要 `+/-/.`；silver bullet 是
+  smoke 里一条 `CDS\t2\t6\t.\t+` 断言——它第一次运行就抓到了 `.`。
+
+### 与 benchmark 的关系
+
+七条新任务全部带 `where: "tool"` 断言，`bench --offline` 是零成本门；`--changed` 在沙箱内读不到
+git（管道捕获被拒），会回落全量，这是沙箱边界而不是回归。发布守卫的 npm 版本探测同样如此（0.28.0 验收时在沙箱外实跑：`release` 13/13、`preflight` 通过）。
 ## v0.25.0（2026-11-10，包 0.25.0）
 
 **三条教训，关于“看得见”“同一份源码”和“产物真的能跑”。**

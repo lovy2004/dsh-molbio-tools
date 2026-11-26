@@ -33,6 +33,7 @@ import { renderPlasmidMap } from '../plasmid.mjs';
 import { linearFit, renderBarChart, renderGel, renderScatterChart } from '../plot.mjs';
 import { columnComposition, renderSequenceLogo } from '../logo.mjs';
 import { helicalWheel, hydropathyProfile, renderHelicalWheel, renderHydropathyPlot } from '../protein-structure.mjs';
+import { renderSignalPeptideProfile, signalPeptideAnalysis } from '../protein-annotate.mjs';
 import { fastqQcReport, renderFastqQcReport } from '../fastq-qc.mjs';
 import { renderTreeSvg } from '../phylo.mjs';
 import { pcrGel } from '../pcr.mjs';
@@ -708,6 +709,7 @@ function sampleDocuments() {
     ['sequence logo', renderSequenceLogo(columnComposition(['ACGTACGTAC', 'ACGTTCGTAC', 'ACGTACGTGC', 'ACGAACGTAC', 'ACGTACGTAC']), { title: 'Conserved motif', score_type: 'bits' })],
     ['helical wheel', renderHelicalWheel(wheel, { title: 'Amphipathic helix' })],
     ['hydropathy plot', renderHydropathyPlot(hydropathy, { title: 'Kyte-Doolittle hydropathy' })],
+    ['signal peptide profile', renderSignalPeptideProfile(signalPeptideAnalysis('MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALY'), { title: 'Signal peptide score' })],
     ['bar chart', renderBarChart({ title: 'Relative expression', x_label: 'condition', y_label: 'fold change', labels: ['control', 'treated', 'rescue'], values: [1, 8.4, 2.1], errors: [0.2, 1.1, 0.4] })],
     ['scatter chart', renderScatterChart({ title: 'Standard curve', x_label: 'log10 quantity', y_label: 'Ct', x: [0, 1, 2, 3, 4], y: [32.1, 28.9, 25.2, 21.6, 18.1], fit: linearFit([0, 1, 2, 3, 4], [32.1, 28.9, 25.2, 21.6, 18.1]) })],
     // v19 pictures: the six-panel FASTQ report, the phylogenetic tree (all
